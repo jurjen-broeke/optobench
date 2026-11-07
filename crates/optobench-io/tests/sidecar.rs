@@ -185,7 +185,7 @@ fn renamed_part_is_found_by_fingerprint() {
     let text = format!(
         "{header}[[element]]\nid = \"L\"\nkind = \"lens\"\nbody = {{ product = \"renamed\", fingerprint = \"{}\" }}\nmaterial = 1.5\n",
         // The plate's fingerprint, as the `bodies` command lists it.
-        "873548f555226ea4"
+        "be6001eb9fc56f34"
     );
     let directory =
         std::env::temp_dir().join(format!("optobench-sidecar-fp-{}", std::process::id()));

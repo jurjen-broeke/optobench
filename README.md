@@ -5,9 +5,10 @@ through SolidCraft assemblies (via STEP) or through CAD-free planar and optical-
 layouts. Microscopy is a first-class use: immersion and dipping objectives, water,
 fluorescence excitation, photon budget and laser heating.
 
-Status: **M3 Standalone scenes**. Planar and table layouts are traced non-sequentially
-from `.optobench` files, with clipping by mechanical proxies, detector results, a power
-ledger and an SVG layout view. M2 is complete except for checking the bundled material
+Status: **M4 STEP scene import**. Assemblies exported from CAD as STEP are traced with a
+sidecar file that names the lenses and mirrors; every other body absorbs, so clipping by
+mounts shows up. Standalone planar and table layouts are traced from `.optobench` files
+and can be exported for rebuilding in CAD. M2 is complete except for checking the bundled material
 values against their original papers and the literature lens cases. See [docs/design.md](docs/design.md) for the design and roadmap.
 
 ![Roadmap](docs/roadmap.svg)
