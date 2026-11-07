@@ -6,6 +6,7 @@
 //! Decided 2026-11-07 (docs/design.md, Decided): no SolidCraft crates are used, so only
 //! the STEP files SolidCraft writes matter, not its internals.
 
+pub mod faces;
 pub mod model;
 pub mod part21;
 

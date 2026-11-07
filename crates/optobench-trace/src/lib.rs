@@ -8,6 +8,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod bvh;
 mod interaction;
 pub mod nonsequential;
 mod paraxial;

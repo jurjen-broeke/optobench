@@ -9,7 +9,9 @@
 //!
 //! - for a surface profile, `negative_medium` lies on the −z side of the local frame and
 //!   `positive_medium` on the +z side;
-//! - for a cylinder, `negative_medium` is inside and `positive_medium` outside.
+//! - for a cylinder, `negative_medium` is inside and `positive_medium` outside;
+//! - for a B-rep face (from STEP), `negative_medium` is behind the face (inside the solid)
+//!   and `positive_medium` on the side its normal points to.
 //!
 //! # Interactions and power
 //!
@@ -20,14 +22,17 @@
 //! launched = final power + reflected + absorbed, and the final power is booked as
 //! detected, clipped, escaped or stopped.
 //!
-//! The nearest-hit search tests every face (fine for scenes of tens of faces); a BVH
-//! comes with meshes in M4.
+//! The nearest-hit search uses a BVH over the faces' bounding boxes once
+//! [`NonSequentialSystem::build_index`] has been called, and tests every face otherwise.
 
 use std::sync::Arc;
 
 use optobench_materials::{MaterialError, Medium};
 use optobench_math::{Transform, Vec3};
 use optobench_surfaces::Surface;
+use optobench_surfaces::brep::{Aabb, BrepFace};
+
+use crate::bvh::Bvh;
 
 use crate::interaction::{Refraction, fresnel_power, reflect, refract};
 use crate::ray::Ray;
@@ -53,6 +58,8 @@ pub enum Shape {
         /// Length along local +z (mm).
         length: f64,
     },
+    /// An exact trimmed face of a solid, from STEP; the region is not used.
+    Brep(Arc<BrepFace>),
 }
 
 /// Where on a profile face the face exists, in local (x, y). Ignored for cylinders.
@@ -172,6 +179,11 @@ impl Face {
                         normal: hit.normal,
                     })
             }
+            Shape::Brep(face) => face.intersect(p, d, MINIMUM_DISTANCE).map(|hit| LocalHit {
+                distance: hit.distance,
+                point: hit.point,
+                normal: hit.normal,
+            }),
             Shape::Cylinder { radius, length } => {
                 // (px + t dx)² + (py + t dy)² = r².
                 let a = d.x * d.x + d.y * d.y;
@@ -197,6 +209,45 @@ impl Face {
                     })
             }
         }
+    }
+}
+
+impl Face {
+    /// A bounding box of the face in the scene frame.
+    pub fn bounds(&self) -> Aabb {
+        let local = match &self.shape {
+            Shape::Brep(face) => face.bounds(),
+            Shape::Cylinder { radius, length } => Aabb {
+                min: Vec3::new(-radius, -radius, 0.0),
+                max: Vec3::new(*radius, *radius, *length),
+            },
+            Shape::Profile(surface) => {
+                let (half_x, half_y) = match self.region {
+                    Region::Disk { radius } => (radius, radius),
+                    Region::Annulus { outer, .. } => (outer, outer),
+                    Region::Rectangle {
+                        half_width,
+                        half_height,
+                    } => (half_width, half_height),
+                    Region::SquareWithHole { half_size, .. } => (half_size, half_size),
+                };
+                let reach = half_x.hypot(half_y);
+                let (low, high) = (0..=32)
+                    .filter_map(|k| surface.sag(reach * k as f64 / 32.0))
+                    .fold((0.0_f64, 0.0_f64), |(lo, hi), z| (lo.min(z), hi.max(z)));
+                // Between samples a profile can bulge a little further; pad by the sag span.
+                let pad = 0.05 * (high - low).abs();
+                Aabb {
+                    min: Vec3::new(-half_x, -half_y, low - pad),
+                    max: Vec3::new(half_x, half_y, high + pad),
+                }
+            }
+        };
+        local
+            .corners()
+            .iter()
+            .fold(Aabb::EMPTY, |b, c| b.with(self.placement.apply_point(*c)))
+            .padded(1e-6)
     }
 }
 
@@ -304,6 +355,8 @@ pub struct NonSequentialSystem {
     pub start_medium: usize,
     /// The most interactions a ray may have.
     pub interaction_limit: usize,
+    /// The search index over `faces`, if built.
+    index: Option<Bvh>,
 }
 
 impl NonSequentialSystem {
@@ -314,6 +367,7 @@ impl NonSequentialSystem {
             faces: Vec::new(),
             start_medium: 0,
             interaction_limit: DEFAULT_INTERACTION_LIMIT,
+            index: None,
         }
     }
 
@@ -334,8 +388,28 @@ impl NonSequentialSystem {
         Ok((n, alpha))
     }
 
-    /// The nearest face hit by the ray, with the scene-frame hit.
+    /// Builds the search index over the faces. Call it again after changing `faces`;
+    /// a stale index (built over a different number of faces) is ignored.
+    pub fn build_index(&mut self) {
+        let boxes: Vec<Aabb> = self.faces.iter().map(Face::bounds).collect();
+        self.index = Some(Bvh::build(&boxes));
+    }
+
+    /// The nearest face hit by the ray, with the local hit.
     fn nearest(&self, ray: &Ray) -> Option<(usize, LocalHit)> {
+        if let Some(index) = self.index.as_ref().filter(|i| i.len() == self.faces.len()) {
+            let mut found: Option<LocalHit> = None;
+            let best = index.nearest(ray.position, ray.direction, |i| {
+                let hit = self.faces[i].intersect(ray.position, ray.direction)?;
+                let distance = hit.distance;
+                if found.as_ref().is_none_or(|f| distance < f.distance) {
+                    found = Some(hit);
+                }
+                Some(distance)
+            })?;
+            // `found` holds the hit with the smallest distance seen, which is `best`.
+            return found.map(|hit| (best.0, hit));
+        }
         self.faces
             .iter()
             .enumerate()

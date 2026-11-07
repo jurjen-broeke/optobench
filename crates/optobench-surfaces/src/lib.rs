@@ -20,6 +20,8 @@
 
 #![forbid(unsafe_code)]
 
+pub mod brep;
+
 use optobench_math::{Vec3, find_root};
 
 /// Where a ray meets a surface, in the surface's local frame.

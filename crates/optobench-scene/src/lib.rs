@@ -431,6 +431,7 @@ impl Scene {
                 owner,
             });
         }
+        system.build_index();
         Ok(Built { system, owners })
     }
 

@@ -43,6 +43,18 @@ fn outline(built: &Built, face: usize, view: View) -> Vec<Vec<Vec3>> {
     let largest = in_view(Vec3::X).max(in_view(Vec3::Y));
     let shown = |axis: Vec3| in_view(axis) >= 0.5 * largest;
     match &face.shape {
+        // A solid's face draws as its boundary loops, closed.
+        Shape::Brep(brep) => brep
+            .loops
+            .iter()
+            .map(|polyline| {
+                polyline
+                    .iter()
+                    .chain(polyline.first())
+                    .map(|p| to_scene(*p))
+                    .collect()
+            })
+            .collect(),
         Shape::Cylinder { radius, length } => [(Vec3::X, *radius), (Vec3::Y, *radius)]
             .into_iter()
             .filter(|(axis, _)| shown(*axis))

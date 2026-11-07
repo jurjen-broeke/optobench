@@ -5,6 +5,13 @@ with the release that introduced them.
 
 ## Unreleased
 
+- M4b exact geometry: `optobench_surfaces::brep` (trimmed B-rep faces on analytic,
+  B-spline, revolution and extrusion surfaces; closed-form, bracketed or Newton ray
+  intersection with the residual of every hit; 3D trimming by the nearest boundary
+  segment), `optobench_trace::bvh` and its use in the non-sequential trace (`Shape::Brep`,
+  `build_index`), and `optobench_io::step::faces` (STEP bodies to placed exact faces,
+  seams left out of the boundary). Golden assembly: worst residual 3.7e-10 mm over 20 000
+  rays.
 - M4a STEP reader (`optobench_io::step`), our own: ISO 10303-21 exchange structure
   (simple and complex entities, typed parameters, encoded strings); AP203/AP214/AP242
   products, assembly tree and placements; length and angle units per context to mm and
