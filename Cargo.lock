@@ -80,6 +80,7 @@ dependencies = [
  "optobench-materials",
  "optobench-math",
  "optobench-scene",
+ "optobench-surfaces",
  "optobench-trace",
  "serde_json",
  "toml",
