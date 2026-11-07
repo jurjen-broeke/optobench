@@ -28,7 +28,7 @@ jobs:
     name: fmt, clippy, xtask
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Install toolchain
         run: rustup toolchain install stable --profile minimal --component rustfmt,clippy
       - uses: Swatinem/rust-cache@v2
@@ -37,17 +37,19 @@ jobs:
       - run: cargo xtask check
 
   test-linux:
-    name: test (ubuntu)
+    name: test (ubuntu-latest)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Install toolchain
         run: rustup toolchain install stable --profile minimal
       - uses: Swatinem/rust-cache@v2
       - run: cargo test --workspace
 
   test-other:
-    name: test (${{ matrix.os }})
+    # Static name: GitHub appends the matrix OS when the job runs, and a skipped run
+    # (plain pushes) shows this name instead of an unexpanded expression.
+    name: test macOS, Windows
     # Billed at a higher rate while private: pull requests and manual runs only.
     if: github.event_name != 'push'
     strategy:
@@ -56,7 +58,7 @@ jobs:
         os: [macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Install toolchain
         run: rustup toolchain install stable --profile minimal
       - uses: Swatinem/rust-cache@v2
@@ -67,7 +69,7 @@ jobs:
     name: engine on wasm32
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Install toolchain
         run: rustup toolchain install stable --profile minimal --target wasm32-unknown-unknown
       - uses: Swatinem/rust-cache@v2
@@ -85,5 +87,5 @@ jobs:
     name: cargo-deny (licences, advisories, sources)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: EmbarkStudios/cargo-deny-action@v2
