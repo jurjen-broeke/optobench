@@ -56,10 +56,10 @@ The crates are layered like SolidCraft's: a crate depends only on crates in its 
 | L2 | optobench-trace | rays, interactions, sequential and non-sequential tracing, mesh BVH with Newton refinement on exact surfaces |
 | L3 | optobench-scene, optobench-library | the optical scene (elements, sources, detectors, DOFs, mechanical proxies) from STEP or from a standalone layout; lookup in user-downloaded parts libraries |
 | L4 | optobench-analysis, optobench-optimize | paraxial, spot, OPD, Zernike, PSF/MTF, power ledger, footprints; damped least squares over DOFs and tolerancing |
-| L5 | optobench-io, optobench-bridge | STEP import (built on SolidCraft's Apache-2.0 crates behind a feature flag), sidecar files, reports; the control-channel adapter (Phase B) |
+| L5 | optobench-io, optobench-bridge, optobench-commands | STEP import (built on SolidCraft's Apache-2.0 crates behind a feature flag), sidecar files, reports; the control-channel adapter (Phase B); the command registry |
 | apps | optobench-cli, optobench-ui | headless CLI; desktop UI with a 3D ray view, later |
 
-Every command is a function taking JSON parameters and returning a JSON result, the same pattern as SolidCraft's run(command, args). The CLI, the UI and a later MCP server, or a SolidCraft plugin once #1221 lands, all call the same command registry.
+Every command is a function taking JSON parameters and returning a JSON result, the same pattern as SolidCraft's run(command, args). The CLI, the UI and a later MCP server, or a SolidCraft plugin once #1221 lands, all call the same command registry, which lives in `optobench-commands` (L5, so commands can read and write files through `optobench-io`). Parameters are a JSON object and parsing is strict, as for files: an unknown key is an error. A failure is `{"error": {"code", "message"}}` with a stable code. On the command line, `optobench <command> [parameters]` takes the object as one argument or `-` for standard input and prints the JSON result.
 
 The engine (L0–L4) has no file system or network access and builds for wasm32. That keeps it usable both as a future SolidCraft plugin and in the browser.
 

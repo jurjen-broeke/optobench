@@ -18,7 +18,8 @@ target).
 ```
 cargo build
 cargo test --workspace
-cargo run -p optobench-cli -- version
+cargo run -p optobench-cli -- version          # prints JSON
+cargo run -p optobench-cli -- commands
 cargo xtask check
 ```
 
@@ -30,6 +31,7 @@ Open the folder in VS Code and accept the recommended extensions
 ```
 apps/optobench-cli      the `optobench` command
 crates/optobench-*      engine and I/O crates, one per layer (see AGENTS.md)
+crates/optobench-commands  the command registry the CLI and later front ends call
 xtask/                  repository checks: layers, naming deny-list, bundled assets
 assets/manifest.toml    every bundled data file and its licence
 docs/design.md          the design note

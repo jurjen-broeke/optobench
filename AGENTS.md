@@ -62,4 +62,5 @@ committed test is cited there. See `corpus/README.md` on a machine that has one.
 | scene, DOFs, proxies, sample / library lookup | `optobench-scene`, `optobench-library` (L3) |
 | analyses / optimizer, tolerancing | `optobench-analysis`, `optobench-optimize` (L4) |
 | file formats, STEP, reports, fetch / SolidCraft control channel | `optobench-io`, `optobench-bridge` (L5) |
+| command registry (JSON in, JSON out) | `optobench-commands` (L5) |
 | command line | `apps/optobench-cli` |
