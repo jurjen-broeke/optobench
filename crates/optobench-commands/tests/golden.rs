@@ -83,11 +83,20 @@ fn reexport_after_a_move_keeps_every_match() {
     let text = std::fs::read_to_string(fixtures().join("cage-relay.optobench")).expect("sidecar");
     let original =
         parse(&text, &fixtures().join("cage-relay.optobench"), &lookup).expect("matches");
-    let moved_text = text.replacen(
-        "kind = \"sidecar\"\n",
-        "kind = \"sidecar\"\nstep = \"cage-relay-moved.step\"\n",
-        1,
-    );
+    // Point the same sidecar at the re-export, whatever the line endings of the checkout
+    // (a Windows checkout may have CRLF).
+    let moved_text: String = text
+        .lines()
+        .flat_map(|line| {
+            let mut out = vec![line.to_owned()];
+            if line.trim_start().starts_with("kind") {
+                out.push("step = \"cage-relay-moved.step\"".to_owned());
+            }
+            out
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(moved_text.contains("step = \"cage-relay-moved.step\""));
     let moved = parse(
         &moved_text,
         &fixtures().join("cage-relay.optobench"),
@@ -115,11 +124,13 @@ fn reexport_after_a_move_keeps_every_match() {
         };
         find(&moved) - find(&original)
     };
-    assert!((shift("L2") - optobench_math::Vec3::new(0.0, 0.0, 1.0)).length() < 1e-9);
-    assert!(shift("L1").length() < 1e-12);
-    assert!(
-        (shift("cage-plate:2/Plate") - optobench_math::Vec3::new(0.0, 0.0, 1.0)).length() < 1e-9
-    );
+    let one_mm = optobench_math::Vec3::new(0.0, 0.0, 1.0);
+    let l2 = shift("L2");
+    assert!((l2 - one_mm).length() < 1e-9, "L2 moved by {l2:?}");
+    let l1 = shift("L1");
+    assert!(l1.length() < 1e-12, "L1 moved by {l1:?}");
+    let plate = shift("cage-plate:2/Plate");
+    assert!((plate - one_mm).length() < 1e-9, "plate moved by {plate:?}");
 }
 
 #[test]
