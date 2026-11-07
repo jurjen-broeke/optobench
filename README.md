@@ -5,8 +5,9 @@ through SolidCraft assemblies (via STEP) or through CAD-free planar and optical-
 layouts. Microscopy is a first-class use: immersion and dipping objectives, water,
 fluorescence excitation, photon budget and laser heating.
 
-Status: **M0 Foundations**. The workspace, crate layers and repository checks are in place;
-optics arrive from M1. See [docs/design.md](docs/design.md) for the design and roadmap.
+Status: **M1 Sequential core**. Sequential ray tracing through spheres, conics and even
+aspheres, and paraxial cardinal points, are in place and checked against theory. Glass,
+water, Fresnel and the first analyses follow in M2. See [docs/design.md](docs/design.md) for the design and roadmap.
 
 ![Roadmap](docs/roadmap.svg)
 
