@@ -1,0 +1,19 @@
+[package]
+name = "optobench-commands"
+description = "The command registry: every command takes JSON parameters and returns a JSON result"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[package.metadata.optobench]
+layer = "L5"
+
+[dependencies]
+optobench-io.workspace = true
+serde_json.workspace = true
+
+[lints]
+workspace = true

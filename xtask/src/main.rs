@@ -168,7 +168,8 @@ fn offending_word<'a>(name: &str, words: &'a [String]) -> Option<&'a str> {
 }
 
 /// Names checked: crate names, binary names, the file extension and kind names
-/// declared in optobench-io, and every file and directory name in the repository.
+/// declared in optobench-io, command ids in the registry, and every file and directory
+/// name in the repository.
 fn check_naming(root: &Path, problems: &mut Vec<String>) {
     let words = denylist(root);
     if words.is_empty() {
@@ -182,12 +183,36 @@ fn check_naming(root: &Path, problems: &mut Vec<String>) {
         "layout".to_owned(),
         "part".to_owned(),
     ]);
+    let ids = command_ids(root);
+    if ids.is_empty() {
+        problems.push("no command ids found in crates/optobench-commands/src".to_owned());
+    }
+    names.extend(ids);
     collect_paths(root, root, &mut names);
     for name in names {
         if let Some(word) = offending_word(&name, &words) {
             problems.push(format!("name `{name}` matches deny-listed word `{word}`"));
         }
     }
+}
+
+/// Command ids, read from `id: "..."` lines in the registry crate's sources.
+fn command_ids(root: &Path) -> Vec<String> {
+    let Ok(entries) = fs::read_dir(root.join("crates/optobench-commands/src")) else {
+        return Vec::new();
+    };
+    let mut ids = Vec::new();
+    for entry in entries.flatten() {
+        let text = fs::read_to_string(entry.path()).unwrap_or_default();
+        for line in text.lines().map(str::trim) {
+            if let Some(rest) = line.strip_prefix("id: \"") {
+                if let Some(id) = rest.split('"').next() {
+                    ids.push(id.to_owned());
+                }
+            }
+        }
+    }
+    ids
 }
 
 fn collect_paths(root: &Path, dir: &Path, out: &mut Vec<String>) {
