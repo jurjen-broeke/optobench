@@ -21,7 +21,7 @@ use optobench_commands::{CommandError, ErrorCode, Registry};
 use serde_json::Value;
 
 /// Commands designed but not yet built (docs/design.md, Milestones).
-const PLANNED: &str = "optimize, export-placements";
+const PLANNED: &str = "optimize";
 
 fn help(registry: &Registry) -> String {
     let mut text = String::from(

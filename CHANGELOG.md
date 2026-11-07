@@ -5,6 +5,10 @@ with the release that introduced them.
 
 ## Unreleased
 
+- M4d: golden cage relay from SolidCraft primitives with its sidecar and expected report
+  (committed), re-export test, and the `export-placements` command (poses and a sidecar
+  skeleton from a layout). The geometry fingerprint now includes the body's size. M4 is
+  complete.
 - SVG layout view of CAD scenes: one outline (convex hull) per optical element and per
   component occurrence instead of every face edge; optical elements labelled. The golden
   Thorlabs view went from 16 MB to 33 KB. Exact silhouettes and STEP performance are on

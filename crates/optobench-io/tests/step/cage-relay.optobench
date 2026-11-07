@@ -1,0 +1,39 @@
+format = "optobench/1"
+kind = "sidecar"
+
+# The golden cage relay (cage-relay.step, made by SolidCraft from cage-relay.json): two
+# plano-convex lenses (R = 30 mm, 5 mm thick, n = 1.5) facing each other on four rods,
+# held in two cage plates. Thick-lens formulas (Hecht, Optics, 5th ed., ch. 6): f = 60 mm;
+# with the flat face to the point, the front focal length is f − t/n = 56.667 mm from
+# that face, and the principal planes lie at the curved vertices. The curved vertices are
+# 2f = 120 mm apart, so a point 2 mm off axis at the front focus of L1 (z = 0) is imaged
+# 56.667 mm behind L2's flat face (z = 243.333 mm), 2 mm on the other side of the axis.
+
+[[element]]
+id = "L1"
+kind = "lens"
+body = { product = "pc-lens", occurrence = "pc-lens:1" }
+material = 1.5
+
+[[element]]
+id = "L2"
+kind = "lens"
+body = { product = "pc-lens", occurrence = "pc-lens:2" }
+material = 1.5
+
+[[source]]
+id = "object"
+kind = "point"
+wavelength_um = 0.55
+power_w = 0.001
+half_angle_deg = 3.0
+rings = 8
+position = [0, 2, 0]
+axis = [0, 0, 1]
+
+[[detector]]
+id = "image"
+position = [0, 0, 243.333333333333]
+axis = [0, 0, 1]
+size = [10, 10]
+pixels = [100, 100]

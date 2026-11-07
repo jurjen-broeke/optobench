@@ -114,6 +114,11 @@ const STANDARD: &[Command] = &[
         handler: trace::trace,
     },
     Command {
+        id: "export-placements",
+        summary: "from a layout: element poses for CAD and a matching sidecar skeleton",
+        handler: trace::export_placements,
+    },
+    Command {
         id: "bodies",
         summary: "every placed body of a STEP file: path, product, name, fingerprint",
         handler: trace::bodies,

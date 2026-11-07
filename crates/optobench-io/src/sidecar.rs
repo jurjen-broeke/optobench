@@ -94,8 +94,10 @@ pub struct PlacedBody {
 }
 
 /// A body's geometry fingerprint: independent of names and placement, so it survives a
-/// rename or a move. Built from the count of faces of each surface type and the rounded
-/// radii of its cylinders, cones, spheres and tori, hashed to 16 hexadecimal digits.
+/// rename or a move. Built from the count of faces of each surface type, the rounded
+/// radii of its cylinders, cones, spheres and tori, and its size (the sorted extents of
+/// the box around its edge vertices in its own frame, to 0.01 mm), hashed to 16
+/// hexadecimal digits.
 pub fn fingerprint(body: &step::Body) -> String {
     let mut counts: BTreeMap<&str, usize> = BTreeMap::new();
     let mut radii: Vec<String> = Vec::new();
@@ -117,7 +119,41 @@ pub fn fingerprint(body: &step::Body) -> String {
         }
     }
     radii.sort();
-    let text = format!("{counts:?}|{}", radii.join(","));
+    let (low, high) = body
+        .faces
+        .iter()
+        .flat_map(|f| &f.bounds)
+        .flat_map(|l| {
+            l.edges
+                .iter()
+                .flat_map(|e| [e.start, e.end])
+                .chain(l.vertex)
+        })
+        .fold(
+            (
+                Vec3::new(f64::INFINITY, f64::INFINITY, f64::INFINITY),
+                -Vec3::new(f64::INFINITY, f64::INFINITY, f64::INFINITY),
+            ),
+            |(lo, hi), p| {
+                (
+                    Vec3::new(lo.x.min(p.x), lo.y.min(p.y), lo.z.min(p.z)),
+                    Vec3::new(hi.x.max(p.x), hi.y.max(p.y), hi.z.max(p.z)),
+                )
+            },
+        );
+    let mut extents = [high.x - low.x, high.y - low.y, high.z - low.z];
+    extents.sort_by(f64::total_cmp);
+    let size: Vec<String> = extents
+        .iter()
+        .map(|e| {
+            if e.is_finite() {
+                format!("{e:.2}")
+            } else {
+                "-".into()
+            }
+        })
+        .collect();
+    let text = format!("{counts:?}|{}|{}", radii.join(","), size.join("x"));
     sha256_hex(text.as_bytes())[..16].to_owned()
 }
 

@@ -68,8 +68,10 @@ version = "0.0.1"
 dependencies = [
  "optobench-io",
  "optobench-materials",
+ "optobench-math",
  "optobench-scene",
  "serde_json",
+ "toml",
 ]
 
 [[package]]

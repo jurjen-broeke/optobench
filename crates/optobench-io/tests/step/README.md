@@ -18,3 +18,8 @@ hand. The volumes SolidCraft reported when they were made, for reference:
 | cone | Ø20 to Ø8 over 15 | 2450.26 |
 | lens | Ø25.4 cylinder ∩ sphere R 30 centred at z = −25: plano-convex, 5 mm centre thickness | 1830.44 |
 | assembly | plate 40 × 40 × 8; rod Ø6 × 100 placed twice: `rod:1` moved by (15, 15, 4), `rod:2` turned 90° about x, then moved by (−15, 0, 30) | 18453.93 |
+| cage-relay | golden cage relay: plano-convex lens (Ø25.4, R 30, 5 mm) placed twice facing each other (curved vertices 120 mm apart), two cage plates with Ø25.4 bores and Ø6.1 rod holes at (±15, ±15), four Ø6 × 250 rods | 48846.80 |
+| cage-relay-moved | the same with `pc-lens:2` and `cage-plate:2` moved 1 mm along z, exported again | 48846.80 |
+
+Sidecars: `lens.optobench`, `assembly.optobench`, `cage-relay.optobench`. Expected report:
+`cage-relay.expected.json` (the `trace` result of `cage-relay.optobench`, without the scene path).

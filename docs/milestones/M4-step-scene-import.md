@@ -69,6 +69,9 @@ Thorlabs files, LA1951-ML and the golden assembly (3341 faces, 116 placed bodies
 - Golden Thorlabs relay (local): FiberPort beam (1 mm, 633 nm) through LA1951, AC254-030-A, PF10 and AC254-060-A, with glasses imported from the refractiveindex.info database (N-BK7; N-BAF10/N-SF6HT; BAF11/E-FD10, which reproduce the catalogue f = 60.0 mm and BFL 54.3 mm of the AC254-060-A). All rays reach the focus, RMS spot 3.5 µm, nothing clipped, 68% detected (bare faces), ledger balanced, 3 s.
 
 ## M4d Trace and round trip
-- [ ] `trace` for STEP + sidecar
-- [ ] `export-placements` from standalone scenes
-- [ ] Golden cage relay traced from STEP; matches survive a re-export
+- [x] `trace` for STEP + sidecar (M4c)
+- [x] `export-placements` from standalone scenes: poses (`<name>.placements.json`) and a sidecar skeleton naming each element's CAD component after its id
+- [x] Golden cage relay (`crates/optobench-io/tests/step/cage-relay.*`, from SolidCraft primitives, committed) traced from STEP: image at −2.0 mm (magnification −1), 0.96⁴ transmitted, nothing clipped, matches its expected report; after a move and re-export every match holds (`crates/optobench-commands/tests/golden.rs`)
+- [x] Geometry fingerprint includes the body's size, so parts that differ only in length are told apart
+
+Status: done. All exit criteria met: golden cage relay traced from STEP; intersection residual < 1e-9 mm (M4b); re-export keeps matches.

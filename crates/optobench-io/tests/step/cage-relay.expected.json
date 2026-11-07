@@ -1,0 +1,27 @@
+{
+  "clipping": [],
+  "detectors": [
+    {
+      "centroid_mm": [
+        3.568428631493638e-17,
+        -1.9998684725423217
+      ],
+      "id": "image",
+      "peak_irradiance_w_per_m2": 23875.315239590524,
+      "power_w": 0.0008493345607771607,
+      "rays": 217,
+      "rms_radius_mm": 0.035981785426293086
+    }
+  ],
+  "ledger": {
+    "absorbed_w": 0.0,
+    "clipped_w": 0.0,
+    "detected_w": 0.0008493345607771607,
+    "escaped_w": 0.0,
+    "imbalance_w": -3.469446951953614e-18,
+    "launched_w": 0.0009999999999999966,
+    "reflected_w": 0.00015066543922283944,
+    "stopped_w": 0.0
+  },
+  "rays": 217
+}

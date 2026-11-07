@@ -157,3 +157,49 @@ pub(crate) fn bodies(parameters: &Parameters) -> Result<Value, CommandError> {
         json!({ "path": path, "bodies": list, "skipped_faces": skipped, "unsupported": model.unsupported }),
     )
 }
+
+/// `export-placements`: for a standalone layout (`path`), write `<name>.placements.json`
+/// (every pose, to rebuild it in CAD) and `<name>.sidecar.optobench` (a matching sidecar
+/// for the STEP export `<name>.step`), next to the layout or in `out_directory`.
+pub(crate) fn export_placements(parameters: &Parameters) -> Result<Value, CommandError> {
+    check_keys(parameters, &["path", "out_directory", "data_directory"])?;
+    let path = text(parameters, "path")?.ok_or_else(|| {
+        CommandError::new(ErrorCode::InvalidParameters, "missing parameter `path`")
+    })?;
+    let source = std::fs::read_to_string(path).map_err(|e| failed(format!("{path}: {e}")))?;
+    if sidecar::kind_of(&source).as_deref() != Some("layout") {
+        return Err(CommandError::new(
+            ErrorCode::InvalidParameters,
+            format!("{path}: export-placements takes a layout (kind = \"layout\")"),
+        ));
+    }
+    let data: Option<PathBuf> = text(parameters, "data_directory")?
+        .map(PathBuf::from)
+        .or_else(default_data_directory);
+    let lookup = |name: &str| material(data.as_deref(), name);
+    let scene = scene_file::parse(&source, &lookup).map_err(|e| failed(format!("{path}: {e}")))?;
+    let layout: toml::Table = source.parse().map_err(|e| failed(format!("{path}: {e}")))?;
+    let input = Path::new(path);
+    let stem = input
+        .file_stem()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "layout".into());
+    let directory = match text(parameters, "out_directory")? {
+        Some(d) => PathBuf::from(d),
+        None => input.parent().map(Path::to_path_buf).unwrap_or_default(),
+    };
+    let placements_path = directory.join(format!("{stem}.placements.json"));
+    let sidecar_path = directory.join(format!("{stem}.sidecar.optobench"));
+    let document = optobench_io::placements::placements(&scene);
+    let json = serde_json::to_string_pretty(&document).map_err(|e| failed(e.to_string()))?;
+    std::fs::write(&placements_path, json + "\n")
+        .map_err(|e| failed(format!("{}: {e}", placements_path.display())))?;
+    let skeleton = optobench_io::placements::sidecar(&scene, &layout, &format!("{stem}.step"));
+    std::fs::write(&sidecar_path, skeleton)
+        .map_err(|e| failed(format!("{}: {e}", sidecar_path.display())))?;
+    Ok(json!({
+        "placements": placements_path.to_string_lossy(),
+        "sidecar": sidecar_path.to_string_lossy(),
+        "elements": scene.elements.len(),
+    }))
+}
