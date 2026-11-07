@@ -201,6 +201,16 @@ impl SequentialSystem {
 
     /// Traces one ray through every surface in order.
     pub fn trace(&self, ray: Ray) -> TraceResult {
+        self.trace_with(ray, true)
+    }
+
+    /// Traces one ray as if every clear aperture were unlimited. Ray aiming uses this
+    /// while it searches, so a trial ray outside an aperture still reports where it went.
+    pub fn trace_ignoring_apertures(&self, ray: Ray) -> TraceResult {
+        self.trace_with(ray, false)
+    }
+
+    fn trace_with(&self, ray: Ray, apertures: bool) -> TraceResult {
         let mut result = TraceResult {
             ray,
             status: Status::Complete,
@@ -224,11 +234,13 @@ impl SequentialSystem {
             let origin = to_local.apply_point(result.ray.position);
             let direction = to_local.apply_vector(result.ray.direction);
 
+            let aperture = if apertures {
+                element.aperture
+            } else {
+                Aperture::Unlimited
+            };
             let (hit, inside) =
-                match element
-                    .aperture
-                    .intersect(element.surface.as_ref(), origin, direction)
-                {
+                match aperture.intersect(element.surface.as_ref(), origin, direction) {
                     Intersection::Hit(hit) => (hit, true),
                     Intersection::Vignetted(hit) => (hit, false),
                     Intersection::Miss => {
