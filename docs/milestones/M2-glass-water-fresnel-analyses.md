@@ -28,6 +28,6 @@ where datasets and literature values come in, and every number there is cited.
 - [x] Licence review of candidate open datasets (glass, refractive index, water), recorded in `docs/licence-review.md` for a decision (decided 2026-11-07)
 - [x] Formula-defined materials that pass the review (fused silica, air), with cited coefficients (air: standard dry air only)
 - [x] Water: dispersion, absorption, temperature, from the sources the review admits (19–24 °C)
-- [ ] `optobench fetch <source>` and file import into the user data directory, with the licence shown first
+- [x] Import of downloaded files into the user data directory, with the licence shown first: `import-material` (refractiveindex.info YAML, all nine formula types and tables) and `materials` (replaces `optobench fetch`; decided 2026-11-07)
 - [ ] Verify the bundled values against the original papers (papers not yet available); then the exit criterion for water is met
 - [ ] Literature cases: a Cooke triplet and an achromatic doublet against published paraxial and aberration values

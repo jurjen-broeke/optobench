@@ -13,6 +13,7 @@ layer = "L5"
 
 [dependencies]
 optobench-io.workspace = true
+optobench-materials.workspace = true
 serde_json.workspace = true
 
 [lints]

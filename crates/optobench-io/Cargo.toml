@@ -12,6 +12,8 @@ publish = false
 layer = "L5"
 
 [dependencies]
+optobench-materials.workspace = true
+serde_json.workspace = true
 optobench-scene.workspace = true
 optobench-library.workspace = true
 

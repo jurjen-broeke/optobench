@@ -38,7 +38,7 @@ These follow SolidCraft's own rules, so the code can be upstreamed later without
 - **Clean-room.** Behaviour is designed from first principles, textbooks, published papers and public specifications. No commercial optics or CAD product is driven, scripted or used to generate test data or reference values.
 - **Licences.** The project is MIT OR Apache-2.0. Adapted code must be MIT or Apache-2.0 and gets a row in ATTRIBUTION.md. GPL code is never read for adaptation. Every dependency is licence-checked in CI (cargo-deny).
 - **Bundled assets and data** must be truly open: licence terms that are clear and compatible with MIT OR Apache-2.0 (for example CC0, CC-BY-4.0, MIT, Apache-2.0). That includes third-party databases, such as a glass or refractive-index dataset, when they meet this bar. Each has a row in ATTRIBUTION.md and an entry in an asset manifest that CI checks.
-- **Everything else is downloaded by the user.** Databases and libraries without such terms (proprietary glass catalogues, the parts library, coating curves, vendor STEP files) are never bundled. The user gets them with `optobench fetch <source>` or by importing a file. The tool shows the source's licence before download and stores the data in the user's data directory.
+- **Everything else is downloaded by the user.** Databases and libraries without such terms (proprietary glass catalogues, the parts library, coating curves, vendor STEP files) are never bundled. The user downloads them and imports the file (`optobench import-material`; decided 2026-11-07, see Decided). The tool shows the file's licence notice and references before storing anything, and stores the data in the user's data directory.
 - **Shared designs are self-contained where possible.** On save, the design file embeds the parameters the work needs, extracted from the sources it used: each element's prescription and the dispersion coefficients actually used, with provenance (source, version, licence, checksum). Anything more (full catalogues, coating curves, STEP geometry) stays a reference. A second user downloads or copies that data themselves, under its own terms. The tool warns before embedding values from a source whose terms forbid redistribution.
 - **Vendor data** in the parts library is factual prescription data (radii, thickness, glass, diameter) with a link to the source spec sheet.
 - **File formats** come from public specifications: STEP (ISO 10303), plus our own sidecar, layout and library formats. Zemax .zmx has no public specification and is out of scope.
@@ -183,7 +183,7 @@ size = [10, 10]
 pixels = [256, 256]
 ```
 
-**Parts library** is one TOML file per part, kept in a separate repository that users download themselves (`optobench fetch library`). It is never bundled:
+**Parts library** is one TOML file per part, kept in a separate repository that users download themselves (and imports, as for materials). It is never bundled:
 
 ```toml
 format = "optobench/1"
@@ -308,7 +308,7 @@ Phase C doesn't depend on Phase B: tolerancing can start straight after M8 if it
 | --- | --- | --- |
 | M0 Foundations | workspace, crate layers, CI (3 OS + wasm32), cargo-deny, ATTRIBUTION.md, CI-checked asset manifest, ground rules doc, command registry skeleton | empty crates build everywhere; licence and asset checks green |
 | M1 Sequential core | math, frames, plane/sphere/conic/asphere surfaces, vector Snell's law, sequential trace, paraxial y–nu trace, cardinal points | thin/thick lens and parabola cases pass; EFL matches theory to 1e-9 |
-| M2 Glass, water, Fresnel, analyses | Sellmeier/Schott/Cauchy models, water (dispersion, absorption, temperature), licence review of candidate open datasets, `optobench fetch` and import, Fresnel s/p, power on rays, spot diagram, ray fan, OPD, Zernike fit | Cooke triplet and doublet match literature; water index and absorption match the cited sources; licence review recorded |
+| M2 Glass, water, Fresnel, analyses | Sellmeier/Schott/Cauchy models, water (dispersion, absorption, temperature), licence review of candidate open datasets, import of downloaded data files, Fresnel s/p, power on rays, spot diagram, ray fan, OPD, Zernike fit | Cooke triplet and doublet match literature; water index and absorption match the cited sources; licence review recorded |
 | M3 Standalone scenes and NS trace | scene file (planar and table layouts), mechanical proxies, non-sequential trace, clipping report, 2D layout view | a planar relay and a table periscope traced from scene files alone; clipping by a tube proxy detected |
 | M4 STEP scene import | STEP import, sidecar v1, body matching, BVH + exact-surface refinement, untagged = absorber, `export-placements` from standalone scenes | golden cage relay traced from STEP; intersection residual < 1e-9 mm; re-export keeps matches |
 | M5 Power and parts library | sources, detectors, thin-film coatings, splitting with cutoff, power ledger, footprints, separate library repo (~20 parts) fetched by the user, radius check vs STEP, embedded parameters with provenance on save | power conserved to 1e-9; fetched part auto-tagged on import; a shared design traces identically on a machine without the library |
@@ -353,6 +353,7 @@ Correctness is shown without commercial tools, so every reference value comes fr
 
 **Decided**
 
+- Data from outside sources enters by importing a file the user has downloaded, not by a built-in network download: no captchas, logins or terms pages to get past, and no network code or TLS dependency in the tool (2026-11-07).
 - No announcement to the SolidCraft maintainers for now. Coupling through STEP and the documented control channel keeps the project independent.
 - Truly open data (clear, compatible licence) may be bundled; everything else is downloaded by the user.
 - Shared designs embed the extracted parameters they need. Any further data is downloaded or copied by the second user under its own terms.

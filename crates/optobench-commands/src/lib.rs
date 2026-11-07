@@ -15,6 +15,8 @@
 
 #![forbid(unsafe_code)]
 
+mod materials;
+
 use serde_json::{Map, Value, json};
 
 /// The parameters a command receives: a JSON object.
@@ -99,6 +101,16 @@ const STANDARD: &[Command] = &[
         id: "commands",
         summary: "every available command with its summary",
         handler: commands,
+    },
+    Command {
+        id: "materials",
+        summary: "bundled materials and those imported into the data directory",
+        handler: materials::materials,
+    },
+    Command {
+        id: "import-material",
+        summary: "import a downloaded refractiveindex.info material file, licence shown first",
+        handler: materials::import_material,
     },
 ];
 

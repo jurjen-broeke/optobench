@@ -17,6 +17,9 @@
 #![forbid(unsafe_code)]
 
 pub mod bundled;
+mod formula;
+
+pub use formula::{Composite, DispersionFormula, FormulaKind};
 
 use std::sync::Arc;
 
@@ -284,7 +287,15 @@ macro_rules! medium_from {
         }
     )*};
 }
-medium_from!(Constant, Sellmeier, Schott, Cauchy, Tabulated);
+medium_from!(
+    Constant,
+    Sellmeier,
+    Schott,
+    Cauchy,
+    Tabulated,
+    DispersionFormula,
+    Composite
+);
 
 #[cfg(test)]
 mod tests {
