@@ -88,6 +88,9 @@ pub(crate) fn trace(parameters: &Parameters) -> Result<Value, CommandError> {
                 "centroid_mm": [d.centroid.0, d.centroid.1],
                 "rms_radius_mm": d.rms_radius,
                 "peak_irradiance_w_per_m2": d.irradiance.iter().copied().fold(0.0, f64::max),
+                // Power by angle from the detector normal, in bins of angular_bin_deg.
+                "angular_bin_deg": optobench_scene::ANGULAR_BIN_DEGREES,
+                "angular_power_w": d.angular,
             })
         })
         .collect();
