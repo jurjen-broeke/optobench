@@ -305,7 +305,7 @@ pub enum Aperture {
     /// No limit.
     #[default]
     Unlimited,
-    /// A centred circle; hits with r ≤ semi-diameter pass.
+    /// A centred circle; hits with r ≤ semi-diameter pass (see [`Aperture::contains`]).
     Circular {
         /// Radius of the clear aperture (mm).
         semi_diameter: f64,
@@ -325,13 +325,21 @@ pub enum Intersection {
 }
 
 impl Aperture {
-    /// Whether a point (local frame) lies within the clear aperture.
+    /// Whether a point (local frame) lies within the clear aperture. A ray aimed at the
+    /// edge lands there only to rounding, so the edge has a tolerance of
+    /// [`Aperture::EDGE_TOLERANCE`].
     pub fn contains(&self, point: Vec3) -> bool {
         match *self {
             Aperture::Unlimited => true,
-            Aperture::Circular { semi_diameter } => point.x.hypot(point.y) <= semi_diameter,
+            Aperture::Circular { semi_diameter } => {
+                point.x.hypot(point.y) <= semi_diameter + Self::EDGE_TOLERANCE
+            }
         }
     }
+
+    /// How far past the edge a hit still counts as inside (mm): far below any
+    /// mechanical tolerance, far above rounding.
+    pub const EDGE_TOLERANCE: f64 = 1e-9;
 
     /// Intersects `surface` and classifies the result against this aperture.
     pub fn intersect(&self, surface: &dyn Surface, origin: Vec3, direction: Vec3) -> Intersection {

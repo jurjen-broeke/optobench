@@ -18,11 +18,11 @@ where datasets and literature values come in, and every number there is cited.
 - [x] Power ledger per ray: carried + reflected + absorbed = launched, to 1e-12 relative
 
 ## M2b Analyses (optobench-analysis, L4)
-- [ ] Aperture stop, entrance pupil and field definition; ray aiming for on- and off-axis fields
-- [ ] Spot diagram: pupil sampling, centroid, RMS and geometric radius
-- [ ] Ray fan: transverse aberration against pupil coordinate, tangential and sagittal
-- [ ] OPD against a reference sphere centred on the chief ray's image point
-- [ ] Zernike fit of the OPD over the unit pupil (indexing scheme documented)
+- [x] Aperture stop, entrance pupil and field definition; ray aiming for on- and off-axis fields (paraxial or real; object at infinity, finite conjugates with scenes in M3)
+- [x] Spot diagram: pupil sampling, centroid, RMS and geometric radius
+- [x] Ray fan: transverse aberration against pupil coordinate, tangential and sagittal
+- [x] OPD against a reference sphere centred on the chief ray's image point
+- [x] Zernike fit of the OPD over the unit pupil (indexing scheme documented)
 
 ## M2c Data, water, fetch, literature cases
 - [ ] Licence review of candidate open datasets (glass, refractive index, water), recorded in `docs/licence-review.md` for a decision

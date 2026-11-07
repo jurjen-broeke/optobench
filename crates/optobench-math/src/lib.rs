@@ -8,10 +8,12 @@
 
 #![forbid(unsafe_code)]
 
+mod linear;
 mod root;
 mod transform;
 mod vector;
 
+pub use linear::{LeastSquaresError, least_squares};
 pub use root::{Root, RootError, find_root, find_root_bracketed};
 pub use transform::{Frame, Rotation, Transform};
 pub use vector::Vec3;
