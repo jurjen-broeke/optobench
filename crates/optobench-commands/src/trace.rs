@@ -68,10 +68,20 @@ pub(crate) fn trace(parameters: &Parameters) -> Result<Value, CommandError> {
         Some(root) => optobench_io::library::load(root).map_err(failed)?,
         None => optobench_library::Library::default(),
     };
+    let curves = |name: &str| match &data {
+        Some(root) => optobench_io::curves::load(root, name),
+        None => optobench_io::coatings::no_curves(name),
+    };
+    let lookups = scene_file::Lookups {
+        materials: &lookup,
+        curves: &curves,
+        library: &library,
+    };
     let (scene, parts) = match sidecar::kind_of(&source).as_deref() {
-        Some("sidecar") => sidecar::read(&source, Path::new(path), &lookup, &library)
-            .map(|read| (read.scene, read.parts)),
-        _ => scene_file::parse_with(&source, &lookup, &library).map(|scene| (scene, Vec::new())),
+        Some("sidecar") => {
+            sidecar::read(&source, Path::new(path), &lookups).map(|read| (read.scene, read.parts))
+        }
+        _ => scene_file::parse_with(&source, &lookups).map(|scene| (scene, Vec::new())),
     }
     .map_err(|e| failed(format!("{path}: {e}")))?;
     let built = scene.build().map_err(|e| failed(format!("{path}: {e}")))?;
@@ -202,8 +212,17 @@ pub(crate) fn export_placements(parameters: &Parameters) -> Result<Value, Comman
         Some(root) => optobench_io::library::load(root).map_err(failed)?,
         None => optobench_library::Library::default(),
     };
-    let scene = scene_file::parse_with(&source, &lookup, &library)
-        .map_err(|e| failed(format!("{path}: {e}")))?;
+    let curves = |name: &str| match &data {
+        Some(root) => optobench_io::curves::load(root, name),
+        None => optobench_io::coatings::no_curves(name),
+    };
+    let lookups = scene_file::Lookups {
+        materials: &lookup,
+        curves: &curves,
+        library: &library,
+    };
+    let scene =
+        scene_file::parse_with(&source, &lookups).map_err(|e| failed(format!("{path}: {e}")))?;
     let layout: toml::Table = source.parse().map_err(|e| failed(format!("{path}: {e}")))?;
     let input = Path::new(path);
     let stem = input

@@ -66,6 +66,7 @@ fn part(surfaces: &[f64], thickness: &[f64], diameter: f64) -> Part {
         thickness: thickness.to_vec(),
         glass: thickness.iter().map(|_| Glass::Index(1.5)).collect(),
         coating: None,
+        coatings: vec![],
         products: vec!["pc-lens".into()],
     }
 }
@@ -221,4 +222,65 @@ fn a_flipped_profile_reads_the_same_lens_from_the_other_side() {
     assert!((f.surfaces[0].0 + 5.0).abs() < 1e-12 && (f.surfaces[0].1 - 30.0).abs() < 1e-12);
     assert!(f.surfaces[1].0.abs() < 1e-12 && f.surfaces[1].1.is_infinite());
     assert_eq!(f.flipped(), p);
+}
+
+#[test]
+fn surface_coatings_follow_the_part_type() {
+    let curve = CoatingSpec::Curve("bandpass".into());
+    // A filter's curve is the whole filter: first surface, the rest ideal.
+    let filter = Part {
+        part_type: PartType::Filter,
+        coating: Some(curve.clone()),
+        ..part(&[f64::INFINITY, f64::INFINITY], &[2.0], 25.0)
+    };
+    assert_eq!(
+        filter.surface_coatings(),
+        vec![curve.clone(), CoatingSpec::Ideal]
+    );
+    // Turned around, the coated face is met last.
+    assert_eq!(
+        filter.reversed().surface_coatings(),
+        vec![CoatingSpec::Ideal, curve.clone()]
+    );
+    // On a lens, a coating is on every surface; `coatings` lists them one by one.
+    let lens = Part {
+        coating: Some(CoatingSpec::Ideal),
+        ..part(&[30.0, f64::INFINITY], &[5.0], 25.4)
+    };
+    assert_eq!(lens.surface_coatings(), vec![CoatingSpec::Ideal; 2]);
+    let listed = Part {
+        coatings: vec![curve.clone(), CoatingSpec::Uncoated],
+        ..part(&[30.0, f64::INFINITY], &[5.0], 25.4)
+    };
+    assert!(listed.check().is_ok());
+    assert_eq!(
+        listed.reversed().surface_coatings()[0],
+        CoatingSpec::Uncoated
+    );
+    let wrong = Part {
+        coatings: vec![curve],
+        ..part(&[30.0, f64::INFINITY], &[5.0], 25.4)
+    };
+    assert!(wrong.check().is_err(), "two surfaces need two coatings");
+    // No coating: uncoated.
+    assert_eq!(
+        part(&[30.0, f64::INFINITY], &[5.0], 25.4).surface_coatings(),
+        vec![CoatingSpec::Uncoated; 2]
+    );
+}
+
+#[test]
+fn profile_surfaces_name_their_faces() {
+    // The convex cap split in two halves (as STEP files often have it) is one surface.
+    let mut half = cap(5.0, -30.0, 12.7);
+    half.loops[0].truncate(8);
+    let lens = [
+        cylinder(12.7, 0.0, 2.0),
+        flat(0.0, 12.7, -1.0),
+        cap(5.0, -30.0, 12.7),
+        half,
+    ];
+    let p = read(&lens);
+    assert_eq!(p.surface_faces, vec![vec![1], vec![2, 3]]);
+    assert_eq!(p.flipped().surface_faces, vec![vec![2, 3], vec![1]]);
 }

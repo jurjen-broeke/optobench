@@ -87,8 +87,9 @@ pub enum ElementKind {
         diameter: f64,
         /// Clear aperture diameter (mm).
         clear_aperture: f64,
-        /// Coating on every surface.
-        coating: Coating,
+        /// N coatings, one per surface; stacks listed from the air side (for a surface
+        /// between two glasses, from the side of the earlier one).
+        coatings: Vec<Coating>,
     },
     /// A mirror, reflecting on both sides.
     Mirror {
@@ -235,8 +236,11 @@ pub enum SolidRole {
     Lens {
         /// The glass.
         material: Medium,
-        /// Coating on every optical face.
+        /// Coating on every optical face not in `face_coatings`.
         coating: Coating,
+        /// Coatings of particular faces (indices into the solid's faces), such as the one
+        /// coated face of a filter.
+        face_coatings: Vec<(usize, Coating)>,
     },
     /// Reflects on the faces listed (indices into the solid's faces); the others absorb.
     Mirror {
@@ -404,15 +408,16 @@ impl Scene {
                     materials,
                     diameter,
                     clear_aperture,
-                    coating,
+                    coatings,
                 } => {
                     let id = &element.id;
                     if surfaces.len() < 2
                         || thicknesses.len() != surfaces.len() - 1
                         || materials.len() != surfaces.len() - 1
+                        || coatings.len() != surfaces.len()
                     {
                         return Err(invalid(format!(
-                            "lens `{id}`: N surfaces need N − 1 thicknesses and N − 1 materials"
+                            "lens `{id}`: N surfaces need N − 1 thicknesses, N − 1 materials and N coatings"
                         )));
                     }
                     if !(*clear_aperture > 0.0 && clear_aperture <= diameter) {
@@ -445,7 +450,13 @@ impl Scene {
                                 )),
                             region: Region::Disk { radius: rim },
                             role: Role::Refract {
-                                coating: coating.clone(),
+                                // Stacks are written from the air side; the first
+                                // surface has the air on its negative side.
+                                coating: if i == 0 {
+                                    coatings[i].turned()
+                                } else {
+                                    coatings[i].clone()
+                                },
                                 clear_radius: Some(clear_aperture / 2.0),
                             },
                             negative_medium: media[i],
@@ -578,8 +589,16 @@ impl Scene {
                 );
                 let role = match &solid.role {
                     SolidRole::Absorber => Role::Absorber,
-                    SolidRole::Lens { coating, .. } if !edge => Role::Refract {
-                        coating: coating.clone(),
+                    SolidRole::Lens {
+                        coating,
+                        face_coatings,
+                        ..
+                    } if !edge => Role::Refract {
+                        coating: face_coatings
+                            .iter()
+                            .find(|(k, _)| *k == face_index)
+                            .map_or(coating, |(_, c)| c)
+                            .clone(),
                         clear_radius: None,
                     },
                     SolidRole::Lens { .. } => Role::Absorber,

@@ -55,7 +55,7 @@ fn step_lens_traces_like_the_same_lens_defined_inline() {
                 materials: vec![1.5.into()],
                 diameter: 25.4,
                 clear_aperture: 25.4,
-                coating: Coating::Uncoated,
+                coatings: vec![Coating::Uncoated; 2],
             },
         }],
         sources: vec![Source {
@@ -198,4 +198,70 @@ fn renamed_part_is_found_by_fingerprint() {
     let scene = parse(&text, &path, &lookup).expect("found by fingerprint");
     let _ = std::fs::remove_dir_all(&directory);
     assert!(scene.solids.iter().any(|s| s.id == "L"));
+}
+
+#[test]
+fn library_part_coatings_land_on_their_own_faces() {
+    // The golden relay's lens (R 30 curved side first, then flat) as a library part with a
+    // curve on its curved surface and an ideal flat surface: in each placed lens the curve
+    // must sit on the spherical face and "ideal" on the flat one, whichever way the lens
+    // faces.
+    use optobench_io::scene_file::Lookups;
+    use optobench_library::{CoatingSpec, Glass, Library, Outline, Part, PartSurface, PartType};
+    use optobench_surfaces::brep::FaceSurface;
+    use optobench_trace::coating::CoatingCurve;
+    let part = Part {
+        vendor: "Example".into(),
+        number: "PC-30".into(),
+        part_type: PartType::Lens,
+        source: "hand-written for the golden cage relay".into(),
+        outline: Outline::Round { diameter: 25.4 },
+        clear_aperture: Some(22.9),
+        surfaces: vec![
+            PartSurface {
+                radius: 30.0,
+                conic: 0.0,
+            },
+            PartSurface::FLAT,
+        ],
+        thickness: vec![5.0],
+        glass: vec![Glass::Index(1.5)],
+        coating: None,
+        coatings: vec![CoatingSpec::Curve("c".into()), CoatingSpec::Ideal],
+        products: vec!["pc-lens".into()],
+    };
+    let library = Library::new(vec![part]).expect("one part");
+    let materials = |name: &str| Err(format!("no material `{name}`"));
+    let curves = |_: &str| {
+        CoatingCurve::new(vec![(0.4, 0.5, 0.5), (0.7, 0.5, 0.5)]).map_err(|e| format!("{e:?}"))
+    };
+    let lookups = Lookups {
+        materials: &materials,
+        curves: &curves,
+        library: &library,
+    };
+    let text = "format = \"optobench/1\"\nkind = \"sidecar\"\nstep = \"cage-relay.step\"\n";
+    let read =
+        optobench_io::sidecar::read(text, &fixture("library.optobench"), &lookups).expect("reads");
+    assert_eq!(read.parts.len(), 2);
+    for id in ["pc-lens:1", "pc-lens:2"] {
+        let solid = read
+            .scene
+            .solids
+            .iter()
+            .find(|s| s.id == id)
+            .expect("tagged");
+        let optobench_scene::SolidRole::Lens { face_coatings, .. } = &solid.role else {
+            panic!("{id} is a lens")
+        };
+        assert!(!face_coatings.is_empty());
+        for (face, coating) in face_coatings {
+            let surface = &solid.faces[*face].geometry.surface;
+            match coating {
+                Coating::Curve(_) => assert!(matches!(surface, FaceSurface::Sphere { .. }), "{id}"),
+                Coating::Ideal => assert!(matches!(surface, FaceSurface::Plane(_)), "{id}"),
+                other => panic!("{id}: {other:?}"),
+            }
+        }
+    }
 }

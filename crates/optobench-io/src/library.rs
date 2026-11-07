@@ -22,7 +22,9 @@
 //! surfaces = [ { radius = 13.1 }, { radius = "inf" } ]   # optional conic; a filter: optional
 //! thickness = [11.7]                # centre thicknesses (a mirror: its substrate, optional)
 //! glass = ["N-BK7"]                 # names (bundled or imported) or indices
-//! coating = "uncoated"              # optional: "uncoated" or "ideal"
+//! coating = "uncoated"              # optional: see `coatings`; on a filter a curve is the
+//!                                   # whole part's response (first surface; others ideal)
+//! coatings = ["ideal", "uncoated"]  # optional instead: surface by surface
 //! products = ["ttn189114-e0w"]      # optional: other names of its STEP product
 //! notes = "..."                     # optional
 //! ```
@@ -86,6 +88,7 @@ pub fn parse(text: &str) -> Result<Part, FileError> {
             "thickness",
             "glass",
             "coating",
+            "coatings",
             "products",
             "notes",
         ],
@@ -165,13 +168,11 @@ pub fn parse(text: &str) -> Result<Part, FileError> {
     };
     let coating = match root.get("coating") {
         None => None,
-        Some(Value::String(name)) if name == "uncoated" || name == "ideal" => Some(name.clone()),
-        Some(_) => {
-            return Err(error(format!(
-                "{}: coating is \"uncoated\" or \"ideal\"",
-                item.context
-            )));
-        }
+        Some(value) => Some(crate::coatings::parse(value, &item.context)?),
+    };
+    let coatings = match root.get("coatings") {
+        None => Vec::new(),
+        Some(value) => crate::coatings::parse_list(value, surfaces.len(), &item.context)?,
     };
     let products = match root.get("products") {
         None => Vec::new(),
@@ -203,6 +204,7 @@ pub fn parse(text: &str) -> Result<Part, FileError> {
         thickness,
         glass,
         coating,
+        coatings,
         products,
     };
     for (what, name) in [("vendor", part.vendor.as_str()), ("part", &part.number)] {
@@ -330,14 +332,6 @@ pub fn glass(glass: &Glass, lookup: &MaterialLookup) -> Result<Medium, String> {
                 lookup(&lower).map_err(|_| first)
             }
         }),
-    }
-}
-
-/// The coating a part names.
-pub fn coating(part: &Part) -> optobench_trace::Coating {
-    match part.coating.as_deref() {
-        Some("ideal") => optobench_trace::Coating::Ideal,
-        _ => optobench_trace::Coating::Uncoated,
     }
 }
 

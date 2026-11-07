@@ -200,7 +200,7 @@ surfaces = [
 ]
 thickness = [5.0]
 glass = ["N-BK7"]
-coating = { name = "AR 350-700 nm", curve = "user" }   # user supplies the curve (M5c2)
+coating = { curve = "thorlabs-a-coating" }              # an imported R/T curve, or layers (M5c2)
 products = ["ttn189114-e0w"]                            # other names of its STEP product
 ```
 

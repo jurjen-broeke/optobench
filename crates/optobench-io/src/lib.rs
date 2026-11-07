@@ -6,6 +6,8 @@
 
 #![forbid(unsafe_code)]
 
+pub mod coatings;
+pub mod curves;
 pub mod library;
 pub mod placements;
 pub mod refractiveindex;
