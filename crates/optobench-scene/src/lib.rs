@@ -245,7 +245,15 @@ pub struct Scene {
     pub detectors: Vec<Detector>,
     /// Solids from CAD (STEP), with their roles.
     pub solids: Vec<Solid>,
+    /// Ray splitting at partly reflecting faces: reflected parts carrying at least this
+    /// fraction of the total source power are followed as child rays; `None` follows the
+    /// transmitted part only. The default is [`DEFAULT_SPLIT_CUTOFF`] (docs/design.md,
+    /// Optical model).
+    pub split_cutoff: Option<f64>,
 }
+
+/// Default splitting cutoff, as a fraction of the total source power.
+pub const DEFAULT_SPLIT_CUTOFF: f64 = 1e-6;
 
 /// Who a face belongs to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -360,7 +368,7 @@ impl Scene {
                                 )),
                             region: Region::Disk { radius: rim },
                             role: Role::Refract {
-                                coating: *coating,
+                                coating: coating.clone(),
                                 clear_radius: Some(clear_aperture / 2.0),
                             },
                             negative_medium: media[i],
@@ -494,7 +502,7 @@ impl Scene {
                 let role = match &solid.role {
                     SolidRole::Absorber => Role::Absorber,
                     SolidRole::Lens { coating, .. } if !edge => Role::Refract {
-                        coating: *coating,
+                        coating: coating.clone(),
                         clear_radius: None,
                     },
                     SolidRole::Lens { .. } => Role::Absorber,
@@ -514,6 +522,8 @@ impl Scene {
                 });
             }
         }
+        let total: f64 = self.sources.iter().map(|s| s.power).sum();
+        system.split_cutoff = self.split_cutoff.map(|fraction| fraction * total);
         system.build_index();
         Ok(Built { system, owners })
     }
@@ -585,12 +595,141 @@ impl Scene {
                 }),
             }
         }
+        let footprints = self.footprints(&built, &records);
         Ok(SceneTrace {
             records,
             ledger,
             detectors,
             clipping,
+            footprints,
         })
+    }
+}
+
+/// Power-weighted centroid and RMS radius of detector hits.
+fn centroid_and_rms(hits: &[((f64, f64), f64)]) -> ((f64, f64), f64) {
+    let power: f64 = hits.iter().map(|h| h.1).sum();
+    let weight = if power > 0.0 { power } else { 1.0 };
+    let centroid = (
+        hits.iter().map(|((x, _), w)| x * w).sum::<f64>() / weight,
+        hits.iter().map(|((_, y), w)| y * w).sum::<f64>() / weight,
+    );
+    let rms = (hits
+        .iter()
+        .map(|((x, y), w)| w * ((x - centroid.0).powi(2) + (y - centroid.1).powi(2)))
+        .sum::<f64>()
+        / weight)
+        .sqrt();
+    (centroid, rms)
+}
+
+/// Where the direct beam (rays' main paths, not ghosts) lands on one optical element.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Footprint {
+    /// The element's id (for a doublet from CAD, the id before the `/`).
+    pub id: String,
+    /// Hits on the element's faces.
+    pub hits: usize,
+    /// Power arriving at those hits (W); a ray crossing two faces counts twice.
+    pub power: f64,
+    /// Power-weighted centre of the hits (scene frame).
+    pub centroid: Vec3,
+    /// The beam's radius on the element: on each of its faces, the largest distance of a
+    /// hit from that face's centroid; the largest over the faces (mm).
+    pub radius: f64,
+    /// For an inline element: the largest distance of a hit from the element's axis as a
+    /// fraction of the clear aperture radius (1 = the beam fills the clear aperture).
+    pub clear_aperture_used: Option<f64>,
+}
+
+/// Hit points with their power and face, and the inline element they belong to (if any).
+type FootprintHits = (Vec<(Vec3, f64, usize)>, Option<usize>);
+
+impl Scene {
+    /// Footprints on every optical element that light reached, in scene order.
+    fn footprints(&self, built: &Built, records: &[RayRecord]) -> Vec<Footprint> {
+        // Key: element index for inline elements, then tagged solids by element id.
+        let mut order: Vec<String> = Vec::new();
+        let mut hits: std::collections::BTreeMap<String, FootprintHits> = Default::default();
+        // The beam itself: direct light only, not ghosts split off at reflecting faces.
+        for record in records.iter().filter(|r| r.generation == 0) {
+            for ((point, face), power) in record.points[1..]
+                .iter()
+                .zip(&record.faces)
+                .zip(&record.powers)
+            {
+                let owner = built.owners[built.system.faces[*face].owner];
+                let (key, element) = match owner {
+                    Owner::Element(i) => (self.elements[i].id.clone(), Some(i)),
+                    Owner::Solid(i) if !matches!(self.solids[i].role, SolidRole::Absorber) => {
+                        let id = &self.solids[i].id;
+                        (id.split('/').next().unwrap_or(id).to_owned(), None)
+                    }
+                    _ => continue,
+                };
+                let entry = hits.entry(key.clone()).or_insert_with(|| {
+                    order.push(key);
+                    (Vec::new(), element)
+                });
+                entry.0.push((*point, *power, *face));
+            }
+        }
+        order
+            .into_iter()
+            .filter_map(|id| {
+                let (points, element) = hits.remove(&id)?;
+                let power: f64 = points.iter().map(|p| p.1).sum();
+                let weighted_centre = |hits: &[&(Vec3, f64, usize)]| {
+                    let total: f64 = hits.iter().map(|h| h.1).sum();
+                    let weight = if total > 0.0 { total } else { 1.0 };
+                    hits.iter()
+                        .fold(Vec3::ZERO, |c, (p, w, _)| c + *p * (*w / weight))
+                };
+                let centroid = weighted_centre(&points.iter().collect::<Vec<_>>());
+                // The beam's size on each face (each face lies across the beam), the
+                // largest of them; not the spread over all faces, which would include
+                // the element's thickness.
+                let mut faces: Vec<usize> = points.iter().map(|p| p.2).collect();
+                faces.sort_unstable();
+                faces.dedup();
+                let radius = faces
+                    .iter()
+                    .map(|&f| {
+                        let on_face: Vec<&(Vec3, f64, usize)> =
+                            points.iter().filter(|p| p.2 == f).collect();
+                        let centre = weighted_centre(&on_face);
+                        on_face
+                            .iter()
+                            .map(|(p, _, _)| (*p - centre).length())
+                            .fold(0.0, f64::max)
+                    })
+                    .fold(0.0, f64::max);
+                let clear_aperture_used = element.and_then(|i| {
+                    let e = &self.elements[i];
+                    let clear = match &e.kind {
+                        ElementKind::Lens { clear_aperture, .. }
+                        | ElementKind::Mirror { clear_aperture, .. } => clear_aperture / 2.0,
+                    };
+                    let axis = e.frame.axes()[2];
+                    let reach = points
+                        .iter()
+                        .map(|(p, _, _)| {
+                            let d = *p - e.frame.origin();
+                            (d - axis * d.dot(axis)).length()
+                        })
+                        .fold(0.0, f64::max);
+                    (clear > 0.0).then(|| reach / clear)
+                });
+                Some(Footprint {
+                    id,
+                    hits: points.len(),
+                    power,
+                    centroid,
+                    radius,
+                    clear_aperture_used,
+                })
+            })
+            .collect()
     }
 }
 
@@ -601,6 +740,13 @@ pub struct DetectorResult {
     pub id: String,
     /// Power received (W).
     pub power: f64,
+    /// Of that, the power arriving on rays' main paths (generation 0); the rest arrived
+    /// on rays split off at partly reflecting faces (ghosts).
+    pub direct_power: f64,
+    /// Power-weighted centroid of the direct light only (mm).
+    pub direct_centroid: (f64, f64),
+    /// Power-weighted RMS distance of the direct light from its centroid (mm).
+    pub direct_rms_radius: f64,
     /// Rays received.
     pub rays: usize,
     /// Power-weighted centroid in the detector's local (x, y) (mm).
@@ -619,6 +765,14 @@ impl DetectorResult {
             .filter_map(|r| r.detector_point.map(|p| (p, r.ray.power)))
             .collect();
         let power: f64 = hits.iter().map(|h| h.1).sum();
+        let direct: Vec<((f64, f64), f64)> = records
+            .iter()
+            .filter(|r| r.generation == 0)
+            .filter(|r| matches!(r.end, End::Detected { detector, .. } if detector == index))
+            .filter_map(|r| r.detector_point.map(|p| (p, r.ray.power)))
+            .collect();
+        let direct_power: f64 = direct.iter().map(|h| h.1).sum();
+        let (direct_centroid, direct_rms_radius) = centroid_and_rms(&direct);
         let weight = if power > 0.0 { power } else { 1.0 };
         let centroid = (
             hits.iter().map(|((x, _), w)| x * w).sum::<f64>() / weight,
@@ -644,6 +798,9 @@ impl DetectorResult {
         Self {
             id: detector.id.clone(),
             power,
+            direct_power,
+            direct_centroid,
+            direct_rms_radius,
             rays: hits.len(),
             centroid,
             rms_radius,
@@ -676,6 +833,8 @@ pub struct SceneTrace {
     pub detectors: Vec<DetectorResult>,
     /// Per clipping item, in order of first clip.
     pub clipping: Vec<Clipping>,
+    /// Per optical element that light reached.
+    pub footprints: Vec<Footprint>,
 }
 
 #[cfg(test)]

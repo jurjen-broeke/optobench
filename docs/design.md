@@ -183,7 +183,7 @@ size = [10, 10]
 pixels = [256, 256]
 ```
 
-**Parts library** is one TOML file per part, kept in a separate repository that users download themselves (and imports, as for materials). It is never bundled:
+**Parts library** is one TOML file per part, kept in the user's own data directory (`%APPDATA%` on Windows, `~/Library/Application Support` on macOS, `$XDG_DATA_HOME` or `~/.local/share` on Linux, under `optobench/library/`). The user builds it from spec sheets or imports parts, and moves it between installations themselves; nothing is bundled or hosted by the project, so no licence is involved beyond each source's own terms (decided 2026-11-07):
 
 ```toml
 format = "optobench/1"
@@ -274,7 +274,7 @@ Every file optobench writes for people to keep has one extension, `.optobench`, 
 | --- | --- | --- |
 | Sidecar for a CAD design | `<design>.optobench` | same stem as the STEP or SolidCraft design it belongs to, saved next to it; `kind = "sidecar"` |
 | Standalone layout | `<name>.optobench` | `kind = "layout"`, planar or table |
-| Library part | `parts/<vendor>/<part-number>.toml` | in the separate library repository; `kind = "part"`; plain `.toml` so contributors can edit it anywhere |
+| Library part | `<user data dir>/optobench/library/parts/<vendor>/<part-number>.toml` | in the user's own library; `kind = "part"`; plain `.toml` so it can be edited anywhere |
 | Library manifest | `library.toml` | at the root of a library: name, version, licence, maintainers |
 | Report | `<name>.report.html`, `<name>.report.json` | written next to the input unless `--out` is given |
 | Detector data | `<name>.<detector-id>.irradiance.csv` | one file per detector; the detector id comes from the design |
@@ -316,7 +316,7 @@ Phase C doesn't depend on Phase B: tolerancing can start straight after M8 if it
 | M2 Glass, water, Fresnel, analyses | Sellmeier/Schott/Cauchy models, water (dispersion, absorption, temperature), licence review of candidate open datasets, import of downloaded data files, Fresnel s/p, power on rays, spot diagram, ray fan, OPD, Zernike fit | Cooke triplet and doublet match literature; water index and absorption match the cited sources; licence review recorded |
 | M3 Standalone scenes and NS trace | scene file (planar and table layouts), mechanical proxies, non-sequential trace, clipping report, 2D layout view | a planar relay and a table periscope traced from scene files alone; clipping by a tube proxy detected |
 | M4 STEP scene import | STEP import, sidecar v1, body matching, BVH + exact-surface refinement, untagged = absorber, `export-placements` from standalone scenes | golden cage relay traced from STEP; intersection residual < 1e-9 mm; re-export keeps matches |
-| M5 Power and parts library | sources, detectors, thin-film coatings, splitting with cutoff, power ledger, footprints, separate library repo (~20 parts) fetched by the user, radius check vs STEP, embedded parameters with provenance on save | power conserved to 1e-9; fetched part auto-tagged on import; a shared design traces identically on a machine without the library |
+| M5 Power and parts library | sources, detectors, thin-film coatings, splitting with cutoff, power ledger, footprints, user-managed parts library in the user data directory, radius check vs STEP, embedded parameters with provenance on save | power conserved to 1e-9; fetched part auto-tagged on import; a shared design traces identically on a machine without the library |
 | M6 DOFs and move report | DOF model (slide, tilt, coupled, locked), damped least-squares optimizer, merit functions (focus, centring, collimation, power), move report in CAD or layout coordinates, re-export diff | on a golden periscope, applying the report's moves by hand restores alignment in one iteration |
 | M7 Microscopy pack | ideal objective with immersion and cover-glass design, dry/immersion/dipping cases, index-mismatch trace, correction collar DOF, scan-mirror sweeps, pupil conjugation and telecentricity, Gaussian beams, stratified-media Richards–Wolf PSF | 4f scan/tube relay with galvo matches hand calculation; focal shift and PSF in water match published stratified-media results |
 | M8 Sample, fluorescence, heating | sample layer stack (µa, µs, g), fluorophore definitions, 1P and 2P excitation with saturation checks, pulse broadening from glass GDD, emission trace and photon budget, absorbed power, heat diffusion (steady and scanned), heating and saturation warnings | excitation rates match closed-form cases; temperature rise matches the analytic Gaussian-source solution and a published multiphoton heating benchmark |
@@ -358,6 +358,7 @@ Correctness is shown without commercial tools, so every reference value comes fr
 
 **Decided**
 
+- The parts library lives in the user's data directory and is managed and transferred by the user; the project hosts no library (2026-11-07).
 - STEP is read by optobench's own reader, not SolidCraft's crates, so changes inside SolidCraft cannot break import; only the STEP files it writes matter (2026-11-07).
 - Data from outside sources enters by importing a file the user has downloaded, not by a built-in network download: no captchas, logins or terms pages to get past, and no network code or TLS dependency in the tool (2026-11-07).
 - No announcement to the SolidCraft maintainers for now. Coupling through STEP and the documented control channel keeps the project independent.

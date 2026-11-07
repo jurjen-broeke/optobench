@@ -26,7 +26,9 @@ use optobench_materials::{Material, MaterialError, Medium};
 use optobench_math::{Transform, Vec3};
 use optobench_surfaces::{Aperture, Intersection, Surface};
 
-use crate::interaction::{Refraction, fresnel_power, reflect, refract};
+pub use crate::coating::Coating;
+use crate::coating::Incidence;
+use crate::interaction::{Refraction, reflect, refract};
 use crate::ray::Ray;
 
 /// What a surface does to a ray.
@@ -37,16 +39,6 @@ pub enum Interaction {
     Refract,
     /// Mirror reflection; the medium after the surface is the one the ray returns into.
     Reflect,
-}
-
-/// The coating on a refracting surface.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum Coating {
-    /// Bare interface: Fresnel reflection losses.
-    #[default]
-    Uncoated,
-    /// A perfect anti-reflection coating: no reflection loss.
-    Ideal,
 }
 
 /// One surface of a sequential system.
@@ -268,14 +260,28 @@ impl SequentialSystem {
                 Interaction::Refract => {
                     match refract(ray.direction, normal, index_before, index_after) {
                         Refraction::Refracted(direction) => {
-                            if element.coating == Coating::Uncoated {
-                                let cos_incidence = normal.dot(ray.direction).abs();
-                                let transmitted =
-                                    fresnel_power(cos_incidence, index_before, index_after)
-                                        .unpolarised_transmittance();
-                                result.reflected_power += ray.power * (1.0 - transmitted);
-                                ray.power *= transmitted;
-                            }
+                            // The coating decides the split; the surface normal (z ≥ 0 in
+                            // the local frame) points to its outer side.
+                            let incidence = Incidence {
+                                wavelength: ray.wavelength,
+                                cos_incidence: normal.dot(ray.direction).abs(),
+                                index_from: index_before,
+                                index_to: index_after,
+                                from_outside: ray.direction.dot(normal) < 0.0,
+                            };
+                            let response = match element.coating.response(&incidence) {
+                                Ok(r) => r,
+                                Err(error) => {
+                                    result.status = Status::MaterialUndefined {
+                                        medium: i + 1,
+                                        error,
+                                    };
+                                    return result;
+                                }
+                            };
+                            result.reflected_power += ray.power * response.reflectance;
+                            result.absorbed_power += ray.power * response.absorptance();
+                            ray.power *= response.transmittance;
                             ray.direction = direction;
                         }
                         Refraction::TotalInternalReflection(_) => {

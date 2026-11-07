@@ -9,6 +9,7 @@
 #![forbid(unsafe_code)]
 
 pub mod bvh;
+pub mod coating;
 mod interaction;
 pub mod nonsequential;
 mod paraxial;

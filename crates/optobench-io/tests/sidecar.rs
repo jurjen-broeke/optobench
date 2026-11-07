@@ -74,6 +74,8 @@ fn step_lens_traces_like_the_same_lens_defined_inline() {
             pixels: (40, 40),
         }],
         solids: vec![],
+        // As the sidecar has it by default.
+        split_cutoff: Some(optobench_scene::DEFAULT_SPLIT_CUTOFF),
     };
     let a = from_step.trace().expect("traces");
     let b = inline.trace().expect("traces");

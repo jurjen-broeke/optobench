@@ -81,6 +81,9 @@ pub(crate) fn trace(parameters: &Parameters) -> Result<Value, CommandError> {
             json!({
                 "id": d.id,
                 "power_w": d.power,
+                "direct_power_w": d.direct_power,
+                "direct_centroid_mm": [d.direct_centroid.0, d.direct_centroid.1],
+                "direct_rms_radius_mm": d.direct_rms_radius,
                 "rays": d.rays,
                 "centroid_mm": [d.centroid.0, d.centroid.1],
                 "rms_radius_mm": d.rms_radius,
@@ -118,10 +121,19 @@ pub(crate) fn trace(parameters: &Parameters) -> Result<Value, CommandError> {
             "reflected_w": ledger.reflected,
             "escaped_w": ledger.escaped,
             "stopped_w": ledger.stopped,
+            "below_cutoff_w": ledger.below_cutoff,
             "imbalance_w": ledger.imbalance(),
         },
         "detectors": detectors,
         "clipping": clipping,
+        "footprints": traced.footprints.iter().map(|f| json!({
+            "id": f.id,
+            "hits": f.hits,
+            "power_w": f.power,
+            "centroid_mm": [f.centroid.x, f.centroid.y, f.centroid.z],
+            "radius_mm": f.radius,
+            "clear_aperture_used": f.clear_aperture_used,
+        })).collect::<Vec<_>>(),
     });
     if let Some(output) = text(parameters, "svg")? {
         let drawing = svg::layout(&scene, &built, &traced, view, rays_drawn);
