@@ -50,6 +50,8 @@
 //! axis = [0, -1, 0]
 //! size = [10, 10]
 //! pixels = [100, 100]
+//!
+//! # [resolved] ...                  # written by `embed`, always last: see `resolved`
 //! ```
 //!
 //! # Matching
@@ -571,11 +573,29 @@ fn add_part(
 /// A sidecar, with parts from `library`: elements that name a part, and STEP products
 /// named after a part (tagged automatically unless `[library] automatic = false`).
 pub fn read(text: &str, sidecar: &Path, lookups: &Lookups) -> Result<Read, FileError> {
-    let (lookup, library) = (lookups.materials, lookups.library);
     check_header(text)?;
     let root: Table = text
         .parse()
         .map_err(|e: toml::de::Error| error(format!("not valid TOML: {e}")))?;
+    // Embedded values (`[resolved]`) first, then the user's own data.
+    let embedded = crate::resolved::read(&root)?;
+    let merged_library = embedded.library(lookups.library)?;
+    let merged_materials = |name: &str| {
+        embedded
+            .material(name)
+            .map_or_else(|| (lookups.materials)(name), Ok)
+    };
+    let merged_curves = |name: &str| {
+        embedded
+            .curve(name)
+            .map_or_else(|| (lookups.curves)(name), Ok)
+    };
+    let lookups = &Lookups {
+        materials: &merged_materials,
+        curves: &merged_curves,
+        library: &merged_library,
+    };
+    let (lookup, library) = (lookups.materials, lookups.library);
     let top = Item {
         table: &root,
         context: "top level".into(),
@@ -601,6 +621,7 @@ pub fn read(text: &str, sidecar: &Path, lookups: &Lookups) -> Result<Read, FileE
             "source",
             "detector",
             "trace",
+            "resolved",
             "library",
         ],
         "top level",

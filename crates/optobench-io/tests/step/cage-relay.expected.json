@@ -83,6 +83,7 @@
       "rms_radius_mm": 0.12203657685950366
     }
   ],
+  "embedded": [],
   "footprints": [
     {
       "centroid_mm": [
