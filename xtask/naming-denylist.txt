@@ -1,0 +1,48 @@
+# Words that must not appear in extensions, file names, kind names, command ids or
+# crate names. One word per line, lowercase ASCII. Words of five letters or more are
+# also matched inside compounds; shorter words only as a whole name segment
+# (segments are split on '.', '-', '_' and '/'), so "analysis" and "assembly" pass.
+# Extend this list freely; keep it to words, no explanations.
+
+# English
+anal
+arse
+ass
+butt
+cock
+crap
+cum
+dick
+fart
+fuck
+obscene
+piss
+poo
+poop
+porn
+sex
+shit
+tit
+tits
+turd
+twat
+wank
+nazi
+# Dutch
+kak
+kanker
+kut
+lul
+neuk
+tering
+# German
+arsch
+scheisse
+# French
+con
+merde
+putain
+# Spanish
+culo
+mierda
+puta

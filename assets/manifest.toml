@@ -1,0 +1,12 @@
+# Every bundled asset or data file under assets/ needs an entry here and a row in
+# ATTRIBUTION.md. Only licences in `allowed` may be bundled (see docs/design.md,
+# Ground rules). External databases are downloaded by the user, never bundled.
+#
+# Entry format:
+#
+# [[asset]]
+# path = "assets/materials/fused-silica.toml"
+# licence = "CC0-1.0"
+# source = "Malitson 1965, J. Opt. Soc. Am. 55, 1205 (formula coefficients)"
+
+allowed = ["CC0-1.0", "CC-BY-4.0", "MIT", "Apache-2.0", "MIT OR Apache-2.0"]

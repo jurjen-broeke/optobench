@@ -1,0 +1,39 @@
+[workspace]
+resolver = "3"
+members = ["crates/*", "apps/*", "xtask"]
+default-members = ["crates/*", "apps/*"]
+
+[workspace.package]
+version = "0.0.1"
+edition = "2024"
+rust-version = "1.85"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/<owner>/optobench"
+
+[workspace.dependencies]
+# Workspace crates, listed by layer. A crate may depend only on crates in its own or a lower layer;
+# `cargo xtask check` enforces this.
+optobench-math = { path = "crates/optobench-math" }               # L0
+optobench-surfaces = { path = "crates/optobench-surfaces" }       # L1
+optobench-materials = { path = "crates/optobench-materials" }     # L1
+optobench-trace = { path = "crates/optobench-trace" }             # L2
+optobench-scene = { path = "crates/optobench-scene" }             # L3
+optobench-library = { path = "crates/optobench-library" }         # L3
+optobench-analysis = { path = "crates/optobench-analysis" }       # L4
+optobench-optimize = { path = "crates/optobench-optimize" }       # L4
+optobench-io = { path = "crates/optobench-io" }                   # L5
+optobench-bridge = { path = "crates/optobench-bridge" }           # L5
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+missing_docs = "warn"
+
+[workspace.lints.clippy]
+dbg_macro = "deny"
+todo = "warn"
+unimplemented = "warn"
+unwrap_used = "warn"
+float_cmp = "warn"
+
+[profile.release]
+debug = 1

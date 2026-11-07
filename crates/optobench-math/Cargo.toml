@@ -1,0 +1,17 @@
+[package]
+name = "optobench-math"
+description = "Vectors, frames, transforms, root finding and sampling for optobench"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[package.metadata.optobench]
+layer = "L0"
+
+[dependencies]
+
+[lints]
+workspace = true

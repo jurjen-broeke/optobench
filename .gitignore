@@ -1,0 +1,14 @@
+# Build output
+/target/
+**/*.rs.bk
+
+# Local corpus: examples and source data for reference and testing.
+# Third-party data (vendor STEP files, catalogues, datasheets, papers) often may not be
+# redistributed, so this folder is never committed. See AGENTS.md, Local corpus.
+/corpus/
+
+# Editors and OS
+.DS_Store
+.idea/
+*.swp
+*~

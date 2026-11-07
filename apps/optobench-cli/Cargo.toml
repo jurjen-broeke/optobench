@@ -1,0 +1,22 @@
+[package]
+name = "optobench-cli"
+description = "Command-line interface for optobench"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[package.metadata.optobench]
+layer = "apps"
+
+[dependencies]
+optobench-io.workspace = true
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "optobench"
+path = "src/main.rs"

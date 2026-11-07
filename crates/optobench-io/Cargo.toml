@@ -1,0 +1,19 @@
+[package]
+name = "optobench-io"
+description = "File formats, STEP import, reports and downloaded sources"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[package.metadata.optobench]
+layer = "L5"
+
+[dependencies]
+optobench-scene.workspace = true
+optobench-library.workspace = true
+
+[lints]
+workspace = true

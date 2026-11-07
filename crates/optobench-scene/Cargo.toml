@@ -1,0 +1,21 @@
+[package]
+name = "optobench-scene"
+description = "The optical scene: elements, sources, detectors, degrees of freedom, proxies"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[package.metadata.optobench]
+layer = "L3"
+
+[dependencies]
+optobench-math.workspace = true
+optobench-surfaces.workspace = true
+optobench-materials.workspace = true
+optobench-trace.workspace = true
+
+[lints]
+workspace = true

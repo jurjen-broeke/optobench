@@ -1,0 +1,18 @@
+[package]
+name = "optobench-bridge"
+description = "SolidCraft control-channel adapter (Phase B, milestones M9-M10)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[package.metadata.optobench]
+layer = "L5"
+
+[dependencies]
+optobench-scene.workspace = true
+
+[lints]
+workspace = true

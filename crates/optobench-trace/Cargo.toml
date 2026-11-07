@@ -1,0 +1,20 @@
+[package]
+name = "optobench-trace"
+description = "Rays, interactions, sequential and non-sequential tracing"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[package.metadata.optobench]
+layer = "L2"
+
+[dependencies]
+optobench-math.workspace = true
+optobench-surfaces.workspace = true
+optobench-materials.workspace = true
+
+[lints]
+workspace = true

@@ -1,0 +1,18 @@
+[package]
+name = "optobench-materials"
+description = "Dispersion models and material data for optobench"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[package.metadata.optobench]
+layer = "L1"
+
+[dependencies]
+optobench-math.workspace = true
+
+[lints]
+workspace = true

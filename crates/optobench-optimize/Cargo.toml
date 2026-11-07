@@ -1,0 +1,21 @@
+[package]
+name = "optobench-optimize"
+description = "Damped least squares over degrees of freedom, and tolerancing"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[package.metadata.optobench]
+layer = "L4"
+
+[dependencies]
+optobench-math.workspace = true
+optobench-trace.workspace = true
+optobench-scene.workspace = true
+optobench-analysis.workspace = true
+
+[lints]
+workspace = true
