@@ -1,7 +1,7 @@
 //! Paraxial (first-order) analysis: the y-nu trace and cardinal points.
 //!
 //! The y-nu method and the system matrix follow the standard first-order treatment
-//! (e.g. Hecht, Optics, 5th ed., §6.2, matrix methods; Gerrard & Burch, Introduction to
+//! (e.g. Hecht, Optics, 5th ed., ch. 6, matrix methods; Gerrard & Burch, Introduction to
 //! Matrix Methods in Optics, 1975):
 //!
 //! - refraction at surface i: nu' = nu − y φᵢ, with power φᵢ = (n' − n) cᵢ
@@ -10,6 +10,10 @@
 //! where y is the ray height, nu the index times the paraxial angle, c the vertex
 //! curvature and t the thickness. Mirrors use the signed-index convention: the index
 //! after a reflection is −n, so the same two equations cover lenses and mirrors.
+//!
+//! Media are evaluated at one wavelength, given in µm.
+
+use optobench_materials::MaterialError;
 
 use crate::sequential::{Interaction, SequentialSystem};
 
@@ -43,35 +47,43 @@ pub struct CardinalPoints {
 }
 
 impl SequentialSystem {
-    /// Signed index after each surface: the sign flips at every mirror.
-    fn signed_indices(&self) -> Vec<f64> {
+    /// Object index and the signed index after each surface at `wavelength`: the sign
+    /// flips at every mirror.
+    fn signed_indices(&self, wavelength: f64) -> Result<(f64, Vec<f64>), MaterialError> {
+        let object = self.object_medium.material().refractive_index(wavelength)?;
         let mut sign = 1.0;
-        self.surfaces
+        let after = self
+            .surfaces
             .iter()
             .map(|s| {
                 if s.interaction == Interaction::Reflect {
                     sign = -sign;
                 }
-                sign * s.index_after
+                Ok(sign * s.medium_after.material().refractive_index(wavelength)?)
             })
-            .collect()
+            .collect::<Result<Vec<f64>, MaterialError>>()?;
+        Ok((object, after))
     }
 
-    /// Signed index of the image space (after the last surface).
-    pub fn image_index(&self) -> f64 {
-        self.signed_indices()
-            .last()
-            .copied()
-            .unwrap_or(self.object_index)
+    /// Signed index of the image space (after the last surface) at `wavelength`.
+    pub fn image_index(&self, wavelength: f64) -> Result<f64, MaterialError> {
+        let (object, after) = self.signed_indices(wavelength)?;
+        Ok(after.last().copied().unwrap_or(object))
     }
 
-    /// Traces a paraxial ray entering surface 0 at `height` with reduced angle
-    /// `reduced_angle` (object index times angle). Returns the ray at every surface.
-    pub fn paraxial_trace(&self, height: f64, reduced_angle: f64) -> Vec<ParaxialRay> {
-        let indices = self.signed_indices();
+    /// Traces a paraxial ray at `wavelength` (µm) entering surface 0 at `height` with
+    /// reduced angle `reduced_angle` (object index times angle). Returns the ray at every
+    /// surface.
+    pub fn paraxial_trace(
+        &self,
+        height: f64,
+        reduced_angle: f64,
+        wavelength: f64,
+    ) -> Result<Vec<ParaxialRay>, MaterialError> {
+        let (object, indices) = self.signed_indices(wavelength)?;
         let mut y = height;
         let mut nu = reduced_angle;
-        let mut index_before = self.object_index;
+        let mut index_before = object;
         let mut out = Vec::with_capacity(self.surfaces.len());
         for (surface, &index_after) in self.surfaces.iter().zip(&indices) {
             let power = (index_after - index_before) * surface.surface.vertex_curvature();
@@ -83,43 +95,51 @@ impl SequentialSystem {
             y += surface.thickness * nu / index_after;
             index_before = index_after;
         }
-        out
+        Ok(out)
     }
 
     /// The system matrix [[A, B], [C, D]] from just before the first surface to just
-    /// after the last: (y, nu) out = M · (y, nu) in. C = −Φ.
-    fn system_matrix(&self) -> Option<[[f64; 2]; 2]> {
-        let first = self.paraxial_trace(1.0, 0.0).last().copied()?;
-        let second = self.paraxial_trace(0.0, 1.0).last().copied()?;
-        Some([
-            [first.height, second.height],
-            [first.reduced_angle, second.reduced_angle],
-        ])
+    /// after the last: (y, nu) out = M · (y, nu) in. C = −Φ. `None` for no surfaces.
+    fn system_matrix(&self, wavelength: f64) -> Result<Option<[[f64; 2]; 2]>, MaterialError> {
+        let first = self.paraxial_trace(1.0, 0.0, wavelength)?.last().copied();
+        let second = self.paraxial_trace(0.0, 1.0, wavelength)?.last().copied();
+        Ok(first.zip(second).map(|(first, second)| {
+            [
+                [first.height, second.height],
+                [first.reduced_angle, second.reduced_angle],
+            ]
+        }))
     }
 
-    /// Cardinal points, or `None` for an empty or afocal system (zero power).
-    pub fn cardinal_points(&self) -> Option<CardinalPoints> {
-        let [[a, _b], [c, d]] = self.system_matrix()?;
+    /// Cardinal points at `wavelength` (µm). `Ok(None)` for an empty or afocal system
+    /// (zero power).
+    pub fn cardinal_points(
+        &self,
+        wavelength: f64,
+    ) -> Result<Option<CardinalPoints>, MaterialError> {
+        let Some([[a, _b], [c, d]]) = self.system_matrix(wavelength)? else {
+            return Ok(None);
+        };
         let power = -c;
         if power == 0.0 {
-            return None;
+            return Ok(None);
         }
-        let n = self.object_index;
-        let n_image = self.image_index();
+        let n = self.object_medium.material().refractive_index(wavelength)?;
+        let n_image = self.image_index(wavelength)?;
         // Rear focus: a ray entering parallel at height 1 leaves at height A with reduced
         // angle C and crosses the axis A·n'/Φ beyond the last vertex.
         let back_focal_length = a * n_image / power;
         // Front focus: the input ray that leaves parallel (C·y + D·nu = 0) comes from the
         // point D·n/Φ in front of the first vertex.
         let front_focal_length = d * n / power;
-        Some(CardinalPoints {
+        Ok(Some(CardinalPoints {
             power,
             effective_focal_length: 1.0 / power,
             back_focal_length,
             front_focal_length,
             front_principal_plane: n * (1.0 - d) / power,
             rear_principal_plane: n_image * (a - 1.0) / power,
-        })
+        }))
     }
 }
 
@@ -135,7 +155,7 @@ mod tests {
         // paraxial rays (Hecht, Optics, 5th ed., ch. 6). A Cooke-triplet-like stack with
         // arbitrary values exercises it.
         let system = SequentialSystem {
-            object_index: 1.0,
+            object_medium: 1.0.into(),
             surfaces: vec![
                 SequentialSurface::refracting(Sphere::from_radius(21.5), 3.3, 1.62),
                 SequentialSurface::refracting(Sphere::from_radius(-150.0), 5.0, 1.0),
@@ -146,8 +166,12 @@ mod tests {
                 SequentialSurface::refracting(Plane, 0.0, 1.0),
             ],
         };
-        let marginal = system.paraxial_trace(5.0, 0.0);
-        let chief = system.paraxial_trace(-2.0, 0.1);
+        let marginal = system
+            .paraxial_trace(5.0, 0.0, 0.55)
+            .expect("constant media");
+        let chief = system
+            .paraxial_trace(-2.0, 0.1, 0.55)
+            .expect("constant media");
         let invariant: Vec<f64> = marginal
             .iter()
             .zip(&chief)
@@ -161,17 +185,17 @@ mod tests {
     #[test]
     fn afocal_and_empty_systems_have_no_cardinal_points() {
         let empty = SequentialSystem {
-            object_index: 1.0,
+            object_medium: 1.0.into(),
             surfaces: vec![],
         };
-        assert!(empty.cardinal_points().is_none());
+        assert_eq!(empty.cardinal_points(0.55), Ok(None));
         let window = SequentialSystem {
-            object_index: 1.0,
+            object_medium: 1.0.into(),
             surfaces: vec![
                 SequentialSurface::refracting(Plane, 5.0, 1.5),
                 SequentialSurface::refracting(Plane, 0.0, 1.0),
             ],
         };
-        assert!(window.cardinal_points().is_none());
+        assert_eq!(window.cardinal_points(0.55), Ok(None));
     }
 }
