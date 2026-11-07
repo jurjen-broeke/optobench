@@ -5,6 +5,22 @@ with the release that introduced them.
 
 ## Unreleased
 
+- M3c scene files and the `trace` command: the `.optobench` layout file (TOML; format tag
+  and kind on the first two lines; strict keys naming the closest valid key; planar and
+  table layouts; materials by bundled or imported name, or by index); `trace` reports
+  detectors, clipping per element or proxy and the power ledger, and writes a top or
+  side SVG layout view. Example scenes in `examples/`. New dependency: `toml` (MIT OR
+  Apache-2.0).
+- M3b scene model (`optobench-scene`): lenses (inline surfaces, thicknesses, materials,
+  diameter, clear aperture, ground edge as an absorber), mirrors, collimated and point
+  sources, tube and plate proxies, detectors with irradiance maps; planar layouts along a
+  folded axis and table layouts on a breadboard grid; building the non-sequential system,
+  launching rays, per-detector results and a clipping list per item.
+- M3a non-sequential trace (`optobench_trace::nonsequential`): faces (surface profile or
+  cylinder, placed and bounded by a disk, annulus, rectangle or square with hole) between
+  two media; refracting (Fresnel loss, total internal reflection followed), mirror,
+  absorber and detector roles; clear-aperture clipping at element edges; nearest-hit
+  search; ray history and end state; power ledger over all rays.
 - M2c import: commands `import-material` (a refractiveindex.info YAML file the user
   downloaded; first call shows its notice and references, `accept_licence: true` stores
   it under `<data directory>/optobench/sources/refractiveindex.info/<sha256>/`, marked

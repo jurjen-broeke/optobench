@@ -1,0 +1,125 @@
+//! The `trace` command: trace a layout file and report detectors, clipping and the power
+//! ledger, optionally writing the 2D layout view.
+
+use std::path::{Path, PathBuf};
+
+use optobench_io::scene_file;
+use optobench_io::store::{default_data_directory, material};
+use optobench_io::svg::{self, View};
+use optobench_scene::Owner;
+use serde_json::{Value, json};
+
+use crate::{CommandError, ErrorCode, Parameters, check_keys};
+
+fn text<'a>(parameters: &'a Parameters, key: &str) -> Result<Option<&'a str>, CommandError> {
+    match parameters.get(key) {
+        None => Ok(None),
+        Some(Value::String(s)) => Ok(Some(s)),
+        Some(_) => Err(CommandError::new(
+            ErrorCode::InvalidParameters,
+            format!("`{key}` must be a string"),
+        )),
+    }
+}
+
+fn failed(message: impl Into<String>) -> CommandError {
+    CommandError::new(ErrorCode::Failed, message)
+}
+
+/// `trace`: parameters `path` (a `.optobench` layout), and optionally `data_directory`
+/// (for imported materials), `svg` (where to write the layout view), `view` (`top` or
+/// `side`) and `rays_drawn` (default 200).
+pub(crate) fn trace(parameters: &Parameters) -> Result<Value, CommandError> {
+    check_keys(
+        parameters,
+        &["path", "data_directory", "svg", "view", "rays_drawn"],
+    )?;
+    let path = text(parameters, "path")?.ok_or_else(|| {
+        CommandError::new(ErrorCode::InvalidParameters, "missing parameter `path`")
+    })?;
+    let view = match text(parameters, "view")? {
+        None | Some("top") => View::Top,
+        Some("side") => View::Side,
+        Some(other) => {
+            return Err(CommandError::new(
+                ErrorCode::InvalidParameters,
+                format!("view `{other}` is not known; use \"top\" or \"side\""),
+            ));
+        }
+    };
+    let rays_drawn = match parameters.get("rays_drawn") {
+        None => 200,
+        Some(v) => v.as_u64().filter(|n| *n > 0).ok_or_else(|| {
+            CommandError::new(
+                ErrorCode::InvalidParameters,
+                "`rays_drawn` must be a whole number ≥ 1",
+            )
+        })? as usize,
+    };
+    let data: Option<PathBuf> = text(parameters, "data_directory")?
+        .map(PathBuf::from)
+        .or_else(default_data_directory);
+
+    let source = std::fs::read_to_string(path).map_err(|e| failed(format!("{path}: {e}")))?;
+    let lookup = |name: &str| material(data.as_deref(), name);
+    let scene = scene_file::parse(&source, &lookup).map_err(|e| failed(format!("{path}: {e}")))?;
+    let built = scene.build().map_err(|e| failed(format!("{path}: {e}")))?;
+    let traced = scene.trace().map_err(|e| failed(format!("{path}: {e}")))?;
+
+    let ledger = traced.ledger;
+    let launched = ledger.launched.max(f64::MIN_POSITIVE);
+    let detectors: Vec<Value> = traced
+        .detectors
+        .iter()
+        .map(|d| {
+            json!({
+                "id": d.id,
+                "power_w": d.power,
+                "rays": d.rays,
+                "centroid_mm": [d.centroid.0, d.centroid.1],
+                "rms_radius_mm": d.rms_radius,
+                "peak_irradiance_w_per_m2": d.irradiance.iter().copied().fold(0.0, f64::max),
+            })
+        })
+        .collect();
+    let clipping: Vec<Value> = traced
+        .clipping
+        .iter()
+        .map(|c| {
+            json!({
+                "id": c.id,
+                "kind": match c.owner {
+                    Owner::Element(_) => "element",
+                    Owner::Proxy(_) => "proxy",
+                    Owner::Detector(_) => "detector",
+                },
+                "power_w": c.power,
+                "rays": c.rays,
+                "fraction": c.power / launched,
+            })
+        })
+        .collect();
+
+    let mut result = json!({
+        "scene": path,
+        "rays": traced.records.len(),
+        "ledger": {
+            "launched_w": ledger.launched,
+            "detected_w": ledger.detected,
+            "clipped_w": ledger.clipped,
+            "absorbed_w": ledger.absorbed,
+            "reflected_w": ledger.reflected,
+            "escaped_w": ledger.escaped,
+            "stopped_w": ledger.stopped,
+            "imbalance_w": ledger.imbalance(),
+        },
+        "detectors": detectors,
+        "clipping": clipping,
+    });
+    if let Some(output) = text(parameters, "svg")? {
+        let drawing = svg::layout(&scene, &built, &traced, view, rays_drawn);
+        std::fs::write(Path::new(output), drawing).map_err(|e| failed(format!("{output}: {e}")))?;
+        result["svg"] = json!(output);
+    }
+    Ok(result)
+}

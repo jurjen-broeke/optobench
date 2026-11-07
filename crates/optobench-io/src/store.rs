@@ -294,6 +294,57 @@ pub fn load(root: &Path, name: &str) -> Result<(Medium, Record), StoreError> {
     Ok((medium, record))
 }
 
+/// The bundled material names, as listed by the `materials` command.
+pub const BUNDLED: &[&str] = &[
+    "fused-silica",
+    "standard-air",
+    "water",
+    "water-hale-querry-1973",
+];
+
+/// A material by name: a bundled material, or one imported into `root`. `water` is
+/// water at 20 °C; `water-<t>` (for example `water-22.5`) is water at t °C, 19 to 24.
+pub fn material(root: Option<&Path>, name: &str) -> Result<Medium, String> {
+    use optobench_materials::bundled;
+    match name {
+        "fused-silica" => return Ok(bundled::fused_silica().into()),
+        "standard-air" => return Ok(Medium::new(bundled::StandardAir)),
+        "water-hale-querry-1973" => return Ok(bundled::water_hale_querry().into()),
+        _ => {}
+    }
+    if let Some(temperature) = name
+        .strip_prefix("water")
+        .map(|t| t.trim_start_matches('-'))
+    {
+        let celsius = if temperature.is_empty() {
+            Some(20.0)
+        } else {
+            temperature.parse::<f64>().ok()
+        };
+        if let Some(celsius) = celsius {
+            return bundled::Water::new(celsius)
+                .map(Medium::new)
+                .ok_or_else(|| {
+                    format!(
+                        "water is available from {} to {} °C",
+                        bundled::WATER_TEMPERATURES.0,
+                        bundled::WATER_TEMPERATURES.1
+                    )
+                });
+        }
+    }
+    let root = root.ok_or_else(|| {
+        format!("`{name}` is not a bundled material, and no data directory is set to look for imported ones")
+    })?;
+    load(root, name).map(|(medium, _)| medium).map_err(|e| match e {
+        StoreError::NotFound(_) => format!(
+            "no material `{name}`: not bundled ({}) and not imported (see the `materials` command)",
+            BUNDLED.join(", ")
+        ),
+        other => other.to_string(),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

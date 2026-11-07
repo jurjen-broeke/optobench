@@ -1,0 +1,55 @@
+format = "optobench/1"
+kind = "layout"
+layout = "table"
+
+# A periscope on a 25 mm breadboard: a beam at 50 mm height heading +x is raised to
+# 150 mm by two 45° mirrors. Each mirror's axis (its normal) bisects the reversed
+# incoming and the outgoing directions.
+
+[table]
+pitch = 25.0
+
+[[source]]
+id = "laser"
+kind = "collimated"
+wavelength_um = 0.633
+power_w = 0.001
+diameter = 4.0
+hole = [0, 0]
+height = 50.0
+axis = [1, 0, 0]
+
+[[element]]
+id = "M1"
+kind = "mirror"
+hole = [4, 0]
+height = 50.0
+axis = [-1, 0, 1]
+diameter = 25.4
+clear_aperture = 22.9
+
+[[element]]
+id = "M2"
+kind = "mirror"
+hole = [4, 0]
+height = 150.0
+axis = [1, 0, -1]
+diameter = 25.4
+clear_aperture = 22.9
+
+[[proxy]]
+id = "riser"
+kind = "tube"
+inner_diameter = 20.0
+length = 60.0
+hole = [4, 0]
+height = 70.0
+axis = [0, 0, 1]
+
+[[detector]]
+id = "screen"
+hole = [8, 0]
+height = 150.0
+axis = [1, 0, 0]
+size = [20, 20]
+pixels = [64, 64]
