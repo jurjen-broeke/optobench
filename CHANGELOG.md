@@ -5,6 +5,10 @@ with the release that introduced them.
 
 ## Unreleased
 
+- SVG layout view of CAD scenes: one outline (convex hull) per optical element and per
+  component occurrence instead of every face edge; optical elements labelled. The golden
+  Thorlabs view went from 16 MB to 33 KB. Exact silhouettes and STEP performance are on
+  the roadmap (design.md, Improvements).
 - M4c sidecar v1 (`optobench_io::sidecar`): lens and mirror elements on STEP bodies
   matched by product, occurrence path or geometry fingerprint; sources and detectors in
   the STEP frame or relative to a body; untagged bodies absorb. `trace` takes sidecars;

@@ -304,6 +304,11 @@ M3 is the first usable release: CAD-free planar and table layouts with clipping 
 
 Phase C doesn't depend on Phase B: tolerancing can start straight after M8 if it's needed first.
 
+**Improvements not tied to a milestone** (added 2026-11-07):
+
+- *Layout view of CAD scenes.* The SVG view draws each optical element and each component occurrence as one outline, the convex hull of its faces in the view. Next: exact, concave silhouettes from the display mesh that comes with the UI, so brackets and cubes keep their real shape.
+- *Performance on large STEP assemblies.* The golden Thorlabs assembly (6400 faces) takes about 0.8 s to convert and traces about 6500 rays per second. Candidates: cache converted faces per STEP file and product, trace rays in parallel, seed B-spline intersection from a coarse mesh instead of a fixed 7 × 7 grid, and skip absorber faces that no ray can reach before an optical face.
+
 | Milestone | Scope | Exit criteria |
 | --- | --- | --- |
 | M0 Foundations | workspace, crate layers, CI (3 OS + wasm32), cargo-deny, ATTRIBUTION.md, CI-checked asset manifest, ground rules doc, command registry skeleton | empty crates build everywhere; licence and asset checks green |

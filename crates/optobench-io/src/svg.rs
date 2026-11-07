@@ -2,7 +2,7 @@
 //! face and of the traced rays, coloured by how they ended.
 
 use optobench_math::Vec3;
-use optobench_scene::{Built, Owner, Scene, SceneTrace};
+use optobench_scene::{Built, Owner, Scene, SceneTrace, SolidRole};
 use optobench_trace::nonsequential::{End, Region, Shape};
 
 /// Which projection.
@@ -24,6 +24,46 @@ fn project(view: View, p: Vec3) -> (f64, f64) {
         View::Top => (p.x, p.y),
         View::Side => (p.x, p.z),
     }
+}
+
+/// A point of the view plane back in the scene frame (the third coordinate zero), so it
+/// projects to (u, v) again.
+fn unproject(view: View, u: f64, v: f64) -> Vec3 {
+    match view {
+        View::Top => Vec3::new(u, v, 0.0),
+        View::Side => Vec3::new(u, 0.0, v),
+    }
+}
+
+/// Convex hull of points in the plane, counter-clockwise (Andrew's monotone chain).
+fn convex_hull(mut points: Vec<(f64, f64)>) -> Vec<(f64, f64)> {
+    points.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.total_cmp(&b.1)));
+    points.dedup();
+    if points.len() < 3 {
+        return points;
+    }
+    let cross = |o: (f64, f64), a: (f64, f64), b: (f64, f64)| {
+        (a.0 - o.0) * (b.1 - o.1) - (a.1 - o.1) * (b.0 - o.0)
+    };
+    let mut hull: Vec<(f64, f64)> = Vec::with_capacity(2 * points.len());
+    for pass in 0..2 {
+        let start = hull.len();
+        let ordered: Box<dyn Iterator<Item = &(f64, f64)>> = if pass == 0 {
+            Box::new(points.iter())
+        } else {
+            Box::new(points.iter().rev())
+        };
+        for &p in ordered {
+            while hull.len() >= start + 2
+                && cross(hull[hull.len() - 2], hull[hull.len() - 1], p) <= 0.0
+            {
+                hull.pop();
+            }
+            hull.push(p);
+        }
+        hull.pop();
+    }
+    hull
 }
 
 fn escape(text: &str) -> String {
@@ -113,14 +153,63 @@ pub fn layout(
     view: View,
     max_rays: usize,
 ) -> String {
-    let faces: Vec<(Owner, Vec<Vec<Vec3>>)> = (0..built.system.faces.len())
-        .map(|i| {
-            (
-                built.owners[built.system.faces[i].owner],
-                outline(built, i, view),
-            )
-        })
-        .collect();
+    // Inline elements, proxies and detectors draw their faces. Solids from CAD draw one
+    // outline each, the convex hull of their faces seen in the view: an optical element
+    // (lens, mirror) on its own, the untagged bodies of one component occurrence (all
+    // the screws and plates of a mount) together. A large assembly stays readable and
+    // its drawing small.
+    let mut faces: Vec<(Owner, Vec<Vec<Vec3>>)> = Vec::new();
+    let mut solids: std::collections::BTreeMap<String, (usize, Vec<(f64, f64)>)> =
+        Default::default();
+    for i in 0..built.system.faces.len() {
+        let owner = built.owners[built.system.faces[i].owner];
+        let lines = outline(built, i, view);
+        match owner {
+            Owner::Solid(solid) => {
+                let entry = &scene.solids[solid];
+                let group = match entry.role {
+                    SolidRole::Absorber => entry
+                        .id
+                        .rsplit_once('/')
+                        .map_or(entry.id.as_str(), |(occurrence, _)| occurrence)
+                        .to_owned(),
+                    // A doublet's bodies (`id/body`) draw as one element.
+                    _ => format!(
+                        "element {}",
+                        entry.id.split('/').next().unwrap_or(&entry.id)
+                    ),
+                };
+                solids
+                    .entry(group)
+                    .or_insert((solid, Vec::new()))
+                    .1
+                    .extend(lines.iter().flatten().map(|p| project(view, *p)));
+            }
+            _ => faces.push((owner, lines)),
+        }
+    }
+    let mut element_labels: Vec<(String, Vec3)> = Vec::new();
+    for (group, (solid, points)) in solids {
+        let hull = convex_hull(points);
+        if group.starts_with("element ") && !hull.is_empty() {
+            // Label an optical element at the top of its outline.
+            let top =
+                hull.iter().copied().fold(
+                    (0.0, f64::NEG_INFINITY),
+                    |a, p| if p.1 > a.1 { p } else { a },
+                );
+            let id = group.trim_start_matches("element ").to_owned();
+            element_labels.push((id, unproject(view, top.0, top.1)));
+        }
+        if hull.len() >= 2 {
+            let closed: Vec<Vec3> = hull
+                .iter()
+                .chain(hull.first())
+                .map(|&(u, v)| unproject(view, u, v))
+                .collect();
+            faces.push((Owner::Solid(solid), vec![closed]));
+        }
+    }
     let step = (trace.records.len() / max_rays.max(1)).max(1);
     let rays: Vec<(&End, Vec<Vec3>)> = trace
         .records
@@ -195,7 +284,7 @@ pub fn layout(
             Owner::Element(_) => ("#222222", 1.5),
             Owner::Proxy(_) => ("#6b4f2a", 2.0),
             Owner::Detector(_) => ("#2a9d8f", 2.5),
-            Owner::Solid(_) => ("#555555", 0.8),
+            Owner::Solid(_) => ("#333333", 1.0),
         };
         for line in lines {
             svg.push_str(&format!(
@@ -210,7 +299,8 @@ pub fn layout(
         .map(|e| (&e.id, e.frame.origin()))
         .chain(scene.proxies.iter().map(|p| (&p.id, p.frame.origin())))
         .chain(scene.detectors.iter().map(|d| (&d.id, d.frame.origin())))
-        .chain(scene.sources.iter().map(|s| (&s.id, s.frame.origin())));
+        .chain(scene.sources.iter().map(|s| (&s.id, s.frame.origin())))
+        .chain(element_labels.iter().map(|(id, at)| (id, *at)));
     for (id, origin) in labels {
         let (x, y) = to_svg(origin);
         svg.push_str(&format!(
@@ -222,4 +312,24 @@ pub fn layout(
     }
     svg.push_str("</svg>\n");
     svg
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn hull_of_a_square_with_inner_points_is_the_square() {
+        let points = vec![
+            (0.0, 0.0),
+            (2.0, 0.0),
+            (2.0, 2.0),
+            (0.0, 2.0),
+            (1.0, 1.0),
+            (0.5, 1.5),
+            (2.0, 1.0),
+        ];
+        let hull = convex_hull(points);
+        assert_eq!(hull, vec![(0.0, 0.0), (2.0, 0.0), (2.0, 2.0), (0.0, 2.0)]);
+    }
 }
