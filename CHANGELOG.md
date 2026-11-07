@@ -5,6 +5,12 @@ with the release that introduced them.
 
 ## Unreleased
 
+- M2c licence review (`docs/licence-review.md`), decided 2026-11-07: four literature
+  datasets bundled as CC0 transcriptions from the refractiveindex.info database, not yet
+  verified against the original papers; manufacturer catalogues are fetch-only.
+  `optobench_materials::bundled`: fused silica (Malitson), standard air (Ciddor), water
+  at 19–24 °C (index Daimon & Masumura, extinction Hale & Querry) and the Hale & Querry
+  table, each with its provenance. First bundled asset: the water n,k table.
 - M2b analyses (`optobench-analysis`): aperture stop, paraxial entrance and exit pupils,
   fields as angles (object at infinity), paraxial or real ray aiming; spot diagram
   (hexapolar sampling, centroid, RMS and geometric radius); tangential and sagittal ray
