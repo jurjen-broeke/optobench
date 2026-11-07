@@ -46,7 +46,7 @@ fn singlet(id: &str, frame: Frame, r1: f64, r2: f64, thickness: f64) -> Element 
             materials: vec![1.5.into()],
             diameter: 25.4,
             clear_aperture: 22.9,
-            coating: Coating::Ideal,
+            coatings: vec![Coating::Ideal; 2],
         },
     }
 }

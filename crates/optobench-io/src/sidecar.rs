@@ -13,7 +13,14 @@
 //! body = { product = "ac254-030-a", occurrence = "ac254-030-a:1" }  # see Matching
 //! materials = { "20522-001-1-solid1" = "n-baf10", "20522-001-1-solid2" = "n-sf6ht" }
 //! # or material = "fused-silica" for every body of the match
-//! coating = "uncoated"              # or "ideal"
+//! coating = "uncoated"              # or "ideal", a curve or layers: see `coatings`
+//!
+//! [[element]]
+//! id = "F1"
+//! kind = "filter"                   # a plate: its curve is the whole filter's response,
+//! body = { product = "mvf52a", body = "MVF52A-1-OC-2-solid1" }   # on one flat face,
+//! material = "n-bk7"                # the other ideal
+//! coating = { curve = "mvf52a" }
 //!
 //! [[element]]
 //! id = "L2"
@@ -91,11 +98,13 @@ use optobench_trace::Coating;
 use toml::{Table, Value};
 
 use crate::scene_file::{
-    FileError, Item, MaterialLookup, check_header, check_keys, error, items, medium, with,
+    FileError, Item, Lookups, MaterialLookup, check_header, check_keys, error, items, medium,
+    resolve_coatings, with, with_element_coatings,
 };
 use crate::sha256::sha256_hex;
 use crate::step::faces::{EDGE_TOLERANCE, PlacedFace, faces};
 use crate::step::{self, StepModel, Surface};
+use optobench_library::CoatingSpec;
 
 /// One placed body of the assembly, ready to become a solid.
 #[derive(Debug, Clone)]
@@ -342,7 +351,13 @@ fn step_path(root: &Table, sidecar: &Path) -> Result<PathBuf, FileError> {
 /// Reads a sidecar and its STEP file into a scene. `sidecar` is the sidecar's path (the
 /// STEP file is looked up next to it).
 pub fn parse(text: &str, sidecar: &Path, lookup: &MaterialLookup) -> Result<Scene, FileError> {
-    read(text, sidecar, lookup, &Library::default()).map(|read| read.scene)
+    let library = Library::default();
+    let lookups = Lookups {
+        materials: lookup,
+        curves: &crate::coatings::no_curves,
+        library: &library,
+    };
+    read(text, sidecar, &lookups).map(|read| read.scene)
 }
 
 /// A glass body of a library part, as matched.
@@ -355,6 +370,18 @@ pub struct GlassBody {
     /// How its STEP geometry compares with the part; `None` when no prescription could
     /// be read from its faces.
     pub comparison: Option<Comparison>,
+    /// The body's faces (indices) that are the part's surfaces `glass` and `glass + 1`;
+    /// empty when not known.
+    pub faces: [Vec<usize>; 2],
+}
+
+/// The faces of a profile's two surfaces in the part's order.
+fn part_order_faces(profile: &Profile, comparison: &Comparison) -> [Vec<usize>; 2] {
+    match &profile.surface_faces[..] {
+        [a, b] if comparison.reversed => [b.clone(), a.clone()],
+        [a, b] => [a.clone(), b.clone()],
+        _ => [Vec::new(), Vec::new()],
+    }
 }
 
 /// An element whose prescription comes from the parts library.
@@ -404,12 +431,17 @@ fn glass_bodies(part: &Part, bodies: &[&PlacedBody]) -> Vec<(usize, GlassBody)> 
         .collect();
     if bodies.len() == 1 {
         let comparison = profiles[0].as_ref().and_then(|p| closest(part, p, None));
+        let faces = match (&profiles[0], &comparison) {
+            (Some(p), Some(c)) => part_order_faces(p, c),
+            _ => [Vec::new(), Vec::new()],
+        };
         return vec![(
             0,
             GlassBody {
                 solid: String::new(),
                 glass: comparison.as_ref().map_or(0, |c| c.glass),
                 comparison,
+                faces,
             },
         )];
     }
@@ -444,12 +476,16 @@ fn glass_bodies(part: &Part, bodies: &[&PlacedBody]) -> Vec<(usize, GlassBody)> 
     chosen
         .into_iter()
         .map(|(i, c)| {
+            let faces = profiles[i]
+                .as_ref()
+                .map_or([Vec::new(), Vec::new()], |p| part_order_faces(p, &c));
             (
                 i,
                 GlassBody {
                     solid: String::new(),
                     glass: c.glass,
                     comparison: Some(c),
+                    faces,
                 },
             )
         })
@@ -465,11 +501,11 @@ fn add_part(
     candidates: &[usize],
     part: &Part,
     id: &str,
-    coating: Option<Coating>,
     automatic: bool,
-    lookup: &MaterialLookup,
+    lookups: &Lookups,
     context: &str,
 ) -> Result<Option<PartMatch>, FileError> {
+    let coatings = resolve_coatings(&part.surface_coatings(), lookups, context)?;
     let placed: Vec<&PlacedBody> = candidates.iter().map(|&i| &bodies[i]).collect();
     let found = glass_bodies(part, &placed);
     if found.is_empty() {
@@ -492,16 +528,29 @@ fn add_part(
         } else {
             id.to_owned()
         };
-        let material = crate::library::glass(&part.glass[glass_body.glass], lookup)
+        let material = crate::library::glass(&part.glass[glass_body.glass], lookups.materials)
             .map_err(|e| error(format!("{context} (part `{}`): {e}", part.key())))?;
+        // Each surface's coating on the faces that are that surface; when they are not
+        // known, the glass's first surface coating on every optical face.
+        let g = glass_body.glass;
+        let known = glass_body.faces.iter().any(|f| !f.is_empty());
+        let face_coatings: Vec<(usize, Coating)> = glass_body
+            .faces
+            .iter()
+            .zip([&coatings[g], &coatings[g + 1]])
+            .flat_map(|(faces, c)| faces.iter().map(move |&f| (f, c.clone())))
+            .collect();
         scene.solids.push(Solid {
             id: solid.clone(),
             faces: body.faces.clone(),
             role: SolidRole::Lens {
                 material,
-                coating: coating
-                    .clone()
-                    .unwrap_or_else(|| crate::library::coating(part)),
+                coating: if known {
+                    Coating::Uncoated
+                } else {
+                    coatings[g].clone()
+                },
+                face_coatings,
             },
         });
         glass_body.solid = solid;
@@ -521,12 +570,8 @@ fn add_part(
 
 /// A sidecar, with parts from `library`: elements that name a part, and STEP products
 /// named after a part (tagged automatically unless `[library] automatic = false`).
-pub fn read(
-    text: &str,
-    sidecar: &Path,
-    lookup: &MaterialLookup,
-    library: &Library,
-) -> Result<Read, FileError> {
+pub fn read(text: &str, sidecar: &Path, lookups: &Lookups) -> Result<Read, FileError> {
+    let (lookup, library) = (lookups.materials, lookups.library);
     check_header(text)?;
     let root: Table = text
         .parse()
@@ -611,7 +656,7 @@ pub fn read(
         if let Some(value) = item.table.get("library") {
             check_keys(
                 item.table,
-                &["id", "kind", "body", "library", "coating"],
+                &["id", "kind", "body", "library", "coating", "coatings"],
                 &item.context,
             )?;
             let key = value.as_str().ok_or_else(|| {
@@ -645,7 +690,7 @@ pub fn read(
                     item.context, bodies[i].name, bodies[i].path
                 )));
             }
-            let coating = crate::scene_file::coating_of(&item)?;
+            let part = &with_element_coatings(&item, part)?;
             if let Some(matched) = add_part(
                 &mut scene,
                 &mut tagged,
@@ -653,9 +698,8 @@ pub fn read(
                 &found,
                 part,
                 &id,
-                coating,
                 false,
-                lookup,
+                lookups,
                 &item.context,
             )? {
                 parts.push(matched);
@@ -686,13 +730,23 @@ pub fn read(
             }
         };
         match kind {
-            "lens" => {
+            "lens" | "filter" => {
                 check_keys(
                     item.table,
                     &["id", "kind", "body", "material", "materials", "coating"],
                     &item.context,
                 )?;
-                let coating = crate::scene_file::coating_of(&item)?.unwrap_or(Coating::Uncoated);
+                let spec = match item.table.get("coating") {
+                    None => CoatingSpec::Uncoated,
+                    Some(c) => crate::coatings::parse(c, &item.context)?,
+                };
+                // A filter's curve is the whole filter's response: on one of its two flat
+                // faces, the other ideal.
+                let specs = match (&spec, kind) {
+                    (CoatingSpec::Curve(_), "filter") => vec![spec.clone(), CoatingSpec::Ideal],
+                    _ => vec![spec.clone(); 2],
+                };
+                let resolved = resolve_coatings(&specs, lookups, &item.context)?;
                 let per_body = item.table.get("materials").and_then(Value::as_table);
                 for &i in &found {
                     let value = match (item.table.get("material"), per_body) {
@@ -710,12 +764,36 @@ pub fn read(
                             )));
                         }
                     };
+                    let face_coatings = if kind == "filter" {
+                        let faces: Vec<_> = bodies[i].faces.iter().map(|f| &*f.geometry).collect();
+                        let plate = profile(&faces)
+                            .filter(|p| p.surfaces.len() == 2 && p.surfaces.iter().all(|s| s.1.is_infinite()))
+                            .ok_or_else(|| {
+                                error(format!(
+                                    "{}: body `{}` is not a plate with two flat faces across its axis",
+                                    item.context, bodies[i].name
+                                ))
+                            })?;
+                        plate
+                            .surface_faces
+                            .iter()
+                            .zip(&resolved)
+                            .flat_map(|(faces, c)| faces.iter().map(move |&f| (f, c.clone())))
+                            .collect()
+                    } else {
+                        Vec::new()
+                    };
                     scene.solids.push(Solid {
                         id: solid_id(i),
                         faces: bodies[i].faces.clone(),
                         role: SolidRole::Lens {
                             material: medium(value, lookup, &item.context)?,
-                            coating: coating.clone(),
+                            coating: if kind == "filter" {
+                                Coating::Uncoated
+                            } else {
+                                resolved[0].clone()
+                            },
+                            face_coatings,
                         },
                     });
                 }
@@ -763,7 +841,7 @@ pub fn read(
             }
             other => {
                 return Err(error(format!(
-                    "{}: element kind `{other}` is not known; use \"lens\" or \"mirror\"",
+                    "{}: element kind `{other}` is not known; use \"lens\", \"filter\" or \"mirror\"",
                     item.context
                 )));
             }
@@ -802,9 +880,8 @@ pub fn read(
                 &members,
                 part,
                 &id,
-                None,
                 true,
-                lookup,
+                lookups,
                 &format!("product `{product}`"),
             )? {
                 parts.push(matched);
@@ -948,6 +1025,7 @@ mod tests {
             thickness: vec![8.0, 2.5],
             glass: vec![Glass::Index(1.6), Glass::Index(1.7)],
             coating: None,
+            coatings: vec![],
             products: vec![],
         };
         let crown = body("crown", [(0.0, 40.0), (8.0, -25.0)], Vec3::Z);

@@ -93,6 +93,37 @@ impl PartSurface {
     };
 }
 
+/// How thick a thin-film layer is.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum LayerThickness {
+    /// Physical thickness (µm).
+    Physical(f64),
+    /// A quarter wave of optical thickness at this vacuum wavelength (µm): λ / (4 n(λ)).
+    QuarterWave(f64),
+}
+
+/// One layer of a thin-film coating, by name.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LayerSpec {
+    /// The layer material.
+    pub material: Glass,
+    /// Its thickness.
+    pub thickness: LayerThickness,
+}
+
+/// A coating as files write it: names, resolved to an optical coating by `optobench-io`.
+#[derive(Debug, Clone, PartialEq)]
+pub enum CoatingSpec {
+    /// A bare interface (Fresnel reflection).
+    Uncoated,
+    /// A perfect anti-reflection coating.
+    Ideal,
+    /// A measured R/T curve, by its name in the library.
+    Curve(String),
+    /// A thin-film stack, outer side first.
+    Layers(Vec<LayerSpec>),
+}
+
 /// One catalogue part.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Part {
@@ -114,8 +145,11 @@ pub struct Part {
     pub thickness: Vec<f64>,
     /// Glass between consecutive surfaces; for a mirror, its substrate.
     pub glass: Vec<Glass>,
-    /// Coating name (`uncoated`, `ideal`), when given.
-    pub coating: Option<String>,
+    /// Coating of every surface, when given (for a filter, a measured curve is the whole
+    /// part's response; see [`Part::surface_coatings`]).
+    pub coating: Option<CoatingSpec>,
+    /// Coatings surface by surface, when given (instead of `coating`).
+    pub coatings: Vec<CoatingSpec>,
     /// Other names of its STEP product, beyond the part number (a vendor's file name).
     pub products: Vec<String>,
 }
@@ -199,12 +233,41 @@ impl Part {
         if !(size > 0.0 && size.is_finite()) {
             return Err("the outline must have a positive size".into());
         }
+        if !self.coatings.is_empty() && self.coatings.len() != n {
+            return Err(format!("{n} surfaces need {n} coatings"));
+        }
+        if !self.coatings.is_empty() && self.coating.is_some() {
+            return Err("give `coating` or `coatings`, not both".into());
+        }
         if let Some(ca) = self.clear_aperture {
             if !(ca > 0.0 && ca <= self.size()) {
                 return Err("the clear aperture must be positive and fit in the outline".into());
             }
         }
         Ok(())
+    }
+
+    /// The coating of each surface, in order. With `coatings`, those. With `coating`: on
+    /// a filter a curve is the measured response of the whole part, so it goes on the
+    /// first surface and the others are ideal; anything else goes on every surface.
+    /// Uncoated otherwise.
+    pub fn surface_coatings(&self) -> Vec<CoatingSpec> {
+        let n = self.surfaces.len();
+        if !self.coatings.is_empty() {
+            return self.coatings.clone();
+        }
+        match &self.coating {
+            Some(curve @ CoatingSpec::Curve(_)) if self.part_type == PartType::Filter => {
+                core::iter::once(curve.clone())
+                    .chain(core::iter::repeat_n(
+                        CoatingSpec::Ideal,
+                        n.saturating_sub(1),
+                    ))
+                    .collect()
+            }
+            Some(coating) => vec![coating.clone(); n],
+            None => vec![CoatingSpec::Uncoated; n],
+        }
     }
 
     /// The same part turned around: surfaces, thicknesses and glasses in reverse order,
@@ -222,6 +285,8 @@ impl Part {
             .collect();
         part.thickness.reverse();
         part.glass.reverse();
+        part.coatings = self.surface_coatings();
+        part.coatings.reverse();
         part
     }
 }
@@ -283,6 +348,9 @@ pub struct Profile {
     /// `axis` from `origin`, signed radius for light travelling along `axis`; infinite
     /// when flat).
     pub surfaces: Vec<(f64, f64)>,
+    /// For each of `surfaces`, the faces it is made of (indices into the faces given to
+    /// [`profile`]).
+    pub surface_faces: Vec<Vec<usize>>,
 }
 
 impl Profile {
@@ -290,11 +358,14 @@ impl Profile {
     pub fn flipped(&self) -> Profile {
         let mut surfaces: Vec<(f64, f64)> = self.surfaces.iter().map(|&(t, r)| (-t, -r)).collect();
         surfaces.reverse();
+        let mut surface_faces = self.surface_faces.clone();
+        surface_faces.reverse();
         Profile {
             origin: self.origin,
             axis: -self.axis,
             rim_radius: self.rim_radius,
             surfaces,
+            surface_faces,
         }
     }
 }
@@ -343,11 +414,11 @@ pub fn profile(faces: &[&BrepFace]) -> Option<Profile> {
         }
     };
     let along = |p: Vec3| (p - origin).dot(axis);
-    let mut surfaces: Vec<(f64, f64)> = Vec::new();
-    for face in faces {
+    let mut found: Vec<(f64, f64, usize)> = Vec::new();
+    for (index, face) in faces.iter().enumerate() {
         match &face.surface {
             FaceSurface::Plane(frame) if frame.axes()[2].dot(axis).abs() > 1.0 - 1e-9 => {
-                surfaces.push((along(frame.origin()), f64::INFINITY));
+                found.push((along(frame.origin()), f64::INFINITY, index));
             }
             FaceSurface::Sphere { frame, radius } => {
                 let centre = frame.origin();
@@ -360,21 +431,34 @@ pub fn profile(faces: &[&BrepFace]) -> Option<Profile> {
                 // The cap lies on the side of the centre where its boundary is.
                 let mean = points.iter().map(|&p| along(p)).sum::<f64>() / points.len() as f64;
                 let side = if mean >= t_centre { 1.0 } else { -1.0 };
-                surfaces.push((t_centre + side * radius, -side * radius));
+                found.push((t_centre + side * radius, -side * radius, index));
             }
             _ => {}
         }
     }
-    surfaces.sort_by(|a, b| a.0.total_cmp(&b.0));
-    surfaces.dedup_by(|b, a| {
-        (a.0 - b.0).abs() < 1e-6
-            && ((a.1.is_infinite() && b.1.is_infinite()) || (a.1 - b.1).abs() < 1e-6)
-    });
+    // One surface may be several faces (a cap split in halves): merge them.
+    found.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let mut surfaces: Vec<(f64, f64)> = Vec::new();
+    let mut surface_faces: Vec<Vec<usize>> = Vec::new();
+    for (t, r, index) in found {
+        let same = surfaces.last().is_some_and(|&(u, q)| {
+            (u - t).abs() < 1e-6 && ((q.is_infinite() && r.is_infinite()) || (q - r).abs() < 1e-6)
+        });
+        if same {
+            if let Some(last) = surface_faces.last_mut() {
+                last.push(index);
+            }
+        } else {
+            surfaces.push((t, r));
+            surface_faces.push(vec![index]);
+        }
+    }
     Some(Profile {
         origin,
         axis,
         rim_radius,
         surfaces,
+        surface_faces,
     })
 }
 

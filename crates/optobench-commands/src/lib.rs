@@ -139,6 +139,16 @@ const STANDARD: &[Command] = &[
         summary: "check a part file and copy it into the parts library",
         handler: parts::import_part,
     },
+    Command {
+        id: "curves",
+        summary: "the measured R/T curves in the user's parts library",
+        handler: parts::curves,
+    },
+    Command {
+        id: "import-curve",
+        summary: "import a measured R/T table (CSV) into the parts library",
+        handler: parts::import_curve,
+    },
 ];
 
 /// The set of commands callers can run.

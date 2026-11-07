@@ -189,6 +189,16 @@ fn stack_one(layers: &[(Complex, f64)], incidence: &Incidence, p_polarised: bool
 }
 
 impl Coating {
+    /// The same coating seen from its other side: a stack's layers in reverse order.
+    pub fn turned(&self) -> Coating {
+        match self {
+            Coating::Stack(film) => Coating::Stack(Arc::new(ThinFilm {
+                layers: film.layers.iter().rev().cloned().collect(),
+            })),
+            other => other.clone(),
+        }
+    }
+
     /// The coating's response to light arriving as described.
     pub fn response(&self, incidence: &Incidence) -> Result<Response, MaterialError> {
         Ok(match self {

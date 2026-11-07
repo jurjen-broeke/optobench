@@ -39,7 +39,9 @@
 //! material = ["fused-silica"]       # names (bundled or imported) or indices
 //! diameter = 25.4
 //! clear_aperture = 22.9
-//! coating = "uncoated"              # or "ideal"; default "uncoated"
+//! coating = "uncoated"              # default; or "ideal", { curve = "<name>" },
+//!                                   # { layers = [...] }: see `coatings`
+//! # coatings = ["ideal", "uncoated"]  # instead: one per surface
 //!
 //! [[element]]
 //! id = "L2"
@@ -86,7 +88,9 @@
 //! the format tag and the kind, a newer format is refused, and an unknown key is an error
 //! naming the closest valid key. Lengths are in mm, angles in degrees.
 
-use optobench_library::{Library, Outline, Part};
+use optobench_library::{CoatingSpec, Library, Outline, Part};
+
+use crate::coatings::CurveLookup;
 use optobench_materials::Medium;
 use optobench_math::{Frame, Vec3, radians_from_degrees};
 use optobench_scene::layout::{PlanarLayout, TableLayout};
@@ -571,20 +575,63 @@ fn clear_aperture(item: &Item, part: &Part) -> Result<f64, FileError> {
     }
 }
 
-/// An element's `coating`, if given.
-pub(crate) fn coating_of(item: &Item) -> Result<Option<Coating>, FileError> {
-    match item.table.get("coating") {
-        None => Ok(None),
-        Some(value) => match value.as_str() {
-            Some("uncoated") => Ok(Some(Coating::Uncoated)),
-            Some("ideal") => Ok(Some(Coating::Ideal)),
-            _ => Err(error(format!(
-                "{}: coating `{}` is not known; use \"uncoated\" or \"ideal\"",
-                item.context,
-                value.as_str().unwrap_or("?")
-            ))),
-        },
+/// An element's `coating` (on every one of `surfaces`) or `coatings` (one per surface),
+/// if given.
+pub(crate) fn element_coatings(
+    item: &Item,
+    surfaces: usize,
+) -> Result<Option<Vec<CoatingSpec>>, FileError> {
+    match (item.table.get("coating"), item.table.get("coatings")) {
+        (None, None) => Ok(None),
+        (Some(c), None) => Ok(Some(vec![
+            crate::coatings::parse(c, &item.context)?;
+            surfaces
+        ])),
+        (None, Some(list)) => crate::coatings::parse_list(list, surfaces, &item.context).map(Some),
+        (Some(_), Some(_)) => Err(error(format!(
+            "{}: give `coating` or `coatings`, not both",
+            item.context
+        ))),
     }
+}
+
+/// The part with the element's `coating` or `coatings` in place of its own; a filter's
+/// curve still covers the whole part (see `Part::surface_coatings`).
+pub(crate) fn with_element_coatings(item: &Item, part: &Part) -> Result<Part, FileError> {
+    let mut part = part.clone();
+    match (item.table.get("coating"), item.table.get("coatings")) {
+        (None, None) => {}
+        (Some(c), None) => {
+            part.coating = Some(crate::coatings::parse(c, &item.context)?);
+            part.coatings.clear();
+        }
+        (None, Some(list)) => {
+            part.coatings = crate::coatings::parse_list(list, part.surfaces.len(), &item.context)?;
+            part.coating = None;
+        }
+        (Some(_), Some(_)) => {
+            return Err(error(format!(
+                "{}: give `coating` or `coatings`, not both",
+                item.context
+            )));
+        }
+    }
+    Ok(part)
+}
+
+/// Resolves coatings, naming the item in errors.
+pub(crate) fn resolve_coatings(
+    specs: &[CoatingSpec],
+    lookups: &Lookups,
+    context: &str,
+) -> Result<Vec<Coating>, FileError> {
+    specs
+        .iter()
+        .map(|spec| {
+            crate::coatings::resolve(spec, lookups.materials, lookups.curves)
+                .map_err(|e| error(format!("{context}: {e}")))
+        })
+        .collect()
 }
 
 /// Checks the first two lines: the format tag and the kind.
@@ -605,15 +652,30 @@ pub(crate) fn check_header(text: &str) -> Result<(), FileError> {
 
 /// Reads a layout file into a scene. `lookup` resolves material names.
 pub fn parse(text: &str, lookup: &MaterialLookup) -> Result<Scene, FileError> {
-    parse_with(text, lookup, &Library::default())
+    let library = Library::default();
+    parse_with(
+        text,
+        &Lookups {
+            materials: lookup,
+            curves: &crate::coatings::no_curves,
+            library: &library,
+        },
+    )
 }
 
-/// A layout file, with parts from `library` for elements that name one.
-pub fn parse_with(
-    text: &str,
-    lookup: &MaterialLookup,
-    library: &Library,
-) -> Result<Scene, FileError> {
+/// Where files find what they name: materials, R/T curves and library parts.
+pub struct Lookups<'a> {
+    /// Materials by name.
+    pub materials: &'a MaterialLookup<'a>,
+    /// Imported R/T curves by name.
+    pub curves: &'a CurveLookup<'a>,
+    /// The parts library.
+    pub library: &'a Library,
+}
+
+/// A layout file, with materials, curves and library parts from `lookups`.
+pub fn parse_with(text: &str, lookups: &Lookups) -> Result<Scene, FileError> {
+    let (lookup, library) = (lookups.materials, lookups.library);
     check_header(text)?;
     let root: Table = text
         .parse()
@@ -775,11 +837,13 @@ pub fn parse_with(
                             "library",
                             "reversed",
                             "coating",
+                            "coatings",
                             "clear_aperture",
                         ],
                     ),
                     &item.context,
                 )?;
+                let part = &with_element_coatings(item, part)?;
                 let diameter = round_diameter(part, &item.context)?;
                 let materials = part
                     .glass
@@ -806,7 +870,11 @@ pub fn parse_with(
                         materials,
                         diameter,
                         clear_aperture: clear_aperture(item, part)?,
-                        coating: coating_of(item)?.unwrap_or_else(|| crate::library::coating(part)),
+                        coatings: resolve_coatings(
+                            &part.surface_coatings(),
+                            lookups,
+                            &item.context,
+                        )?,
                     },
                 });
             }
@@ -824,6 +892,7 @@ pub fn parse_with(
                             "diameter",
                             "clear_aperture",
                             "coating",
+                            "coatings",
                         ],
                     ),
                     &item.context,
@@ -856,7 +925,9 @@ pub fn parse_with(
                     .iter()
                     .map(|m| medium(m, lookup, &item.context))
                     .collect::<Result<Vec<_>, _>>()?;
-                let coating = coating_of(item)?.unwrap_or(Coating::Uncoated);
+                let specs = element_coatings(item, surfaces.len())?
+                    .unwrap_or_else(|| vec![CoatingSpec::Uncoated; surfaces.len()]);
+                let coatings = resolve_coatings(&specs, lookups, &item.context)?;
                 scene.elements.push(Element {
                     id,
                     frame: placement.frame(item)?,
@@ -866,7 +937,7 @@ pub fn parse_with(
                         materials,
                         diameter: item.positive("diameter")?,
                         clear_aperture: item.positive("clear_aperture")?,
-                        coating,
+                        coatings,
                     },
                 });
             }

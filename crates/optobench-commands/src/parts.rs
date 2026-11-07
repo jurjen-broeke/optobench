@@ -1,4 +1,4 @@
-//! Commands for the parts library: `import-part` and `parts`.
+//! Commands for the parts library: `import-part`, `parts`, `import-curve` and `curves`.
 
 use std::path::Path;
 
@@ -101,5 +101,98 @@ pub(crate) fn parts(parameters: &Parameters) -> Result<Value, CommandError> {
     Ok(json!({
         "directory": library::parts_directory(&root).to_string_lossy(),
         "parts": list.iter().map(|(p, f)| part_json(p, Some(f))).collect::<Vec<_>>(),
+    }))
+}
+
+/// `import-curve`: read a measured R/T table (CSV as a spreadsheet exports it) and store
+/// it in the parts library as `name`. Parameters `path`, `name`; optionally `columns`
+/// (default `["wavelength", "transmittance"]`; also `reflectance` and `skip`),
+/// `wavelength_unit` (`nm`, default, or `um`), `percent` (default: decided from the
+/// values), `reflectance` (without a reflectance column: `complement`, default, R = 1 − T,
+/// or `zero` for absorbing filters), `source` (where it came from), `redistribute`
+/// (default false), `replace` and `data_directory`.
+pub(crate) fn import_curve(parameters: &Parameters) -> Result<Value, CommandError> {
+    use optobench_io::curves::{self, Column, Options};
+    check_keys(
+        parameters,
+        &[
+            "path",
+            "name",
+            "columns",
+            "wavelength_unit",
+            "percent",
+            "reflectance",
+            "source",
+            "redistribute",
+            "replace",
+            "data_directory",
+        ],
+    )?;
+    let invalid = |message: String| CommandError::new(ErrorCode::InvalidParameters, message);
+    let path = Path::new(required(parameters, "path")?);
+    let name = required(parameters, "name")?;
+    let mut options = Options::default();
+    if let Some(columns) = parameters.get("columns") {
+        options.columns = columns
+            .as_array()
+            .and_then(|a| {
+                a.iter()
+                    .map(|c| c.as_str().and_then(Column::parse))
+                    .collect::<Option<Vec<_>>>()
+            })
+            .ok_or_else(|| {
+                invalid("`columns` lists wavelength, transmittance, reflectance or skip".into())
+            })?;
+    }
+    options.nanometres = match parameters.get("wavelength_unit").and_then(Value::as_str) {
+        None if parameters.get("wavelength_unit").is_none() => true,
+        Some("nm") => true,
+        Some("um") => false,
+        _ => return Err(invalid("`wavelength_unit` is \"nm\" or \"um\"".into())),
+    };
+    options.percent = match parameters.get("percent") {
+        None => None,
+        Some(Value::Bool(b)) => Some(*b),
+        Some(_) => return Err(invalid("`percent` is true or false".into())),
+    };
+    options.reflectance_is_complement = match parameters.get("reflectance").and_then(Value::as_str)
+    {
+        None if parameters.get("reflectance").is_none() => true,
+        Some("complement") => true,
+        Some("zero") => false,
+        _ => {
+            return Err(invalid(
+                "`reflectance` is \"complement\" or \"zero\"".into(),
+            ));
+        }
+    };
+    let source = match parameters.get("source") {
+        None => "",
+        Some(Value::String(s)) => s,
+        Some(_) => return Err(invalid("`source` must be text".into())),
+    };
+    let root = data_directory(parameters)?;
+    let record = curves::import(
+        &root,
+        path,
+        name,
+        &options,
+        source,
+        flag(parameters, "redistribute")?,
+        flag(parameters, "replace")?,
+    )
+    .map_err(|e| CommandError::new(ErrorCode::Failed, e))?;
+    Ok(json!({ "stored": true, "curve": record }))
+}
+
+/// `curves`: every R/T curve in the parts library.
+pub(crate) fn curves(parameters: &Parameters) -> Result<Value, CommandError> {
+    check_keys(parameters, &["data_directory"])?;
+    let root = data_directory(parameters)?;
+    let list =
+        optobench_io::curves::list(&root).map_err(|e| CommandError::new(ErrorCode::Failed, e))?;
+    Ok(json!({
+        "directory": optobench_io::curves::curves_directory(&root).to_string_lossy(),
+        "curves": list,
     }))
 }

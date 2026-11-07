@@ -5,6 +5,16 @@ with the release that introduced them.
 
 ## Unreleased
 
+- M5c2 coatings in files: `coating` is `"uncoated"`, `"ideal"`, `{ curve = "<name>" }`
+  or `{ layers = [...] }` (thickness in nm or a quarter wave at a wavelength, listed from
+  the air side), and `coatings` gives one per surface, in part, layout and sidecar files.
+  On a filter part, and on the new sidecar element kind `filter`, a curve is the whole
+  filter's measured response: it goes on one face and the others are ideal, so it counts
+  once. Library parts' coatings land on the STEP faces that are each surface. New
+  commands `import-curve` (vendor tables as CSV: nm or µm, percent or fraction, R = 1 − T
+  or 0 without a reflectance column, noise clipped and reported) and `curves`. The scene
+  model takes per-surface coatings (`ElementKind::Lens::coatings`,
+  `SolidRole::Lens::face_coatings`).
 - M5c1 parts library: part files (`kind = "part"`: prescription, glasses, outline, spec
   sheet source) in `<user data directory>/optobench/library/parts/<vendor>/`; commands
   `import-part` and `parts`. Layout elements take `library = "<vendor>/<part>"` (with

@@ -39,7 +39,7 @@ automatically traces exactly like the hand-written sidecar.
 - [x] c1: Part format (`kind = "part"`), library in the user data directory, `import-part` and `parts`
 - [x] c1: `library` on layout and sidecar elements
 - [x] c1: Automatic tagging of library parts on STEP import; radius check against the STEP geometry (> 0.05 mm reported)
-- [ ] c2: Import of R/T curves; coatings (curves, thin-film stacks) in part, layout and sidecar files, for filters, dichroics and beamsplitters
+- [x] c2: Import of R/T curves (`import-curve`, `curves`); coatings (curves, thin-film stacks) in part, layout and sidecar files, surface by surface; a filter's curve counts once for the whole filter
 - [ ] c3: Embedded parameters with provenance on save, so a shared design traces without the library
 
 ## Local test parts (corpus)
