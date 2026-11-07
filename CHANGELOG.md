@@ -5,6 +5,13 @@ with the release that introduced them.
 
 ## Unreleased
 
+- M4a STEP reader (`optobench_io::step`), our own: ISO 10303-21 exchange structure
+  (simple and complex entities, typed parameters, encoded strings); AP203/AP214/AP242
+  products, assembly tree and placements; length and angle units per context to mm and
+  radians; B-rep solids and surface models with plane, cylinder, cone, sphere, torus,
+  B-spline (rational too), surfaces of revolution and linear extrusion, and line,
+  circle, ellipse and B-spline edges; unsupported entities counted by type. STEP test
+  fixtures made by SolidCraft from committed scripts.
 - M3c scene files and the `trace` command: the `.optobench` layout file (TOML; format tag
   and kind on the first two lines; strict keys naming the closest valid key; planar and
   table layouts; materials by bundled or imported name, or by index); `trace` reports

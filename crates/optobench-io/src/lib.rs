@@ -9,6 +9,7 @@
 pub mod refractiveindex;
 pub mod scene_file;
 mod sha256;
+pub mod step;
 pub mod store;
 pub mod svg;
 
