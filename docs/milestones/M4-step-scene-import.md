@@ -7,17 +7,23 @@ Worked in four parts, one pull request each.
 
 ## Test files (decided 2026-11-07)
 
-- **Vendor parts, local only.** Eleven Thorlabs STEP files (cage plates, rods, post,
-  right-angle mirror mount, XY translator, fiber port adapter, mirror, two achromats, a
-  plano-convex lens), listed in `corpus/basic_cage_parts.txt` and downloaded to
+- **Vendor parts, local only.** Thirteen Thorlabs STEP files (cage plates, rods, post,
+  rod bracket, right-angle mirror mount, XY translator, fiber port adapter and FiberPort,
+  mirror, two achromats, a plano-convex lens bare and mounted), listed in `corpus/basic_cage_parts.txt` and downloaded to
   `corpus/vendor/thorlabs/`. SolidWorks exports (2009–2022), AP203 and AP214, inch, metre
   and mm units. Never committed; tests that use them skip when they are absent.
 - **Golden Thorlabs assembly, local only.** `corpus/solidcraft/thorlabs-cage.sc` and its
-  STEP export: a fiber adapter and f = 30 mm achromat in an XY translator, a 45° mirror in
-  a right-angle cube, an f = 60 mm achromat in a cage plate, eight cage rods, and on each
-  arm a CP33B bracket clamped to the two lower rods with a 30 mm post screwed into it
-  (optical axis at 51.58 mm above the table). Built in SolidCraft 0.30.1 through its
-  control channel. Contains vendor geometry, so it is not committed.
+  STEP export, built in SolidCraft 0.30.1 through its control channel. Optical axis at
+  51.58 mm above the table. On the x arm, from the far end: a PAF2-A4C FiberPort
+  (collimated output) on a CP08FP adapter at the rod ends (x = 302.26 mm); a relay of an
+  LA1951-ML in a CP33 plate (curved side to the FiberPort, focus 17.6 mm beyond its flat
+  face) and an AC254-030-A in a CXY1A translator (flint side to that focus, front focal
+  length 22.2 mm), which re-collimates; a PF10 mirror at 45° in a KCB1 cube folds the
+  axis into the −y arm, where an AC254-060-A sits in a CP33 plate. Lens spacings are
+  nominal, from catalogue glass indices, and are checked by the trace once real glass
+  data is imported. Eight ER10 rods; on each
+  arm a CP33B bracket clamped to the lower rods with a TR30 post. Contains vendor
+  geometry, so it is not committed.
 - **Committed golden assemblies.** Built in SolidCraft from its own primitives (plates,
   rods, lenses with exact spherical faces), geometrically equivalent to the Thorlabs
   assembly, exported to STEP and committed with their sidecars and expected reports.

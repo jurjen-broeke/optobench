@@ -296,8 +296,9 @@ fn corpus_golden_assembly_reads_completely() {
     assert_eq!(root.name, "thorlabs-cage");
     let instances = model.instances();
     // As SolidCraft counts the bodies of the assembly of 2026-11-07: 116, plus a CP33
-    // plate (7 bodies) holding the LA1951-ML (3 bodies) on the x arm.
-    assert_eq!(instances.len(), 126, "as SolidCraft counts the bodies");
+    // plate (7 bodies) holding the LA1951-ML (3 bodies) and a PAF2-A4C FiberPort (47
+    // bodies) on the x arm.
+    assert_eq!(instances.len(), 173, "as SolidCraft counts the bodies");
     for rod in 1..=8 {
         let name = format!("er10:{rod}");
         assert!(instances.iter().any(|i| i.path == [name.clone()]), "{name}");
