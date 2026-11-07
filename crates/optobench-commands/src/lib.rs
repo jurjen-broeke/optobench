@@ -16,6 +16,7 @@
 #![forbid(unsafe_code)]
 
 mod materials;
+mod trace;
 
 use serde_json::{Map, Value, json};
 
@@ -106,6 +107,11 @@ const STANDARD: &[Command] = &[
         id: "materials",
         summary: "bundled materials and those imported into the data directory",
         handler: materials::materials,
+    },
+    Command {
+        id: "trace",
+        summary: "trace a .optobench layout: detectors, clipping, power ledger, layout view",
+        handler: trace::trace,
     },
     Command {
         id: "import-material",
@@ -224,7 +230,9 @@ mod tests {
 
     #[test]
     fn unknown_command_is_an_error() {
-        let error = Registry::standard().run("trace", &Value::Null).err();
+        let error = Registry::standard()
+            .run("no-such-command", &Value::Null)
+            .err();
         assert_eq!(error.map(|e| e.code), Some(ErrorCode::UnknownCommand));
     }
 

@@ -79,9 +79,8 @@ impl PlanarLayout {
         frame_along(point, direction).ok_or(SceneError::Invalid("degenerate axis".into()))
     }
 
-    /// The frame of the fold mirror at `at` (matched within 1e-9 mm): +z along the mirror
-    /// normal, which bisects
-    /// the reversed incoming and the outgoing directions.
+    /// The frame of the fold mirror at `at` (matched within 1e-9 mm): +z along the
+    /// mirror normal, which bisects the reversed incoming and the outgoing directions.
     pub fn fold_frame(&self, at: f64) -> Result<Frame, SceneError> {
         let angle = self
             .folds

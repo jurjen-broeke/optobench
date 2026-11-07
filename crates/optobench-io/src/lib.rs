@@ -7,8 +7,10 @@
 #![forbid(unsafe_code)]
 
 pub mod refractiveindex;
+pub mod scene_file;
 mod sha256;
 pub mod store;
+pub mod svg;
 
 pub use sha256::{sha256, sha256_hex};
 

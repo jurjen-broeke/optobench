@@ -5,9 +5,10 @@ through SolidCraft assemblies (via STEP) or through CAD-free planar and optical-
 layouts. Microscopy is a first-class use: immersion and dipping objectives, water,
 fluorescence excitation, photon budget and laser heating.
 
-Status: **M1 Sequential core**. Sequential ray tracing through spheres, conics and even
-aspheres, and paraxial cardinal points, are in place and checked against theory. Glass,
-water, Fresnel and the first analyses follow in M2. See [docs/design.md](docs/design.md) for the design and roadmap.
+Status: **M3 Standalone scenes**. Planar and table layouts are traced non-sequentially
+from `.optobench` files, with clipping by mechanical proxies, detector results, a power
+ledger and an SVG layout view. M2 is complete except for checking the bundled material
+values against their original papers and the literature lens cases. See [docs/design.md](docs/design.md) for the design and roadmap.
 
 ![Roadmap](docs/roadmap.svg)
 
@@ -24,6 +25,16 @@ cargo run -p optobench-cli -- commands
 cargo xtask check
 ```
 
+Trace an example scene and write its layout view:
+
+```
+cargo run -p optobench-cli -- trace '{"path": "examples/planar-relay.optobench", "svg": "relay.svg"}'
+```
+
+`examples/` holds a folded planar relay, the same relay clipped by a narrow tube, and a
+periscope on a breadboard. The file format is documented in
+`crates/optobench-io/src/scene_file.rs`.
+
 Open the folder in VS Code and accept the recommended extensions
 (rust-analyzer, Even Better TOML).
 
@@ -37,6 +48,7 @@ xtask/                  repository checks: layers, naming deny-list, bundled ass
 assets/manifest.toml    every bundled data file and its licence
 docs/design.md          the design note
 docs/milestones/        task lists per milestone
+examples/               example .optobench scenes, also used by the exit tests
 corpus/                 local examples and source data (git-ignored, never committed)
 ```
 

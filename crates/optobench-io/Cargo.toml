@@ -15,7 +15,10 @@ layer = "L5"
 optobench-materials.workspace = true
 serde_json.workspace = true
 optobench-scene.workspace = true
+optobench-trace.workspace = true
+optobench-math.workspace = true
 optobench-library.workspace = true
+toml.workspace = true
 
 [lints]
 workspace = true

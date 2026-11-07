@@ -5,6 +5,12 @@ with the release that introduced them.
 
 ## Unreleased
 
+- M3c scene files and the `trace` command: the `.optobench` layout file (TOML; format tag
+  and kind on the first two lines; strict keys naming the closest valid key; planar and
+  table layouts; materials by bundled or imported name, or by index); `trace` reports
+  detectors, clipping per element or proxy and the power ledger, and writes a top or
+  side SVG layout view. Example scenes in `examples/`. New dependency: `toml` (MIT OR
+  Apache-2.0).
 - M3b scene model (`optobench-scene`): lenses (inline surfaces, thicknesses, materials,
   diameter, clear aperture, ground edge as an absorber), mirrors, collimated and point
   sources, tube and plate proxies, detectors with irradiance maps; planar layouts along a

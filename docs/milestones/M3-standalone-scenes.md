@@ -3,7 +3,8 @@
 Exit criteria: a planar relay and a table periscope traced from scene files alone;
 clipping by a tube proxy detected.
 
-Worked in three parts, one pull request each.
+Worked in three parts, one pull request each. Status: done. Exit tests in
+`crates/optobench-commands/tests/scenes.rs`, scenes in `examples/`.
 
 ## M3a Non-sequential trace (optobench-trace, L2)
 - [x] Faces in the scene frame: an analytic surface or a cylinder, placed by a transform, bounded by a region (disk, annulus, rectangle), between two media
@@ -21,8 +22,8 @@ Worked in three parts, one pull request each.
 - [x] Building the non-sequential system and launching source rays
 
 ## M3c Scene files, trace command, report, layout view
-- [ ] `.optobench` layout file (TOML): format tag, `kind = "layout"`, strict keys with the closest valid key named
-- [ ] Materials by name (bundled or imported) or index
-- [ ] `trace` command: per-detector power and spot, clipping report per proxy and element, power ledger (JSON)
-- [ ] 2D layout view as SVG (top or side), elements and rays
-- [ ] Exit tests: planar relay and table periscope from scene files; clipping by a tube proxy detected
+- [x] `.optobench` layout file (TOML): format tag, `kind = "layout"`, strict keys with the closest valid key named
+- [x] Materials by name (bundled or imported) or index
+- [x] `trace` command: per-detector power and spot, clipping report per proxy and element, power ledger (JSON)
+- [x] 2D layout view as SVG (top or side), elements and rays
+- [x] Exit tests: planar relay and table periscope from scene files; clipping by a tube proxy detected

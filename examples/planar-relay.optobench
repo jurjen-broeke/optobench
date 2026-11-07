@@ -1,0 +1,53 @@
+format = "optobench/1"
+kind = "layout"
+layout = "planar"
+
+# A 4f relay of two identical biconvex singlets (R = ±100 mm, t = 4 mm, n = 1.5), folded
+# by 90° in the collimated space between them. Thick-lens formulas (Hecht, Optics, 5th
+# ed., ch. 6) give f = 100.6711 mm and front and back focal lengths of 99.3289 mm, which
+# set the positions below. A point 2 mm above the axis at the front focus of L1 is imaged
+# 2 mm below the axis at the back focus of L2 (magnification −1).
+
+[[source]]
+id = "object"
+kind = "point"
+wavelength_um = 0.55
+power_w = 0.001
+half_angle_deg = 1.0
+rings = 8
+offset = [0.0, 2.0]
+at = 0.0
+
+[[element]]
+id = "L1"
+kind = "lens"
+at = 99.3289
+surfaces = [ { radius = 100.0 }, { radius = -100.0 } ]
+thickness = [4.0]
+material = [1.5]
+diameter = 25.4
+clear_aperture = 22.9
+
+[[element]]
+id = "M1"
+kind = "mirror"
+at = 202.6577
+fold = 90.0
+diameter = 25.4
+clear_aperture = 22.9
+
+[[element]]
+id = "L2"
+kind = "lens"
+at = 301.9866
+surfaces = [ { radius = 100.0 }, { radius = -100.0 } ]
+thickness = [4.0]
+material = [1.5]
+diameter = 25.4
+clear_aperture = 22.9
+
+[[detector]]
+id = "image"
+at = 405.3154
+size = [10, 10]
+pixels = [100, 100]
