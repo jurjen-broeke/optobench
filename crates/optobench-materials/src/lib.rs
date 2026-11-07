@@ -7,7 +7,7 @@
 //! - Wavelengths are vacuum wavelengths in micrometres (µm).
 //! - The complex refractive index is n + i·k: n is the refractive index, k the
 //!   extinction coefficient. Bulk absorption follows Beer–Lambert with the absorption
-//!   coefficient α = 4πk/λ (Born & Wolf, Principles of Optics, 7th ed., §14.1).
+//!   coefficient α = 4πk/λ (Born & Wolf, Principles of Optics, 7th ed., ch. 14).
 //! - Every model has a valid wavelength range. Outside it, evaluation is an error rather
 //!   than a silent extrapolation.
 //! - This crate holds models only. Coefficients for real glasses come from catalogues the

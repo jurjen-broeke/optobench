@@ -8,14 +8,14 @@ where datasets and literature values come in, and every number there is cited.
 
 ## M2a Dispersion models and power on rays
 ### optobench-materials (L1)
-- [ ] `Material` trait: refractive index and extinction coefficient at a wavelength (µm), valid range, errors outside it
-- [ ] Models: constant, Sellmeier, Schott, Cauchy, tabulated n and k (linear interpolation)
-- [ ] Bulk absorption coefficient from k (Beer–Lambert)
+- [x] `Material` trait: refractive index and extinction coefficient at a wavelength (µm), valid range, errors outside it
+- [x] Models: constant, Sellmeier, Schott, Cauchy, tabulated n and k (linear interpolation)
+- [x] Bulk absorption coefficient from k (Beer–Lambert)
 ### optobench-trace (L2)
-- [ ] Fresnel s/p amplitude and power coefficients, with total internal reflection
-- [ ] Media in the sequential trace come from materials, evaluated at each ray's wavelength; paraxial analysis at a chosen wavelength
-- [ ] Power on rays: Fresnel transmission at uncoated refracting surfaces (unpolarised until Jones vectors arrive), bulk absorption along each segment, ideal mirrors
-- [ ] Power ledger per ray: carried + reflected + absorbed = launched, to 1e-12 relative
+- [x] Fresnel s/p amplitude and power coefficients, with total internal reflection
+- [x] Media in the sequential trace come from materials, evaluated at each ray's wavelength; paraxial analysis at a chosen wavelength
+- [x] Power on rays: Fresnel transmission at uncoated refracting surfaces (unpolarised until Jones vectors arrive), bulk absorption along each segment, ideal mirrors
+- [x] Power ledger per ray: carried + reflected + absorbed = launched, to 1e-12 relative
 
 ## M2b Analyses (optobench-analysis, L4)
 - [ ] Aperture stop, entrance pupil and field definition; ray aiming for on- and off-axis fields

@@ -2,7 +2,7 @@
 //!
 //! Every reference value comes from a closed-form result, cited where it is used. Every
 //! traced ray also checks the trace invariants of docs/design.md, Tests and validation:
-//! unit-length directions and conserved power (no losses are modelled in M1).
+//! unit-length directions and the power ledger (carried + reflected + absorbed = launched).
 
 use optobench_math::Vec3;
 use optobench_surfaces::{Aperture, Conic, Plane, Sphere};
@@ -22,9 +22,10 @@ fn completed(result: TraceResult) -> Ray {
         (result.ray.direction.length() - 1.0).abs() < 1e-12,
         "direction stays unit length"
     );
+    let ledger = result.ray.power + result.reflected_power + result.absorbed_power;
     assert!(
-        (result.ray.power - POWER).abs() < 1e-15,
-        "power is conserved"
+        (ledger - POWER).abs() < 1e-12 * POWER,
+        "power ledger balances"
     );
     result.ray
 }
@@ -37,7 +38,7 @@ fn axis_crossing(ray: &Ray) -> f64 {
 /// A singlet in air: radii r1, r2 (mm), centre thickness t (mm), index n.
 fn singlet(r1: f64, r2: f64, t: f64, n: f64) -> SequentialSystem {
     SequentialSystem {
-        object_index: 1.0,
+        object_medium: 1.0.into(),
         surfaces: vec![
             SequentialSurface::refracting(Sphere::from_radius(r1), t, n),
             SequentialSurface::refracting(Sphere::from_radius(r2), 0.0, 1.0),
@@ -48,11 +49,12 @@ fn singlet(r1: f64, r2: f64, t: f64, n: f64) -> SequentialSystem {
 #[test]
 fn thin_lens_in_air_follows_the_lensmaker_equation() {
     // Lensmaker's equation for a thin lens in air: 1/f = (n − 1)(1/R₁ − 1/R₂)
-    // (Hecht, Optics, 5th ed., §5.2.3).
+    // (Hecht, Optics, 5th ed., ch. 5).
     for (r1, r2, n) in [(50.0, -50.0, 1.5), (40.0, 120.0, 1.7), (-80.0, 60.0, 1.45)] {
         let expected = 1.0 / ((n - 1.0) * (1.0 / r1 - 1.0 / r2));
         let points = singlet(r1, r2, 0.0, n)
-            .cardinal_points()
+            .cardinal_points(WAVELENGTH)
+            .expect("constant media")
             .expect("non-zero power");
         assert!((points.effective_focal_length - expected).abs() < 1e-9 * expected.abs());
         // A thin lens has its principal planes at the lens: BFL = FFL = f.
@@ -63,7 +65,7 @@ fn thin_lens_in_air_follows_the_lensmaker_equation() {
 
 #[test]
 fn thick_singlet_matches_the_thick_lens_formulas() {
-    // Thick lens in air (Hecht, Optics, 5th ed., §6.1):
+    // Thick lens in air (Hecht, Optics, 5th ed., ch. 6):
     //   1/f = (n − 1) [1/R₁ − 1/R₂ + (n − 1) t / (n R₁ R₂)]
     //   BFL = f − f (n − 1) t / (n R₁)
     //   FFL = f + f (n − 1) t / (n R₂)
@@ -77,7 +79,10 @@ fn thick_singlet_matches_the_thick_lens_formulas() {
     let h_rear = -f * (n - 1.0) * t / (n * r1);
 
     let system = singlet(r1, r2, t, n);
-    let points = system.cardinal_points().expect("non-zero power");
+    let points = system
+        .cardinal_points(WAVELENGTH)
+        .expect("constant media")
+        .expect("non-zero power");
     assert!((points.effective_focal_length - f).abs() < 1e-9);
     assert!((points.back_focal_length - bfl).abs() < 1e-9);
     assert!((points.front_focal_length - ffl).abs() < 1e-9);
@@ -86,7 +91,7 @@ fn thick_singlet_matches_the_thick_lens_formulas() {
 
     // Real rays close to the axis focus at the paraxial back focus. The gap is
     // longitudinal spherical aberration, which to third order grows as h² (Hecht, Optics,
-    // 5th ed., §6.3.1), so gap / h² must settle to a constant as h shrinks.
+    // 5th ed., ch. 6), so gap / h² must settle to a constant as h shrinks.
     let last_vertex = system.placement(1).translation.z;
     let ratios: Vec<f64> = [0.1, 0.01, 0.001]
         .iter()
@@ -112,7 +117,7 @@ fn parabolic_mirror_focuses_collimated_light_to_one_point() {
     let radius = -200.0;
     let focus = radius / 2.0;
     let mirror = |conic: f64| SequentialSystem {
-        object_index: 1.0,
+        object_medium: 1.0.into(),
         surfaces: vec![
             SequentialSurface::reflecting(
                 Conic {
@@ -141,10 +146,13 @@ fn parabolic_mirror_focuses_collimated_light_to_one_point() {
     // The paraxial trace agrees: the back focus of the mirror alone lies R/2 from its
     // vertex, and its effective focal length is −R/2 = 100 mm (a converging mirror).
     let mirror_only = SequentialSystem {
-        object_index: 1.0,
+        object_medium: 1.0.into(),
         surfaces: parabola.surfaces.into_iter().take(1).collect(),
     };
-    let points = mirror_only.cardinal_points().expect("non-zero power");
+    let points = mirror_only
+        .cardinal_points(WAVELENGTH)
+        .expect("constant media")
+        .expect("non-zero power");
     assert!((points.back_focal_length - focus).abs() < 1e-9);
     assert!((points.effective_focal_length + radius / 2.0).abs() < 1e-9);
 
@@ -157,9 +165,9 @@ fn parabolic_mirror_focuses_collimated_light_to_one_point() {
 #[test]
 fn optical_path_is_equal_for_all_rays_to_a_perfect_focus() {
     // Fermat's principle: every ray from a plane wavefront to a perfect focus has the same
-    // optical path length (Born & Wolf, Principles of Optics, 7th ed., §3.3).
+    // optical path length (Born & Wolf, Principles of Optics, 7th ed., ch. 3).
     let system = SequentialSystem {
-        object_index: 1.0,
+        object_medium: 1.0.into(),
         surfaces: vec![
             SequentialSurface::reflecting(
                 Conic {
@@ -195,7 +203,7 @@ fn trace_reports_vignetting_misses_and_total_internal_reflection() {
     // Inside a glass block, a ray steeper than the critical angle cannot leave through
     // the flat back face (sin θ_c = 1/1.5, θ_c ≈ 41.8°; Hecht, Optics, 5th ed., ch. 4).
     let block = SequentialSystem {
-        object_index: 1.5,
+        object_medium: 1.5.into(),
         surfaces: vec![SequentialSurface::refracting(Plane, 0.0, 1.0)],
     };
     let steep = 45.0_f64.to_radians();
@@ -206,5 +214,41 @@ fn trace_reports_vignetting_misses_and_total_internal_reflection() {
     assert_eq!(
         result.status,
         Status::TotalInternalReflection { surface: 0 }
+    );
+}
+
+#[test]
+fn dispersive_thin_lens_follows_the_lensmaker_equation_at_each_wavelength() {
+    // With a dispersive glass, the lensmaker equation holds with n(λ) at each wavelength,
+    // so a positive lens focuses blue light closer (longitudinal chromatic aberration;
+    // Hecht, Optics, 5th ed., ch. 6). Illustrative Cauchy coefficients, not a real glass.
+    use optobench_materials::{Cauchy, Material};
+    let glass = Cauchy {
+        coefficients: vec![1.5, 0.004],
+        range: (0.4, 0.8),
+    };
+    let (r1, r2) = (60.0, -60.0);
+    let lens = SequentialSystem {
+        object_medium: 1.0.into(),
+        surfaces: vec![
+            SequentialSurface::refracting(Sphere::from_radius(r1), 0.0, glass.clone()),
+            SequentialSurface::refracting(Sphere::from_radius(r2), 0.0, 1.0),
+        ],
+    };
+    let focal_length = |wavelength: f64| {
+        lens.cardinal_points(wavelength)
+            .expect("in range")
+            .expect("non-zero power")
+            .effective_focal_length
+    };
+    for wavelength in [0.45, 0.55, 0.65] {
+        let n = glass.refractive_index(wavelength).expect("in range");
+        let expected = 1.0 / ((n - 1.0) * (1.0 / r1 - 1.0 / r2));
+        assert!((focal_length(wavelength) - expected).abs() < 1e-9);
+    }
+    assert!(focal_length(0.45) < focal_length(0.65));
+    assert!(
+        lens.cardinal_points(0.9).is_err(),
+        "outside the glass's range"
     );
 }

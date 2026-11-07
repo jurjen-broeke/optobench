@@ -5,6 +5,15 @@ with the release that introduced them.
 
 ## Unreleased
 
+- M2a dispersion models and power on rays:
+  - `optobench-materials`: `Material` trait (n, k, absorption coefficient; errors outside
+    the valid range), models Constant, Sellmeier, Schott, Cauchy and Tabulated n,k.
+  - `optobench-trace`: Fresnel s/p amplitude and power coefficients; media are
+    materials evaluated at each ray's wavelength; uncoated surfaces lose the Fresnel
+    reflection, media absorb by Beer–Lambert, and every ray carries a power ledger.
+  - API change: `object_index`/`index_after` become `object_medium`/`medium_after`
+    (a plain `f64` still works), and paraxial analysis takes a wavelength.
+  - Literature citations now name the chapter, not the section.
 - M1 sequential core:
   - `optobench-math`: `Rotation` (axis-angle), rigid `Transform`, `Frame`, degree helpers
     for the boundary, Newton and bracket-safeguarded Newton root finding.
