@@ -59,10 +59,13 @@ fn golden_cage_relay_traces_from_step() {
     // Theory (header of cage-relay.optobench): magnification −1, so the point 2 mm off
     // axis images 2 mm on the other side; four uncoated faces near normal incidence pass
     // 0.96⁴ (Fresnel; Hecht, Optics, 5th ed., ch. 4); nothing is clipped.
-    assert!((number(&image["centroid_mm"][1]) + 2.0).abs() < 1e-3);
-    assert!(number(&image["centroid_mm"][0]).abs() < 1e-9);
-    assert!((number(&image["power_w"]) / 0.001 - 0.96_f64.powi(4)).abs() < 1e-3);
-    assert_eq!(result["clipping"].as_array().map(Vec::len), Some(0));
+    assert!((number(&image["direct_centroid_mm"][1]) + 2.0).abs() < 1e-3);
+    assert!(number(&image["direct_centroid_mm"][0]).abs() < 1e-9);
+    assert!((number(&image["direct_power_w"]) / 0.001 - 0.96_f64.powi(4)).abs() < 1e-3);
+    // The direct beam passes the plates' bores; only ghosts (stray reflections) reach
+    // the mounts.
+    let clipped = number(&result["ledger"]["clipped_w"]) / 0.001;
+    assert!(clipped < 0.05, "{clipped}");
     assert!(number(&result["ledger"]["imbalance_w"]).abs() < 1e-15);
     // And it reproduces its expected report.
     result.as_object_mut().map(|o| o.remove("scene"));

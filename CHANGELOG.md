@@ -5,6 +5,13 @@ with the release that introduced them.
 
 ## Unreleased
 
+- M5a power physics: ray splitting at partly reflecting faces down to a cutoff (default
+  1e-6 of the source power, `[trace]` in layout and sidecar files), with the power
+  ledger gaining "below cutoff"; coatings as thin-film stacks (characteristic matrices,
+  absorbing layers) and measured R/T curves (`optobench_trace::coating`); footprints of
+  the direct beam on every optical element; detectors report the direct image beside the
+  total. `optobench_math::Complex`. Splitting is on by default, so reports change: total
+  detector power now includes ghosts.
 - M4d: golden cage relay from SolidCraft primitives with its sidecar and expected report
   (committed), re-export test, and the `export-placements` command (poses and a sidecar
   skeleton from a layout). The geometry fingerprint now includes the body's size. M4 is

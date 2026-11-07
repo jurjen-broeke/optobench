@@ -26,15 +26,29 @@ fn planar_relay_images_with_magnification_minus_one() {
     let result = trace("planar-relay.optobench");
     let image = &result["detectors"][0];
     // Object 2 mm above the axis; a 4f relay of identical lenses images it 2 mm below.
-    assert!((number(&image["centroid_mm"][1]) + 2.0).abs() < 1e-3);
-    assert!(number(&image["centroid_mm"][0]).abs() < 1e-9);
+    assert!((number(&image["direct_centroid_mm"][1]) + 2.0).abs() < 1e-3);
+    assert!(number(&image["direct_centroid_mm"][0]).abs() < 1e-9);
     // f/57 cone: the residual spherical aberration leaves a spot of a few µm.
-    assert!(number(&image["rms_radius_mm"]) < 0.01);
-    // Four uncoated faces near normal incidence: 0.96⁴ of the power, nothing clipped
-    // (Fresnel at normal incidence, Hecht, Optics, 5th ed., ch. 4).
-    let fraction = number(&image["power_w"]) / number(&result["ledger"]["launched_w"]);
-    assert!((fraction - 0.96_f64.powi(4)).abs() < 1e-3, "{fraction}");
-    assert_eq!(result["clipping"].as_array().map(Vec::len), Some(0));
+    assert!(number(&image["direct_rms_radius_mm"]) < 0.01);
+    // Four uncoated faces near normal incidence: 0.96⁴ of the power arrives directly
+    // (Fresnel at normal incidence, Hecht, Optics, 5th ed., ch. 4); ghosts from the
+    // reflections between the faces add well under 0.1 %.
+    let launched = number(&result["ledger"]["launched_w"]);
+    let direct = number(&image["direct_power_w"]) / launched;
+    assert!((direct - 0.96_f64.powi(4)).abs() < 1e-3, "{direct}");
+    let ghosts = number(&image["power_w"]) / launched - direct;
+    assert!((0.0..1e-3).contains(&ghosts), "{ghosts}");
+    // The cone of 1° from 99.33 mm, offset 2 mm, fills (99.33 tan 1° + 2)/11.45 of L1's
+    // clear aperture radius.
+    let l1 = result["footprints"]
+        .as_array()
+        .and_then(|f| f.iter().find(|f| f["id"] == "L1"))
+        .expect("L1");
+    let expected = (99.3289 * 1f64.to_radians().tan() + 2.0) / 11.45;
+    assert!(
+        (number(&l1["clear_aperture_used"]) - expected).abs() < 5e-3,
+        "{l1}"
+    );
     balanced(&result);
 }
 
@@ -56,13 +70,16 @@ fn table_periscope_raises_the_beam_without_clipping() {
 #[test]
 fn narrow_tube_clipping_is_reported() {
     let result = trace("planar-relay-clipped.optobench");
-    let clipping = &result["clipping"][0];
+    let clipping = result["clipping"]
+        .as_array()
+        .and_then(|c| c.iter().find(|c| c["id"] == "narrow-tube"))
+        .expect("the tube clips");
     assert_eq!(clipping["id"], "narrow-tube");
     assert_eq!(clipping["kind"], "proxy");
     let fraction = number(&clipping["fraction"]);
     assert!(fraction > 0.1 && fraction < 0.9, "{fraction}");
     // What gets through still images at the same place.
-    assert!((number(&result["detectors"][0]["centroid_mm"][1]) + 2.0).abs() < 1e-2);
+    assert!((number(&result["detectors"][0]["direct_centroid_mm"][1]) + 2.0).abs() < 1e-2);
     balanced(&result);
 }
 
@@ -97,8 +114,8 @@ fn sidecar_with_step_traces_through_the_command() {
         .run("trace", &json!({ "path": path }))
         .expect("the sidecar traces");
     let focus = &result["detectors"][0];
-    assert!(number(&focus["rms_radius_mm"]) < 5e-3);
-    assert!(number(&focus["centroid_mm"][0]).abs() < 1e-9);
+    assert!(number(&focus["direct_rms_radius_mm"]) < 5e-3);
+    assert!(number(&focus["direct_centroid_mm"][0]).abs() < 1e-9);
     balanced(&result);
     let step = format!(
         "{}/../optobench-io/tests/step/lens.step",

@@ -56,6 +56,10 @@
 //! size = 50.0
 //! at = 50.0
 //!
+//! [trace]                           # optional: ray splitting at partly reflecting faces
+//! split = true                      # default true
+//! split_cutoff = 1e-6               # fraction of the total source power; default 1e-6
+//!
 //! [[detector]]
 //! id = "screen"
 //! at = 300.0
@@ -318,6 +322,37 @@ pub(crate) fn medium(
     }
 }
 
+/// The `[trace]` table: `split = true | false` (default true) and `split_cutoff`, the
+/// fraction of the total source power below which a reflected part is not followed
+/// (default 1e-6). Returns the cutoff, or `None` with splitting off.
+pub(crate) fn trace_options(root: &Table) -> Result<Option<f64>, FileError> {
+    let Some(value) = root.get("trace") else {
+        return Ok(Some(optobench_scene::DEFAULT_SPLIT_CUTOFF));
+    };
+    let table = value
+        .as_table()
+        .ok_or_else(|| error("[trace] must be a table"))?;
+    check_keys(table, &["split", "split_cutoff"], "[trace]")?;
+    let item = Item {
+        table,
+        context: "[trace]".into(),
+    };
+    let split = match table.get("split") {
+        None => true,
+        Some(v) => v
+            .as_bool()
+            .ok_or_else(|| error("[trace]: `split` must be true or false"))?,
+    };
+    if !split {
+        return Ok(None);
+    }
+    let cutoff = item.optional_number("split_cutoff", optobench_scene::DEFAULT_SPLIT_CUTOFF)?;
+    if !(cutoff > 0.0 && cutoff < 1.0) {
+        return Err(error("[trace]: `split_cutoff` must be between 0 and 1"));
+    }
+    Ok(Some(cutoff))
+}
+
 /// Checks the first two lines: the format tag and the kind.
 pub(crate) fn check_header(text: &str) -> Result<(), FileError> {
     let mut lines = text
@@ -375,6 +410,7 @@ pub fn parse(text: &str, lookup: &MaterialLookup) -> Result<Scene, FileError> {
             "element",
             "proxy",
             "detector",
+            "trace",
         ],
         "top level",
     )?;
@@ -448,6 +484,7 @@ pub fn parse(text: &str, lookup: &MaterialLookup) -> Result<Scene, FileError> {
         proxies: Vec::new(),
         detectors: Vec::new(),
         solids: Vec::new(),
+        split_cutoff: trace_options(&root)?,
     };
 
     for item in items(&root, "source")? {
@@ -783,6 +820,21 @@ mod tests {
         let error = read("format = \"optobench/1\"\nkind = \"sidecar\"\nlayout = \"planar\"\n")
             .expect_err("rejected");
         assert!(error.0.contains("kind = \"layout\""));
+    }
+
+    #[test]
+    fn trace_options_set_or_switch_off_splitting() {
+        let scene = read(HEADER).expect("valid");
+        assert_eq!(
+            scene.split_cutoff,
+            Some(optobench_scene::DEFAULT_SPLIT_CUTOFF)
+        );
+        let off = read(&format!("{HEADER}[trace]\nsplit = false\n")).expect("valid");
+        assert_eq!(off.split_cutoff, None);
+        let finer = read(&format!("{HEADER}[trace]\nsplit_cutoff = 1e-9\n")).expect("valid");
+        assert_eq!(finer.split_cutoff, Some(1e-9));
+        let bad = read(&format!("{HEADER}[trace]\nsplit_cutoff = 2\n")).expect_err("rejected");
+        assert!(bad.0.contains("between 0 and 1"));
     }
 
     #[test]

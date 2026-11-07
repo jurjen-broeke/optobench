@@ -224,7 +224,7 @@ fn facing_mirrors_reach_the_interaction_limit() {
     let disk = Region::Disk { radius: 10.0 };
     let mirror = Role::Mirror { clear_radius: None };
     system.faces = vec![
-        plane(0.0, disk, mirror, AIR, AIR),
+        plane(0.0, disk, mirror.clone(), AIR, AIR),
         plane(10.0, disk, mirror, AIR, AIR),
     ];
     let (records, ledger) = system.trace_all([ray(Vec3::new(0.0, 0.0, 5.0), Vec3::Z)]);
@@ -298,5 +298,140 @@ fn touching_solids_refract_once_at_their_shared_face() {
     // Optical path: 5 mm of each glass plus the air before and after.
     let path = 5.0 + 1.5 * 5.0 + 1.7 * 5.0 + 10.0;
     assert!((record.ray.optical_path - path).abs() < 1e-9);
+    assert!(balanced(&ledger));
+}
+
+#[test]
+fn splitting_sums_the_multiple_reflections_of_a_plate() {
+    // An uncoated plate (n = 1.5) at normal incidence, with every internal reflection
+    // followed. Adding the reflections incoherently gives T_total = T²/(1 − R²) and
+    // R_total = R + R T²/(1 − R²), with R = 0.04 and T = 0.96 per face (Hecht, Optics,
+    // 5th ed., ch. 9, multiple-beam interference, intensities summed).
+    let mut system = NonSequentialSystem::new(1.0.into());
+    let glass = system.add_medium(1.5.into());
+    let disk = Region::Disk { radius: 50.0 };
+    let detector_at = |z: f64, id: usize| {
+        plane(
+            z,
+            Region::Rectangle {
+                half_width: 100.0,
+                half_height: 100.0,
+            },
+            Role::Detector { detector: id },
+            AIR,
+            AIR,
+        )
+    };
+    system.faces = vec![
+        plane(0.0, disk, REFRACT, AIR, glass),
+        plane(5.0, disk, REFRACT, glass, AIR),
+        detector_at(20.0, 0),  // transmitted
+        detector_at(-20.0, 1), // reflected (the ray starts after it)
+    ];
+    system.split_cutoff = Some(1e-12);
+    system.build_index();
+    let (records, ledger) = system.trace_all([ray(Vec3::new(0.0, 0.0, -10.0), Vec3::Z)]);
+    let detected = |id: usize| -> f64 {
+        records
+            .iter()
+            .filter(|r| matches!(r.end, End::Detected { detector, .. } if detector == id))
+            .map(|r| r.ray.power)
+            .sum()
+    };
+    let (r, t) = (0.04, 0.96);
+    let transmitted = t * t / (1.0 - r * r);
+    let reflected = r + r * t * t / (1.0 - r * r);
+    assert!(
+        (detected(0) - transmitted).abs() < 1e-10,
+        "{} vs {transmitted}",
+        detected(0)
+    );
+    assert!(
+        (detected(1) - reflected).abs() < 1e-10,
+        "{} vs {reflected}",
+        detected(1)
+    );
+    assert!(ledger.below_cutoff < 1e-10 && balanced(&ledger));
+    assert!(
+        records.iter().any(|r| r.generation >= 4),
+        "deep reflections were followed"
+    );
+}
+
+#[test]
+fn dichroic_curve_splits_a_beam_at_45_degrees() {
+    // A plate whose front face carries a measured curve: at 0.633 µm it reflects 90 % and
+    // transmits 10 %; the back face has an ideal anti-reflection coating. A beam at 45°
+    // splits accordingly into a reflected and a transmitted detector.
+    use optobench_math::Rotation;
+    use optobench_trace::coating::CoatingCurve;
+    let curve = CoatingCurve::new(vec![(0.6, 0.9, 0.1), (0.7, 0.9, 0.1)]).expect("valid");
+    let dichroic = Role::Refract {
+        coating: Coating::Curve(Arc::new(curve)),
+        clear_radius: None,
+    };
+    let mut system = NonSequentialSystem::new(1.0.into());
+    let glass = system.add_medium(1.5.into());
+    let tilt = |z: f64| {
+        Transform::new(
+            Rotation::from_axis_angle(Vec3::X, core::f64::consts::FRAC_PI_4).expect("axis"),
+            Vec3::new(0.0, 0.0, 0.0),
+        ) * at(z)
+    };
+    let disk = Region::Disk { radius: 30.0 };
+    let face = |z: f64, role: Role, negative: usize, positive: usize| Face {
+        placement: tilt(z),
+        ..plane(0.0, disk, role, negative, positive)
+    };
+    let screen = |position: Vec3, axis: Vec3, id: usize| Face {
+        placement: Transform::new(
+            optobench_math::Frame::new(position, axis, Vec3::X)
+                .expect("frame")
+                .transform()
+                .rotation,
+            position,
+        ),
+        ..plane(
+            0.0,
+            Region::Rectangle {
+                half_width: 50.0,
+                half_height: 50.0,
+            },
+            Role::Detector { detector: id },
+            AIR,
+            AIR,
+        )
+    };
+    system.faces = vec![
+        face(0.0, dichroic, glass, AIR),
+        face(
+            -3.0,
+            Role::Refract {
+                coating: Coating::Ideal,
+                clear_radius: None,
+            },
+            AIR,
+            glass,
+        ),
+        // The plate's normal is (0, −1, 1)/√2: light coming down −z reflects to −y and
+        // passes on down −z.
+        screen(Vec3::new(0.0, 0.0, -60.0), -Vec3::Z, 0),
+        screen(Vec3::new(0.0, -60.0, 0.0), -Vec3::Y, 1),
+    ];
+    system.split_cutoff = Some(1e-9);
+    system.build_index();
+    let launched = Ray::new(Vec3::new(0.0, 0.0, 40.0), -Vec3::Z, 0.633, 1.0).expect("ray");
+    // Travelling down onto the coated face from its outer side.
+    let (records, ledger) = system.trace_all([launched]);
+    let power = |id: usize| -> f64 {
+        records
+            .iter()
+            .filter(|r| matches!(r.end, End::Detected { detector, .. } if detector == id))
+            .map(|r| r.ray.power)
+            .sum()
+    };
+    assert!((power(1) - 0.9).abs() < 1e-12, "reflected {}", power(1));
+    // 10 % enters the glass and leaves through the ideal back face.
+    assert!((power(0) - 0.1).abs() < 1e-12, "transmitted {}", power(0));
     assert!(balanced(&ledger));
 }

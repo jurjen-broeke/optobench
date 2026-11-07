@@ -58,6 +58,7 @@ fn empty() -> Scene {
         proxies: vec![],
         detectors: vec![],
         solids: vec![],
+        split_cutoff: None,
     }
 }
 

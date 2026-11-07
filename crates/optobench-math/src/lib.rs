@@ -8,11 +8,13 @@
 
 #![forbid(unsafe_code)]
 
+mod complex;
 mod linear;
 mod root;
 mod transform;
 mod vector;
 
+pub use complex::Complex;
 pub use linear::{LeastSquaresError, least_squares};
 pub use root::{Root, RootError, find_root, find_root_bracketed};
 pub use transform::{Frame, Rotation, Transform};

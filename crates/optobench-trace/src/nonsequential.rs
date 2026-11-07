@@ -39,9 +39,9 @@ use optobench_surfaces::brep::{Aabb, BrepFace};
 
 use crate::bvh::Bvh;
 
-use crate::interaction::{Refraction, fresnel_power, reflect, refract};
+use crate::coating::{Coating, Incidence};
+use crate::interaction::{Refraction, reflect, refract};
 use crate::ray::Ray;
-use crate::sequential::Coating;
 
 /// Hits closer than this to a ray's origin are ignored, so a ray leaving a face does not
 /// hit it again through rounding (mm).
@@ -122,7 +122,7 @@ impl Region {
 }
 
 /// What a face does to a ray.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Role {
     /// Refraction between the face's two media. Hits beyond `clear_radius` (if given)
     /// are clipped at the element's edge instead.
@@ -260,6 +260,27 @@ impl Face {
     }
 }
 
+/// A ray waiting to be traced: launched, or split off another.
+#[derive(Debug, Clone)]
+pub struct Branch {
+    ray: Ray,
+    medium: usize,
+    generation: usize,
+    /// Faces to ignore within [`COINCIDENT`] of the start (just handled).
+    skip: Vec<usize>,
+}
+
+impl Branch {
+    fn root(ray: Ray, medium: usize) -> Self {
+        Self {
+            ray,
+            medium,
+            generation: 0,
+            skip: Vec::new(),
+        }
+    }
+}
+
 /// How a ray's trip ended.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum End {
@@ -300,12 +321,23 @@ pub struct RayRecord {
     pub points: Vec<Vec3>,
     /// How it ended.
     pub end: End,
-    /// Power reflected out of the path at uncoated faces (W).
+    /// Power reflected out of the path and not followed, because splitting is off (W).
     pub reflected_power: f64,
-    /// Power absorbed in media (W).
+    /// Power reflected at faces but below the splitting cutoff, so not followed (W).
+    pub below_cutoff_power: f64,
+    /// Power handed to child rays at partly reflecting faces (W); counted where those
+    /// children end, not here.
+    pub split_power: f64,
+    /// Power absorbed in media and coatings (W).
     pub absorbed_power: f64,
     /// For a detected ray: the hit in the detector face's local frame (x, y).
     pub detector_point: Option<(f64, f64)>,
+    /// The face of each hit, in the order of `points[1..]`.
+    pub faces: Vec<usize>,
+    /// The power arriving at each hit (W), in the order of `points[1..]`.
+    pub powers: Vec<f64>,
+    /// 0 for a launched ray, 1 for a ray split off a launched ray, and so on.
+    pub generation: usize,
 }
 
 /// Power totals over many rays (W).
@@ -325,6 +357,8 @@ pub struct Ledger {
     pub escaped: f64,
     /// Still carried by rays that reached the interaction limit or an undefined medium.
     pub stopped: f64,
+    /// Reflected below the splitting cutoff, so not followed.
+    pub below_cutoff: f64,
 }
 
 impl Ledger {
@@ -336,13 +370,18 @@ impl Ledger {
                 + self.absorbed
                 + self.reflected
                 + self.escaped
-                + self.stopped)
+                + self.stopped
+                + self.below_cutoff)
     }
 
     fn add(&mut self, record: &RayRecord) {
-        self.launched += record.launched.power;
+        // A child's power came from its parent's split, not from a source.
+        if record.generation == 0 {
+            self.launched += record.launched.power;
+        }
         self.absorbed += record.absorbed_power;
         self.reflected += record.reflected_power;
+        self.below_cutoff += record.below_cutoff_power;
         let remaining = record.ray.power;
         match record.end {
             End::Detected { .. } => self.detected += remaining,
@@ -364,6 +403,11 @@ pub struct NonSequentialSystem {
     pub start_medium: usize,
     /// The most interactions a ray may have.
     pub interaction_limit: usize,
+    /// Splitting: reflected power at partly reflecting faces is followed as a child ray
+    /// when it is at least this many watts, and booked as below the cutoff otherwise.
+    /// `None` (the default) follows only the transmitted part and books the reflection as
+    /// reflected.
+    pub split_cutoff: Option<f64>,
     /// The search index over `faces`, if built, with the faces' bounding boxes.
     index: Option<(Bvh, Vec<Aabb>)>,
 }
@@ -376,6 +420,7 @@ impl NonSequentialSystem {
             faces: Vec::new(),
             start_medium: 0,
             interaction_limit: DEFAULT_INTERACTION_LIMIT,
+            split_cutoff: None,
             index: None,
         }
     }
@@ -459,19 +504,41 @@ impl NonSequentialSystem {
             .min_by(|a, b| a.1.distance.total_cmp(&b.1.distance))
     }
 
-    /// Traces one ray.
+    /// Traces one ray along its main branch (children split off it are not followed; see
+    /// [`NonSequentialSystem::trace_tree`]).
     pub fn trace(&self, launched: Ray) -> RayRecord {
+        let mut children = Vec::new();
+        self.trace_branch(Branch::root(launched, self.start_medium), &mut children)
+    }
+
+    /// Traces one ray and every ray split off it: the launched ray's record first.
+    pub fn trace_tree(&self, launched: Ray) -> Vec<RayRecord> {
+        let mut pending = vec![Branch::root(launched, self.start_medium)];
+        let mut records = Vec::new();
+        while let Some(branch) = pending.pop() {
+            records.push(self.trace_branch(branch, &mut pending));
+        }
+        records
+    }
+
+    fn trace_branch(&self, branch: Branch, children: &mut Vec<Branch>) -> RayRecord {
+        let launched = branch.ray;
         let mut record = RayRecord {
             launched,
             ray: launched,
             points: vec![launched.position],
             end: End::Escaped,
             reflected_power: 0.0,
+            below_cutoff_power: 0.0,
+            split_power: 0.0,
             absorbed_power: 0.0,
             detector_point: None,
+            faces: Vec::new(),
+            powers: Vec::new(),
+            generation: branch.generation,
         };
-        let mut medium = self.start_medium;
-        let mut skip: Vec<usize> = Vec::new();
+        let mut medium = branch.medium;
+        let mut skip: Vec<usize> = branch.skip;
         for _ in 0..self.interaction_limit {
             let (index_here, alpha) = match self.medium(medium, launched.wavelength) {
                 Ok(values) => values,
@@ -503,10 +570,12 @@ impl NonSequentialSystem {
             ray.power *= kept;
             ray.position = face.placement.apply_point(hit.point);
             record.points.push(ray.position);
+            record.faces.push(face_index);
+            record.powers.push(ray.power);
 
             let r = hit.point.x.hypot(hit.point.y);
             let outside_clear = |clear: Option<f64>| clear.is_some_and(|c| r > c);
-            match face.role {
+            match &face.role {
                 Role::Absorber => {
                     record.end = End::Clipped { face: face_index };
                     return record;
@@ -514,13 +583,13 @@ impl NonSequentialSystem {
                 Role::Detector { detector } => {
                     record.end = End::Detected {
                         face: face_index,
-                        detector,
+                        detector: *detector,
                     };
                     record.detector_point = Some((hit.point.x, hit.point.y));
                     return record;
                 }
                 Role::Mirror { clear_radius } => {
-                    if outside_clear(clear_radius) {
+                    if outside_clear(*clear_radius) {
                         record.end = End::Clipped { face: face_index };
                         return record;
                     }
@@ -531,7 +600,7 @@ impl NonSequentialSystem {
                     coating,
                     clear_radius,
                 } => {
-                    if outside_clear(clear_radius) {
+                    if outside_clear(*clear_radius) {
                         record.end = End::Clipped { face: face_index };
                         return record;
                     }
@@ -568,13 +637,42 @@ impl NonSequentialSystem {
                     };
                     match refract(ray.direction, normal, n1, n2) {
                         Refraction::Refracted(direction) => {
-                            if coating == Coating::Uncoated {
-                                let cosine = normal.dot(ray.direction).abs();
-                                let transmitted =
-                                    fresnel_power(cosine, n1, n2).unpolarised_transmittance();
-                                record.reflected_power += ray.power * (1.0 - transmitted);
-                                ray.power *= transmitted;
+                            let incidence = Incidence {
+                                wavelength: launched.wavelength,
+                                cos_incidence: normal.dot(ray.direction).abs(),
+                                index_from: n1,
+                                index_to: n2,
+                                from_outside: !towards_positive,
+                            };
+                            let response = match coating.response(&incidence) {
+                                Ok(r) => r,
+                                Err(error) => {
+                                    record.end = End::MaterialUndefined { medium: to, error };
+                                    return record;
+                                }
+                            };
+                            let reflected = ray.power * response.reflectance;
+                            record.absorbed_power += ray.power * response.absorptance();
+                            match self.split_cutoff {
+                                Some(cutoff) if reflected > 0.0 && reflected >= cutoff => {
+                                    // The reflected part goes on as a child ray, back into
+                                    // the medium it came from.
+                                    children.push(Branch {
+                                        ray: Ray {
+                                            direction: reflect(ray.direction, normal),
+                                            power: reflected,
+                                            ..*ray
+                                        },
+                                        medium: from,
+                                        generation: branch.generation + 1,
+                                        skip: skip.clone(),
+                                    });
+                                    record.split_power += reflected;
+                                }
+                                Some(_) => record.below_cutoff_power += reflected,
+                                None => record.reflected_power += reflected,
                             }
+                            ray.power *= response.transmittance;
                             ray.direction = direction;
                             medium = to;
                         }
@@ -590,17 +688,17 @@ impl NonSequentialSystem {
         record
     }
 
-    /// Traces many rays and totals their power.
+    /// Traces many rays, and with splitting every ray split off them, and totals their
+    /// power.
     pub fn trace_all(&self, rays: impl IntoIterator<Item = Ray>) -> (Vec<RayRecord>, Ledger) {
         let mut ledger = Ledger::default();
-        let records: Vec<RayRecord> = rays
-            .into_iter()
-            .map(|ray| {
-                let record = self.trace(ray);
+        let mut records = Vec::new();
+        for ray in rays {
+            for record in self.trace_tree(ray) {
                 ledger.add(&record);
-                record
-            })
-            .collect();
+                records.push(record);
+            }
+        }
         (records, ledger)
     }
 }

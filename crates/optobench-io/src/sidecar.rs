@@ -347,6 +347,7 @@ pub fn parse(text: &str, sidecar: &Path, lookup: &MaterialLookup) -> Result<Scen
             "element",
             "source",
             "detector",
+            "trace",
         ],
         "top level",
     )?;
@@ -374,6 +375,7 @@ pub fn parse(text: &str, sidecar: &Path, lookup: &MaterialLookup) -> Result<Scen
         proxies: Vec::new(),
         detectors: Vec::new(),
         solids: Vec::new(),
+        split_cutoff: crate::scene_file::trace_options(&root)?,
     };
     let mut tagged = vec![false; bodies.len()];
 
@@ -436,7 +438,7 @@ pub fn parse(text: &str, sidecar: &Path, lookup: &MaterialLookup) -> Result<Scen
                         faces: bodies[i].faces.clone(),
                         role: SolidRole::Lens {
                             material: medium(value, lookup, &item.context)?,
-                            coating,
+                            coating: coating.clone(),
                         },
                     });
                 }
