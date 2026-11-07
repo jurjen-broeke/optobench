@@ -14,11 +14,11 @@ Worked in three parts, one pull request each.
 - [x] Power ledger: launched = detected + clipped + absorbed in media + reflected out + escaped, to 1e-12
 
 ## M3b Scene model (optobench-scene, L3)
-- [ ] Elements: lens (inline surfaces, thicknesses, materials, diameter, clear aperture), mirror; sources: collimated beam, point source; detectors with size and pixels
-- [ ] Mechanical proxies: tube (inner diameter, length), plate with hole (aperture stop)
-- [ ] Planar layout: positions by distance along a folded optical axis, folds by angle
-- [ ] Table layout: positions by grid hole and height on a breadboard, orientations by direction vector
-- [ ] Building the non-sequential system and launching source rays
+- [x] Elements: lens (inline surfaces, thicknesses, materials, diameter, clear aperture), mirror; sources: collimated beam, point source; detectors with size and pixels
+- [x] Mechanical proxies: tube (inner diameter, length), plate with hole (aperture stop)
+- [x] Planar layout: positions by distance along a folded optical axis, folds by angle
+- [x] Table layout: positions by grid hole and height on a breadboard, orientations by direction vector
+- [x] Building the non-sequential system and launching source rays
 
 ## M3c Scene files, trace command, report, layout view
 - [ ] `.optobench` layout file (TOML): format tag, `kind = "layout"`, strict keys with the closest valid key named

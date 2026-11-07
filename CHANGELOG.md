@@ -5,6 +5,11 @@ with the release that introduced them.
 
 ## Unreleased
 
+- M3b scene model (`optobench-scene`): lenses (inline surfaces, thicknesses, materials,
+  diameter, clear aperture, ground edge as an absorber), mirrors, collimated and point
+  sources, tube and plate proxies, detectors with irradiance maps; planar layouts along a
+  folded axis and table layouts on a breadboard grid; building the non-sequential system,
+  launching rays, per-detector results and a clipping list per item.
 - M3a non-sequential trace (`optobench_trace::nonsequential`): faces (surface profile or
   cylinder, placed and bounded by a disk, annulus, rectangle or square with hole) between
   two media; refracting (Fresnel loss, total internal reflection followed), mirror,
