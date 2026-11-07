@@ -14,10 +14,14 @@ Worked in four parts, one pull request each.
   and mm units. Never committed; tests that use them skip when they are absent.
 - **Golden Thorlabs assembly, local only.** `corpus/solidcraft/thorlabs-cage.sc` and its
   STEP export, built in SolidCraft 0.30.1 through its control channel. Optical axis at
-  51.58 mm above the table. On the x arm, from the far end: a PAF2-A4C FiberPort on a
-  CP08FP adapter at the rod ends (x = 302.26 mm), an LA1951-ML in a CP33 plate, and an
-  AC254-030-A in a CXY1A translator; a PF10 mirror at 45° in a KCB1 cube folds the axis
-  into the −y arm, where an AC254-060-A sits in a CP33 plate. Eight ER10 rods; on each
+  51.58 mm above the table. On the x arm, from the far end: a PAF2-A4C FiberPort
+  (collimated output) on a CP08FP adapter at the rod ends (x = 302.26 mm); a relay of an
+  LA1951-ML in a CP33 plate (curved side to the FiberPort, focus 17.6 mm beyond its flat
+  face) and an AC254-030-A in a CXY1A translator (flint side to that focus, front focal
+  length 22.2 mm), which re-collimates; a PF10 mirror at 45° in a KCB1 cube folds the
+  axis into the −y arm, where an AC254-060-A sits in a CP33 plate. Lens spacings are
+  nominal, from catalogue glass indices, and are checked by the trace once real glass
+  data is imported. Eight ER10 rods; on each
   arm a CP33B bracket clamped to the lower rods with a TR30 post. Contains vendor
   geometry, so it is not committed.
 - **Committed golden assemblies.** Built in SolidCraft from its own primitives (plates,
