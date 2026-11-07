@@ -88,12 +88,21 @@ Notes:
 
 ## Decisions needed
 
-- [ ] Approve recommendation 1 (bundle four literature datasets as CC0 transcriptions).
-- [ ] Approve recommendation 2 (manufacturer catalogues are fetch-only, `redistribute = false`).
-- [ ] Approve recommendation 3 (fetch from the literature part of refractiveindex.info).
+- [x] Approve recommendation 1 (bundle four literature datasets as CC0 transcriptions).
+- [x] Approve recommendation 2 (manufacturer catalogues are fetch-only, `redistribute = false`).
+- [x] Approve recommendation 3 (fetch from the literature part of refractiveindex.info).
 - [ ] Original papers available for verification (Malitson 1965, Daimon & Masumura 2007,
-      Hale & Querry 1973, Ciddor 1996), placed in the local `corpus/`.
+      Hale & Querry 1973, Ciddor 1996), placed in the local `corpus/`. Not available yet.
+
+## Open question
+
+Recommendation 4 asks for each bundled value to be checked against its original paper
+before bundling, and the papers are not available yet. Either the four datasets wait for
+the papers, or they are bundled now as transcriptions from the CC0 database, marked "not
+yet verified against the original paper" until checked. Not decided.
 
 ## Decision record
 
-(to be filled in when the decisions above are made: date, decision, by whom)
+| Date | Decision | By |
+| --- | --- | --- |
+| 2026-11-07 | Recommendations 1, 2 and 3 approved. Original papers not available yet. | Jurjen Broeke |
