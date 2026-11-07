@@ -16,8 +16,14 @@ fn fixtures() -> PathBuf {
 }
 
 fn trace(path: &Path) -> Value {
+    // A data directory with no parts library or imported materials, so the user's own
+    // library cannot change the result.
+    let empty = std::env::temp_dir().join(format!("optobench-golden-{}", std::process::id()));
     Registry::standard()
-        .run("trace", &json!({ "path": path.to_string_lossy() }))
+        .run(
+            "trace",
+            &json!({ "path": path.to_string_lossy(), "data_directory": empty.to_string_lossy() }),
+        )
         .expect("traces")
 }
 

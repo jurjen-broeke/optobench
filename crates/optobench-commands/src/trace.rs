@@ -64,9 +64,14 @@ pub(crate) fn trace(parameters: &Parameters) -> Result<Value, CommandError> {
 
     let source = std::fs::read_to_string(path).map_err(|e| failed(format!("{path}: {e}")))?;
     let lookup = |name: &str| material(data.as_deref(), name);
-    let scene = match sidecar::kind_of(&source).as_deref() {
-        Some("sidecar") => sidecar::parse(&source, Path::new(path), &lookup),
-        _ => scene_file::parse(&source, &lookup),
+    let library = match &data {
+        Some(root) => optobench_io::library::load(root).map_err(failed)?,
+        None => optobench_library::Library::default(),
+    };
+    let (scene, parts) = match sidecar::kind_of(&source).as_deref() {
+        Some("sidecar") => sidecar::read(&source, Path::new(path), &lookup, &library)
+            .map(|read| (read.scene, read.parts)),
+        _ => scene_file::parse_with(&source, &lookup, &library).map(|scene| (scene, Vec::new())),
     }
     .map_err(|e| failed(format!("{path}: {e}")))?;
     let built = scene.build().map_err(|e| failed(format!("{path}: {e}")))?;
@@ -129,6 +134,7 @@ pub(crate) fn trace(parameters: &Parameters) -> Result<Value, CommandError> {
         },
         "detectors": detectors,
         "clipping": clipping,
+        "parts": crate::parts::matches_json(&parts),
         "footprints": traced.footprints.iter().map(|f| json!({
             "id": f.id,
             "hits": f.hits,
@@ -192,7 +198,12 @@ pub(crate) fn export_placements(parameters: &Parameters) -> Result<Value, Comman
         .map(PathBuf::from)
         .or_else(default_data_directory);
     let lookup = |name: &str| material(data.as_deref(), name);
-    let scene = scene_file::parse(&source, &lookup).map_err(|e| failed(format!("{path}: {e}")))?;
+    let library = match &data {
+        Some(root) => optobench_io::library::load(root).map_err(failed)?,
+        None => optobench_library::Library::default(),
+    };
+    let scene = scene_file::parse_with(&source, &lookup, &library)
+        .map_err(|e| failed(format!("{path}: {e}")))?;
     let layout: toml::Table = source.parse().map_err(|e| failed(format!("{path}: {e}")))?;
     let input = Path::new(path);
     let stem = input

@@ -140,6 +140,14 @@ pub fn sidecar(scene: &Scene, layout: &Table, step_name: &str) -> String {
             quoted(&element.id),
             quoted(&element.id)
         ));
+        let library = written
+            .and_then(|t| t.get("library"))
+            .and_then(toml::Value::as_str);
+        if let (Some(key), ElementKind::Lens { .. }) = (library, &element.kind) {
+            // The part gives the glass; the sidecar picks its glass bodies by geometry.
+            out.push_str(&format!("library = {}\n", quoted(key)));
+            continue;
+        }
         match &element.kind {
             ElementKind::Lens { materials, .. } => {
                 out.push_str("kind = \"lens\"\n");

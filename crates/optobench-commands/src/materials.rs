@@ -10,7 +10,10 @@ use serde_json::{Value, json};
 
 use crate::{CommandError, ErrorCode, Parameters, check_keys};
 
-fn text<'a>(parameters: &'a Parameters, key: &str) -> Result<Option<&'a str>, CommandError> {
+pub(crate) fn text<'a>(
+    parameters: &'a Parameters,
+    key: &str,
+) -> Result<Option<&'a str>, CommandError> {
     match parameters.get(key) {
         None => Ok(None),
         Some(Value::String(s)) => Ok(Some(s)),
@@ -21,7 +24,7 @@ fn text<'a>(parameters: &'a Parameters, key: &str) -> Result<Option<&'a str>, Co
     }
 }
 
-fn required<'a>(parameters: &'a Parameters, key: &str) -> Result<&'a str, CommandError> {
+pub(crate) fn required<'a>(parameters: &'a Parameters, key: &str) -> Result<&'a str, CommandError> {
     text(parameters, key)?.ok_or_else(|| {
         CommandError::new(
             ErrorCode::InvalidParameters,
@@ -30,7 +33,7 @@ fn required<'a>(parameters: &'a Parameters, key: &str) -> Result<&'a str, Comman
     })
 }
 
-fn flag(parameters: &Parameters, key: &str) -> Result<bool, CommandError> {
+pub(crate) fn flag(parameters: &Parameters, key: &str) -> Result<bool, CommandError> {
     match parameters.get(key) {
         None => Ok(false),
         Some(Value::Bool(b)) => Ok(*b),
@@ -42,7 +45,7 @@ fn flag(parameters: &Parameters, key: &str) -> Result<bool, CommandError> {
 }
 
 /// The data directory: the `data_directory` parameter, or the platform default.
-fn data_directory(parameters: &Parameters) -> Result<PathBuf, CommandError> {
+pub(crate) fn data_directory(parameters: &Parameters) -> Result<PathBuf, CommandError> {
     match text(parameters, "data_directory")? {
         Some(path) => Ok(PathBuf::from(path)),
         None => default_data_directory().ok_or_else(|| {

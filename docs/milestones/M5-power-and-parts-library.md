@@ -26,9 +26,21 @@ unchanged; tracing takes 10.7 s (see design.md, Improvements: performance).
 - [x] Detectors: angular distribution in addition to the irradiance map
 
 ## M5c Parts library
-- [ ] Part format (`kind = "part"`), library in the user data directory, import of parts and of R/T curves
-- [ ] Automatic tagging of library parts on STEP import; radius check against the STEP geometry (> 0.05 mm reported)
-- [ ] Embedded parameters with provenance on save, so a shared design traces without the library
+
+Worked in three steps, one pull request each: c1 parts and tagging, c2 R/T curves and
+coatings in files, c3 embedded parameters.
+
+Vendor STEP product names are internal numbers (`20527-E0W`), but SolidCraft names a
+component after its file, so a part is recognised by product name: its part number or
+one of the `products` it lists. Fingerprints do not survive SolidCraft (it merges faces).
+Within the product, the glass bodies are the ones whose exact faces have the part's radii
+and thicknesses. On the local golden Thorlabs assembly, tagging its three lenses
+automatically traces exactly like the hand-written sidecar.
+- [x] c1: Part format (`kind = "part"`), library in the user data directory, `import-part` and `parts`
+- [x] c1: `library` on layout and sidecar elements
+- [x] c1: Automatic tagging of library parts on STEP import; radius check against the STEP geometry (> 0.05 mm reported)
+- [ ] c2: Import of R/T curves; coatings (curves, thin-film stacks) in part, layout and sidecar files, for filters, dichroics and beamsplitters
+- [ ] c3: Embedded parameters with provenance on save, so a shared design traces without the library
 
 ## Local test parts (corpus)
 Beyond the M4 cage parts: DMLP730B longpass dichroic, CP20D cage iris, CFW6 filter wheel,

@@ -42,6 +42,14 @@
 //! coating = "uncoated"              # or "ideal"; default "uncoated"
 //!
 //! [[element]]
+//! id = "L2"
+//! at = 150.0
+//! library = "thorlabs/LA1951-ML"    # prescription, glasses, diameter, clear aperture and
+//!                                   # coating from the parts library; kind follows the part
+//! reversed = true                   # optional: the part turned around
+//!                                   # (coating and clear_aperture may be given here too)
+//!
+//! [[element]]
 //! id = "M1"
 //! kind = "mirror"
 //! at = 180.0
@@ -78,6 +86,7 @@
 //! the format tag and the kind, a newer format is refused, and an unknown key is an error
 //! naming the closest valid key. Lengths are in mm, angles in degrees.
 
+use optobench_library::{Library, Outline, Part};
 use optobench_materials::Medium;
 use optobench_math::{Frame, Vec3, radians_from_degrees};
 use optobench_scene::layout::{PlanarLayout, TableLayout};
@@ -122,13 +131,7 @@ fn distance(a: &str, b: &str) -> usize {
 }
 
 /// Keys that belong to later milestones, with the milestone.
-const LATER: &[(&str, &str)] = &[
-    (
-        "library",
-        "parts libraries arrive in M5; give the surfaces inline",
-    ),
-    ("dof", "degrees of freedom arrive in M6"),
-];
+const LATER: &[(&str, &str)] = &[("dof", "degrees of freedom arrive in M6")];
 
 /// Rejects any key of `table` not in `allowed`, naming the closest valid one.
 pub(crate) fn check_keys(table: &Table, allowed: &[&str], context: &str) -> Result<(), FileError> {
@@ -503,6 +506,87 @@ pub(crate) fn source(
     })
 }
 
+/// The part an element names with `library = "<vendor>/<part>"`, turned around with
+/// `reversed = true`.
+fn library_part(item: &Item, library: &Library) -> Result<Option<Part>, FileError> {
+    let Some(value) = item.table.get("library") else {
+        if item.table.contains_key("reversed") {
+            return Err(error(format!(
+                "{}: `reversed` turns a library part around; there is no `library`",
+                item.context
+            )));
+        }
+        return Ok(None);
+    };
+    let key = value.as_str().ok_or_else(|| {
+        error(format!(
+            "{}: `library` is \"<vendor>/<part number>\"",
+            item.context
+        ))
+    })?;
+    let part = library.get(key).ok_or_else(|| {
+        error(format!(
+            "{}: part `{key}` is not in the parts library (see the `parts` command)",
+            item.context
+        ))
+    })?;
+    let reversed = match item.table.get("reversed") {
+        None => false,
+        Some(Value::Boolean(b)) => *b,
+        Some(_) => {
+            return Err(error(format!(
+                "{}: `reversed` is true or false",
+                item.context
+            )));
+        }
+    };
+    Ok(Some(if reversed {
+        part.reversed()
+    } else {
+        part.clone()
+    }))
+}
+
+/// A round part's diameter; layouts place round parts only.
+fn round_diameter(part: &Part, context: &str) -> Result<f64, FileError> {
+    match part.outline {
+        Outline::Round { diameter } => Ok(diameter),
+        Outline::Rectangular { .. } => Err(error(format!(
+            "{context}: part `{}` is rectangular; layouts place round parts only",
+            part.key()
+        ))),
+    }
+}
+
+/// The element's `clear_aperture`, else the part's.
+fn clear_aperture(item: &Item, part: &Part) -> Result<f64, FileError> {
+    match (item.table.get("clear_aperture"), part.clear_aperture) {
+        (Some(_), _) => item.positive("clear_aperture"),
+        (None, Some(ca)) => Ok(ca),
+        (None, None) => Err(error(format!(
+            "{}: part `{}` gives no clear aperture; add `clear_aperture` here",
+            item.context,
+            part.key()
+        ))),
+    }
+}
+
+/// An element's `coating`, if given.
+pub(crate) fn coating_of(item: &Item) -> Result<Option<Coating>, FileError> {
+    match item.table.get("coating") {
+        None => Ok(None),
+        Some(value) => match value.as_str() {
+            Some("uncoated") => Ok(Some(Coating::Uncoated)),
+            Some("ideal") => Ok(Some(Coating::Ideal)),
+            _ => Err(error(format!(
+                "{}: coating `{}` is not known; use \"uncoated\" or \"ideal\"",
+                item.context,
+                value.as_str().unwrap_or("?")
+            ))),
+        },
+    }
+}
+
 /// Checks the first two lines: the format tag and the kind.
 pub(crate) fn check_header(text: &str) -> Result<(), FileError> {
     let mut lines = text
@@ -521,6 +605,15 @@ pub(crate) fn check_header(text: &str) -> Result<(), FileError> {
 
 /// Reads a layout file into a scene. `lookup` resolves material names.
 pub fn parse(text: &str, lookup: &MaterialLookup) -> Result<Scene, FileError> {
+    parse_with(text, lookup, &Library::default())
+}
+
+/// A layout file, with parts from `library` for elements that name one.
+pub fn parse_with(
+    text: &str,
+    lookup: &MaterialLookup,
+    library: &Library,
+) -> Result<Scene, FileError> {
     check_header(text)?;
     let root: Table = text
         .parse()
@@ -653,7 +746,70 @@ pub fn parse(text: &str, lookup: &MaterialLookup) -> Result<Scene, FileError> {
 
     for item in &elements {
         let id = item.text("id")?.to_owned();
-        match item.text("kind")? {
+        let part = library_part(item, library)?;
+        let kind = match (item.table.get("kind"), &part) {
+            (None, Some(part)) if part.part_type.transmits() => "lens",
+            (None, Some(_)) => "mirror",
+            _ => item.text("kind")?,
+        };
+        if let Some(part) = &part {
+            if part.part_type.transmits() != (kind == "lens") {
+                return Err(error(format!(
+                    "{}: part `{}` is a {}, not a {kind}",
+                    item.context,
+                    part.key(),
+                    part.part_type.as_str()
+                )));
+            }
+        }
+        match kind {
+            "lens" if part.is_some() => {
+                let part = part.as_ref().expect("checked");
+                check_keys(
+                    item.table,
+                    &with(
+                        position,
+                        &[
+                            "id",
+                            "kind",
+                            "library",
+                            "reversed",
+                            "coating",
+                            "clear_aperture",
+                        ],
+                    ),
+                    &item.context,
+                )?;
+                let diameter = round_diameter(part, &item.context)?;
+                let materials = part
+                    .glass
+                    .iter()
+                    .map(|g| {
+                        crate::library::glass(g, lookup).map_err(|e| {
+                            error(format!("{} (part `{}`): {e}", item.context, part.key()))
+                        })
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                scene.elements.push(Element {
+                    id,
+                    frame: placement.frame(item)?,
+                    kind: ElementKind::Lens {
+                        surfaces: part
+                            .surfaces
+                            .iter()
+                            .map(|s| LensSurface {
+                                radius: s.radius,
+                                conic: s.conic,
+                            })
+                            .collect(),
+                        thicknesses: part.thickness.clone(),
+                        materials,
+                        diameter,
+                        clear_aperture: clear_aperture(item, part)?,
+                        coating: coating_of(item)?.unwrap_or_else(|| crate::library::coating(part)),
+                    },
+                });
+            }
             "lens" => {
                 check_keys(
                     item.table,
@@ -700,16 +856,7 @@ pub fn parse(text: &str, lookup: &MaterialLookup) -> Result<Scene, FileError> {
                     .iter()
                     .map(|m| medium(m, lookup, &item.context))
                     .collect::<Result<Vec<_>, _>>()?;
-                let coating = match item.table.get("coating").and_then(Value::as_str) {
-                    None | Some("uncoated") => Coating::Uncoated,
-                    Some("ideal") => Coating::Ideal,
-                    Some(other) => {
-                        return Err(error(format!(
-                            "{}: coating `{other}` is not known; use \"uncoated\" or \"ideal\"",
-                            item.context
-                        )));
-                    }
-                };
+                let coating = coating_of(item)?.unwrap_or(Coating::Uncoated);
                 scene.elements.push(Element {
                     id,
                     frame: placement.frame(item)?,
@@ -726,7 +873,11 @@ pub fn parse(text: &str, lookup: &MaterialLookup) -> Result<Scene, FileError> {
             "mirror" => {
                 let mut keys = with(
                     position,
-                    &["id", "kind", "radius", "diameter", "clear_aperture"],
+                    if part.is_some() {
+                        &["id", "kind", "library", "reversed", "clear_aperture"]
+                    } else {
+                        &["id", "kind", "radius", "diameter", "clear_aperture"]
+                    },
                 );
                 if matches!(placement, Placement::Planar(_)) {
                     keys.push("fold");
@@ -738,17 +889,28 @@ pub fn parse(text: &str, lookup: &MaterialLookup) -> Result<Scene, FileError> {
                         .map_err(|e| error(format!("{}: {e}", item.context)))?,
                     _ => placement.frame(item)?,
                 };
-                let radius = match item.table.get("radius") {
-                    None => f64::INFINITY,
-                    Some(v) => item.radius(v)?,
+                let (radius, diameter, clear_aperture) = match &part {
+                    Some(part) => (
+                        part.surfaces[0].radius,
+                        round_diameter(part, &item.context)?,
+                        clear_aperture(item, part)?,
+                    ),
+                    None => (
+                        match item.table.get("radius") {
+                            None => f64::INFINITY,
+                            Some(v) => item.radius(v)?,
+                        },
+                        item.positive("diameter")?,
+                        item.positive("clear_aperture")?,
+                    ),
                 };
                 scene.elements.push(Element {
                     id,
                     frame,
                     kind: ElementKind::Mirror {
                         radius,
-                        diameter: item.positive("diameter")?,
-                        clear_aperture: item.positive("clear_aperture")?,
+                        diameter,
+                        clear_aperture,
                     },
                 });
             }
@@ -891,10 +1053,15 @@ mod tests {
             error.0
         );
         let error = read(&format!(
-            "{HEADER}[[element]]\nid = \"L1\"\nkind = \"lens\"\nat = 0\nlibrary = \"x\"\n"
+            "{HEADER}[[element]]\nid = \"L1\"\nkind = \"lens\"\nat = 0\ndof = []\n"
         ))
         .expect_err("rejected");
-        assert!(error.0.contains("M5"), "{}", error.0);
+        assert!(error.0.contains("M6"), "{}", error.0);
+        let error = read(&format!(
+            "{HEADER}[[element]]\nid = \"L1\"\nat = 0\nlibrary = \"example/none\"\n"
+        ))
+        .expect_err("rejected");
+        assert!(error.0.contains("not in the parts library"), "{}", error.0);
     }
 
     #[test]

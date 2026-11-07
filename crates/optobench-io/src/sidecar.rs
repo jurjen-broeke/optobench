@@ -16,6 +16,11 @@
 //! coating = "uncoated"              # or "ideal"
 //!
 //! [[element]]
+//! id = "L2"
+//! body = { product = "ac254-060-a" }  # a mounted part: its glass bodies are found by shape
+//! library = "thorlabs/AC254-060-A"  # prescription and glasses from the parts library
+//!
+//! [[element]]
 //! id = "M1"
 //! kind = "mirror"
 //! body = { product = "pf10-03-p01p" }
@@ -56,10 +61,27 @@
 //! reference that matches nothing, or more than one placement, is an error, never a
 //! silent skip. Every body no element names becomes an absorber, so clipping by mounts
 //! shows up.
+//!
+//! # Parts library
+//!
+//! An element with `library` takes its glasses from the part (see `library`). Of the
+//! bodies its `body` matches, those whose exact faces have the part's radii and centre
+//! thicknesses become its glasses, each the glass it matches; the others (the mount, a
+//! retaining ring) absorb. A single body is taken as it is.
+//!
+//! A STEP product named after a part (its part number or one of its `products`, case
+//! ignored) that no element names is tagged automatically the same way, with its
+//! occurrence path as the element id. `[library]` with `automatic = false` switches that
+//! off. Library mirrors are not tagged automatically: which face reflects needs `reflect`.
+//!
+//! Either way the radii, centre thicknesses and diameter read from STEP are compared
+//! with the part, and differences above 0.05 mm are reported with the trace
+//! (`optobench_library::CHECK_TOLERANCE`). The exact STEP faces are what is traced.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
+use optobench_library::{Comparison, Library, Part, Profile, closest, profile};
 use optobench_materials::Medium;
 use optobench_math::{Frame, Transform, Vec3, radians_from_degrees};
 use optobench_scene::layout::frame_along;
@@ -320,6 +342,191 @@ fn step_path(root: &Table, sidecar: &Path) -> Result<PathBuf, FileError> {
 /// Reads a sidecar and its STEP file into a scene. `sidecar` is the sidecar's path (the
 /// STEP file is looked up next to it).
 pub fn parse(text: &str, sidecar: &Path, lookup: &MaterialLookup) -> Result<Scene, FileError> {
+    read(text, sidecar, lookup, &Library::default()).map(|read| read.scene)
+}
+
+/// A glass body of a library part, as matched.
+#[derive(Debug, Clone, PartialEq)]
+pub struct GlassBody {
+    /// The solid's id.
+    pub solid: String,
+    /// Which glass of the part (0-based).
+    pub glass: usize,
+    /// How its STEP geometry compares with the part; `None` when no prescription could
+    /// be read from its faces.
+    pub comparison: Option<Comparison>,
+}
+
+/// An element whose prescription comes from the parts library.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PartMatch {
+    /// The element id.
+    pub element: String,
+    /// The part's key.
+    pub part: String,
+    /// Tagged automatically (its STEP product is named after the part), not by an
+    /// `[[element]]`.
+    pub automatic: bool,
+    /// Its glass bodies.
+    pub bodies: Vec<GlassBody>,
+    /// Glasses of the part (0-based) no body was found for.
+    pub missing: Vec<usize>,
+}
+
+/// A sidecar as read: the scene, and the elements that came from the parts library.
+#[derive(Debug, Clone)]
+pub struct Read {
+    /// The scene.
+    pub scene: Scene,
+    /// Library elements with their geometry check.
+    pub parts: Vec<PartMatch>,
+}
+
+/// The glass bodies of `part` among `bodies` (indices into `bodies`), with the glass each
+/// one is. One body is taken as it is, at its closest glass; of several (a mounted part,
+/// a doublet), those that fit the part, all facing the same way, one per glass.
+fn glass_bodies(part: &Part, bodies: &[&PlacedBody]) -> Vec<(usize, GlassBody)> {
+    // Each body's axis takes its sign from its own rim; turn them all one way (in the
+    // assembly frame), so "facing the same way" means the same for every body.
+    let mut direction: Option<Vec3> = None;
+    let profiles: Vec<Option<Profile>> = bodies
+        .iter()
+        .map(|b| {
+            let p = profile(&b.faces.iter().map(|f| &*f.geometry).collect::<Vec<_>>())?;
+            let axis = b.placement.apply_vector(p.axis);
+            let reference = *direction.get_or_insert(axis);
+            Some(if axis.dot(reference) < 0.0 {
+                p.flipped()
+            } else {
+                p
+            })
+        })
+        .collect();
+    if bodies.len() == 1 {
+        let comparison = profiles[0].as_ref().and_then(|p| closest(part, p, None));
+        return vec![(
+            0,
+            GlassBody {
+                solid: String::new(),
+                glass: comparison.as_ref().map_or(0, |c| c.glass),
+                comparison,
+            },
+        )];
+    }
+    // Per direction: the fitting bodies, at most one per glass; the direction with more
+    // of them wins, then the smaller total difference.
+    let score = |chosen: &[(usize, Comparison)]| chosen.iter().map(|(_, c)| c.score).sum::<f64>();
+    let mut best: Vec<(usize, Comparison)> = Vec::new();
+    for reversed in [false, true] {
+        let mut chosen: Vec<(usize, Comparison)> = Vec::new();
+        for (i, p) in profiles.iter().enumerate() {
+            let Some(c) = p
+                .as_ref()
+                .and_then(|p| closest(part, p, Some(reversed)))
+                .filter(|c| c.fits)
+            else {
+                continue;
+            };
+            match chosen.iter_mut().find(|(_, d)| d.glass == c.glass) {
+                Some(slot) if slot.1.score > c.score => *slot = (i, c),
+                Some(_) => {}
+                None => chosen.push((i, c)),
+            }
+        }
+        if chosen.len() > best.len()
+            || (chosen.len() == best.len() && score(&chosen) < score(&best))
+        {
+            best = chosen;
+        }
+    }
+    let mut chosen = best;
+    chosen.sort_by_key(|(_, c)| c.glass);
+    chosen
+        .into_iter()
+        .map(|(i, c)| {
+            (
+                i,
+                GlassBody {
+                    solid: String::new(),
+                    glass: c.glass,
+                    comparison: Some(c),
+                },
+            )
+        })
+        .collect()
+}
+
+/// Turns the glass bodies of a library element into lens solids and records the match.
+#[allow(clippy::too_many_arguments)]
+fn add_part(
+    scene: &mut Scene,
+    tagged: &mut [bool],
+    bodies: &[PlacedBody],
+    candidates: &[usize],
+    part: &Part,
+    id: &str,
+    coating: Option<Coating>,
+    automatic: bool,
+    lookup: &MaterialLookup,
+    context: &str,
+) -> Result<Option<PartMatch>, FileError> {
+    let placed: Vec<&PlacedBody> = candidates.iter().map(|&i| &bodies[i]).collect();
+    let found = glass_bodies(part, &placed);
+    if found.is_empty() {
+        if automatic {
+            return Ok(None);
+        }
+        return Err(error(format!(
+            "{context}: no body matches part `{}` (see the `bodies` command)",
+            part.key()
+        )));
+    }
+    let mut glass_bodies = Vec::new();
+    let several = found.len() > 1;
+    for (k, mut glass_body) in found {
+        let index = candidates[k];
+        let body = &bodies[index];
+        tagged[index] = true;
+        let solid = if several {
+            format!("{id}/{}", body.name)
+        } else {
+            id.to_owned()
+        };
+        let material = crate::library::glass(&part.glass[glass_body.glass], lookup)
+            .map_err(|e| error(format!("{context} (part `{}`): {e}", part.key())))?;
+        scene.solids.push(Solid {
+            id: solid.clone(),
+            faces: body.faces.clone(),
+            role: SolidRole::Lens {
+                material,
+                coating: coating
+                    .clone()
+                    .unwrap_or_else(|| crate::library::coating(part)),
+            },
+        });
+        glass_body.solid = solid;
+        glass_bodies.push(glass_body);
+    }
+    let missing = (0..part.glass.len())
+        .filter(|g| glass_bodies.iter().all(|b| b.glass != *g))
+        .collect();
+    Ok(Some(PartMatch {
+        element: id.to_owned(),
+        part: part.key(),
+        automatic,
+        bodies: glass_bodies,
+        missing,
+    }))
+}
+
+/// A sidecar, with parts from `library`: elements that name a part, and STEP products
+/// named after a part (tagged automatically unless `[library] automatic = false`).
+pub fn read(
+    text: &str,
+    sidecar: &Path,
+    lookup: &MaterialLookup,
+    library: &Library,
+) -> Result<Read, FileError> {
     check_header(text)?;
     let root: Table = text
         .parse()
@@ -349,9 +556,24 @@ pub fn parse(text: &str, sidecar: &Path, lookup: &MaterialLookup) -> Result<Scen
             "source",
             "detector",
             "trace",
+            "library",
         ],
         "top level",
     )?;
+    let automatic = match root.get("library") {
+        None => true,
+        Some(value) => {
+            let table = value
+                .as_table()
+                .ok_or_else(|| error("[library] must be a table"))?;
+            check_keys(table, &["automatic"], "[library]")?;
+            match table.get("automatic") {
+                None => true,
+                Some(Value::Boolean(b)) => *b,
+                Some(_) => return Err(error("[library]: `automatic` is true or false")),
+            }
+        }
+    };
     let surrounding: Medium = match root.get("surrounding") {
         None => 1.0.into(),
         Some(v) => medium(v, lookup, "surrounding")?,
@@ -379,12 +601,75 @@ pub fn parse(text: &str, sidecar: &Path, lookup: &MaterialLookup) -> Result<Scen
         split_cutoff: crate::scene_file::trace_options(&root)?,
     };
     let mut tagged = vec![false; bodies.len()];
+    // Bodies an element names, tagged or not (a library part's mount).
+    let mut claimed = vec![false; bodies.len()];
+    let mut parts: Vec<PartMatch> = Vec::new();
 
     for item in items(&root, "element")? {
         let id = item.text("id")?.to_owned();
-        let kind = item.text("kind")?;
         let found = matches(&bodies, &reference(&item, "body")?)?;
+        if let Some(value) = item.table.get("library") {
+            check_keys(
+                item.table,
+                &["id", "kind", "body", "library", "coating"],
+                &item.context,
+            )?;
+            let key = value.as_str().ok_or_else(|| {
+                error(format!(
+                    "{}: `library` is \"<vendor>/<part number>\"",
+                    item.context
+                ))
+            })?;
+            let part = library.get(key).ok_or_else(|| {
+                error(format!(
+                    "{}: part `{key}` is not in the parts library (see the `parts` command)",
+                    item.context
+                ))
+            })?;
+            if !part.part_type.transmits()
+                || item
+                    .table
+                    .get("kind")
+                    .is_some_and(|k| k.as_str() != Some("lens"))
+            {
+                return Err(error(format!(
+                    "{}: library parts in sidecars are lenses and filters (`{}` is a {}); tag mirrors with kind = \"mirror\" and `reflect`",
+                    item.context,
+                    part.key(),
+                    part.part_type.as_str()
+                )));
+            }
+            if let Some(&i) = found.iter().find(|&&i| tagged[i]) {
+                return Err(error(format!(
+                    "{}: body `{}` of `{}` is already named by another element",
+                    item.context, bodies[i].name, bodies[i].path
+                )));
+            }
+            let coating = crate::scene_file::coating_of(&item)?;
+            if let Some(matched) = add_part(
+                &mut scene,
+                &mut tagged,
+                &bodies,
+                &found,
+                part,
+                &id,
+                coating,
+                false,
+                lookup,
+                &item.context,
+            )? {
+                parts.push(matched);
+            }
+            // The part's other bodies (its mount) stay untagged and absorb, so the
+            // element claims all of them from automatic tagging.
+            for &i in &found {
+                claimed[i] = true;
+            }
+            continue;
+        }
+        let kind = item.text("kind")?;
         for &i in &found {
+            claimed[i] = true;
             if tagged[i] {
                 return Err(error(format!(
                     "{}: body `{}` of `{}` is already named by another element",
@@ -407,16 +692,7 @@ pub fn parse(text: &str, sidecar: &Path, lookup: &MaterialLookup) -> Result<Scen
                     &["id", "kind", "body", "material", "materials", "coating"],
                     &item.context,
                 )?;
-                let coating = match item.table.get("coating").and_then(Value::as_str) {
-                    None | Some("uncoated") => Coating::Uncoated,
-                    Some("ideal") => Coating::Ideal,
-                    Some(other) => {
-                        return Err(error(format!(
-                            "{}: coating `{other}` is not known; use \"uncoated\" or \"ideal\"",
-                            item.context
-                        )));
-                    }
-                };
+                let coating = crate::scene_file::coating_of(&item)?.unwrap_or(Coating::Uncoated);
                 let per_body = item.table.get("materials").and_then(Value::as_table);
                 for &i in &found {
                     let value = match (item.table.get("material"), per_body) {
@@ -494,6 +770,48 @@ pub fn parse(text: &str, sidecar: &Path, lookup: &MaterialLookup) -> Result<Scen
         }
     }
 
+    // Products named after a library part: their glass bodies become lenses.
+    if automatic && !library.parts().is_empty() {
+        let mut instances: Vec<((String, String), Vec<usize>)> = Vec::new();
+        for (i, body) in bodies.iter().enumerate() {
+            if tagged[i] || claimed[i] {
+                continue;
+            }
+            let key = (body.path.clone(), body.product.clone());
+            match instances.iter_mut().find(|(k, _)| *k == key) {
+                Some((_, members)) => members.push(i),
+                None => instances.push((key, vec![i])),
+            }
+        }
+        for ((path, product), members) in instances {
+            let Some(part) = library
+                .for_product(&product)
+                .filter(|p| p.part_type.transmits())
+            else {
+                continue;
+            };
+            let id = if path.is_empty() {
+                product.clone()
+            } else {
+                path.clone()
+            };
+            if let Some(matched) = add_part(
+                &mut scene,
+                &mut tagged,
+                &bodies,
+                &members,
+                part,
+                &id,
+                None,
+                true,
+                lookup,
+                &format!("product `{product}`"),
+            )? {
+                parts.push(matched);
+            }
+        }
+    }
+
     // Every other body absorbs. Ids: path (or product) and body name, numbered when a
     // product has two bodies of the same name.
     let mut seen: BTreeMap<String, usize> = BTreeMap::new();
@@ -543,11 +861,109 @@ pub fn parse(text: &str, sidecar: &Path, lookup: &MaterialLookup) -> Result<Scen
             pixels: item.count_pair("pixels")?,
         });
     }
-    Ok(scene)
+    Ok(Read { scene, parts })
 }
 
 /// The `kind` of an `.optobench` file, from its second line.
 pub fn kind_of(text: &str) -> Option<String> {
     let table: Table = text.parse().ok()?;
     table.get("kind")?.as_str().map(str::to_owned)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use optobench_library::{Glass, Outline, PartSurface, PartType};
+    use optobench_scene::SolidFace;
+    use optobench_surfaces::brep::BrepFace;
+
+    use super::*;
+
+    fn frame(origin: Vec3, z: Vec3) -> Frame {
+        Frame::new(origin, z, Vec3::X).expect("valid frame")
+    }
+
+    fn circle(r: f64, z: f64) -> Vec<Vec3> {
+        (0..12)
+            .map(|i| {
+                let a = core::f64::consts::TAU * i as f64 / 12.0;
+                Vec3::new(r * a.cos(), r * a.sin(), z)
+            })
+            .collect()
+    }
+
+    /// A body of a cemented doublet along +z, its rim cylinder's axis along `rim_axis`.
+    fn body(name: &str, caps: [(f64, f64); 2], rim_axis: Vec3) -> PlacedBody {
+        let mut faces = vec![BrepFace::new(
+            FaceSurface::Cylinder {
+                frame: frame(Vec3::ZERO, rim_axis),
+                radius: 12.7,
+            },
+            false,
+            vec![],
+        )];
+        for (vertex, radius) in caps {
+            let sag = radius.abs() - (radius * radius - 12.7 * 12.7).sqrt();
+            faces.push(BrepFace::new(
+                FaceSurface::Sphere {
+                    frame: frame(Vec3::new(0.0, 0.0, vertex + radius), Vec3::Z),
+                    radius: radius.abs(),
+                },
+                false,
+                vec![circle(12.7, vertex + sag * radius.signum())],
+            ));
+        }
+        PlacedBody {
+            path: "doublet:1".into(),
+            product: "ac-test".into(),
+            name: name.into(),
+            index: 0,
+            fingerprint: String::new(),
+            placement: Transform::IDENTITY,
+            faces: faces
+                .into_iter()
+                .map(|f| SolidFace {
+                    geometry: Arc::new(f),
+                    placement: Transform::IDENTITY,
+                })
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn doublet_glasses_are_found_whatever_way_each_rim_points() {
+        // R 40, −25, −200 with 8 and 2.5 mm, as a catalogue would list it; the two bodies'
+        // rim cylinders point opposite ways, as in vendor STEP files.
+        let part = Part {
+            vendor: "Example".into(),
+            number: "AC-TEST".into(),
+            part_type: PartType::Lens,
+            source: "test".into(),
+            outline: Outline::Round { diameter: 25.4 },
+            clear_aperture: None,
+            surfaces: [40.0, -25.0, -200.0]
+                .map(|radius| PartSurface { radius, conic: 0.0 })
+                .to_vec(),
+            thickness: vec![8.0, 2.5],
+            glass: vec![Glass::Index(1.6), Glass::Index(1.7)],
+            coating: None,
+            products: vec![],
+        };
+        let crown = body("crown", [(0.0, 40.0), (8.0, -25.0)], Vec3::Z);
+        let flint = body("flint", [(8.0, -25.0), (10.5, -200.0)], -Vec3::Z);
+        let mount = PlacedBody {
+            name: "mount".into(),
+            faces: vec![],
+            ..crown.clone()
+        };
+        let found = glass_bodies(&part, &[&mount, &flint, &crown]);
+        let glasses: Vec<(usize, usize)> = found.iter().map(|(i, b)| (*i, b.glass)).collect();
+        assert_eq!(glasses, vec![(2, 0), (1, 1)]);
+        assert!(found.iter().all(|(_, b)| {
+            b.comparison
+                .as_ref()
+                .is_some_and(|c| c.differences.is_empty())
+        }));
+    }
 }
