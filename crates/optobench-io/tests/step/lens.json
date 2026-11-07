@@ -1,0 +1,2 @@
+[{"command":"solid.cylinder","params":{"diameter":25.4,"height":10,"operation":"new","body_name":"Lens"}},
+ {"command":"solid.sphere","params":{"radius":30,"center":[0,0,-25],"operation":"intersect","targets":["Lens"]}}]

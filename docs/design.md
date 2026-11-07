@@ -56,7 +56,7 @@ The crates are layered like SolidCraft's: a crate depends only on crates in its 
 | L2 | optobench-trace | rays, interactions, sequential and non-sequential tracing, mesh BVH with Newton refinement on exact surfaces |
 | L3 | optobench-scene, optobench-library | the optical scene (elements, sources, detectors, DOFs, mechanical proxies) from STEP or from a standalone layout; lookup in user-downloaded parts libraries |
 | L4 | optobench-analysis, optobench-optimize | paraxial, spot, OPD, Zernike, PSF/MTF, power ledger, footprints; damped least squares over DOFs and tolerancing |
-| L5 | optobench-io, optobench-bridge, optobench-commands | STEP import (built on SolidCraft's Apache-2.0 crates behind a feature flag), sidecar files, reports; the control-channel adapter (Phase B); the command registry |
+| L5 | optobench-io, optobench-bridge, optobench-commands | STEP import (our own reader for the AP203/AP214/AP242 subset), sidecar files, reports; the control-channel adapter (Phase B); the command registry |
 | apps | optobench-cli, optobench-ui | headless CLI; desktop UI with a 3D ray view, later |
 
 Every command is a function taking JSON parameters and returning a JSON result, the same pattern as SolidCraft's run(command, args). The CLI, the UI and a later MCP server, or a SolidCraft plugin once #1221 lands, all call the same command registry, which lives in `optobench-commands` (L5, so commands can read and write files through `optobench-io`). Parameters are a JSON object and parsing is strict, as for files: an unknown key is an error. A failure is `{"error": {"code", "message"}}` with a stable code. On the command line, `optobench <command> [parameters]` takes the object as one argument or `-` for standard input and prints the JSON result.
@@ -338,7 +338,7 @@ Correctness is shown without commercial tools, so every reference value comes fr
 | Risk | Effect | Mitigation |
 | --- | --- | --- |
 | SolidCraft command set changes fast | Phase B adapter breaks | Phase A needs only STEP; adapter keyed to SolidCraft release, contract tests nightly, refuses to write on schema change |
-| SolidCraft internal crate APIs change | STEP import breaks on upgrade | pin the SolidCraft version in `io`; fall back to our own STEP reader for the AP203/AP214 subset we need |
+| SolidCraft internal crate APIs change | STEP import breaks on upgrade | avoided: optobench has its own STEP reader for the AP203/AP214/AP242 subset it needs and uses no SolidCraft crates (decided 2026-11-07) |
 | Vendor STEP models simplified or wrong | wrong optics | radii read from geometry are checked against the library; mismatches reported |
 | Body matching across re-exports | sidecar entries lose their bodies | match by product name, then path, then geometry fingerprint; unmatched entries are an error, not a silent skip |
 | Objective prescriptions unavailable | PSF and aberrations at focus approximate | ideal objective plus user-supplied pupil aberrations (Zernike) |
@@ -353,6 +353,7 @@ Correctness is shown without commercial tools, so every reference value comes fr
 
 **Decided**
 
+- STEP is read by optobench's own reader, not SolidCraft's crates, so changes inside SolidCraft cannot break import; only the STEP files it writes matter (2026-11-07).
 - Data from outside sources enters by importing a file the user has downloaded, not by a built-in network download: no captchas, logins or terms pages to get past, and no network code or TLS dependency in the tool (2026-11-07).
 - No announcement to the SolidCraft maintainers for now. Coupling through STEP and the documented control channel keeps the project independent.
 - Truly open data (clear, compatible licence) may be bundled; everything else is downloaded by the user.

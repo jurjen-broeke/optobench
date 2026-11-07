@@ -38,11 +38,16 @@ Worked in four parts, one pull request each.
   inward-facing faces (negative volume).
 
 ## M4a STEP reader (optobench-io)
-- [ ] ISO 10303-21 reader: header, entities, complex (multi-type) entities, strings and enumerations
-- [ ] AP203 / AP214 / AP242 product structure: products, assembly tree, placements per occurrence
-- [ ] Units per representation context, converted to mm at the boundary
-- [ ] B-rep: solids, shells, faces with bounds, surfaces (plane, cylinder, cone, sphere, torus, B-spline), edges and curves (line, circle, ellipse, B-spline)
-- [ ] Unsupported entities reported by type, never skipped silently
+
+Our own reader, not SolidCraft's crates (decided 2026-11-07). Reads all eleven
+Thorlabs files, LA1951-ML and the golden assembly (3341 faces, 116 placed bodies,
+0.4 s) with no unsupported entities.
+
+- [x] ISO 10303-21 reader: header, entities, complex (multi-type) entities, strings and enumerations
+- [x] AP203 / AP214 / AP242 product structure: products, assembly tree, placements per occurrence
+- [x] Units per representation context, converted to mm at the boundary
+- [x] B-rep: solids, shells, faces with bounds, surfaces (plane, cylinder, cone, sphere, torus, B-spline, surfaces of revolution and linear extrusion), edges and curves (line, circle, ellipse, B-spline)
+- [x] Unsupported entities reported by type, never skipped silently
 
 ## M4b Geometry
 - [ ] Trimmed-face tessellation, mesh per body
