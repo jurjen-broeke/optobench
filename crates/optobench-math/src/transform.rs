@@ -24,7 +24,7 @@ impl Rotation {
     /// Rotation by `angle` radians about `axis`, right-handed (counter-clockwise when
     /// looking down the axis towards the origin). `None` if the axis has zero length.
     ///
-    /// Rodrigues' rotation formula: R = I cos θ + (1 − cos θ) a aᵀ + [a]ₓ sin θ.
+    /// Rodrigues' rotation formula: R = I cos θ + (1 − cos θ) a aᵀ + (a×) sin θ.
     pub fn from_axis_angle(axis: Vec3, angle: f64) -> Option<Self> {
         let a = axis.normalized()?;
         let (s, c) = angle.sin_cos();
