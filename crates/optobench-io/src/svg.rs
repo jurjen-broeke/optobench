@@ -16,6 +16,9 @@ pub enum View {
 
 const WIDTH: f64 = 1000.0;
 
+/// Most points drawn per boundary loop of a solid's face.
+const OUTLINE_POINTS: usize = 48;
+
 fn project(view: View, p: Vec3) -> (f64, f64) {
     match view {
         View::Top => (p.x, p.y),
@@ -43,13 +46,17 @@ fn outline(built: &Built, face: usize, view: View) -> Vec<Vec<Vec3>> {
     let largest = in_view(Vec3::X).max(in_view(Vec3::Y));
     let shown = |axis: Vec3| in_view(axis) >= 0.5 * largest;
     match &face.shape {
-        // A solid's face draws as its boundary loops, closed.
+        // A solid's face draws as its boundary loops, closed, thinned to at most
+        // OUTLINE_POINTS points each: enough at drawing scale, and it keeps the view of a
+        // large assembly small.
         Shape::Brep(brep) => brep
             .loops
             .iter()
             .map(|polyline| {
+                let step = polyline.len().div_ceil(OUTLINE_POINTS).max(1);
                 polyline
                     .iter()
+                    .step_by(step)
                     .chain(polyline.first())
                     .map(|p| to_scene(*p))
                     .collect()
@@ -188,6 +195,7 @@ pub fn layout(
             Owner::Element(_) => ("#222222", 1.5),
             Owner::Proxy(_) => ("#6b4f2a", 2.0),
             Owner::Detector(_) => ("#2a9d8f", 2.5),
+            Owner::Solid(_) => ("#555555", 0.8),
         };
         for line in lines {
             svg.push_str(&format!(

@@ -1,0 +1,30 @@
+format = "optobench/1"
+kind = "sidecar"
+
+# The plano-convex lens of lens.step (R = 30 mm, 5 mm centre thickness, flat face at
+# z = 0) as glass of n = 1.5, lit by a collimated beam coming down the z axis onto its
+# curved side. Thick lens with R₂ = ∞ (Hecht, Optics, 5th ed., ch. 6): f = R/(n − 1) =
+# 60 mm, back focal length f − t/n = 56.667 mm below the flat face.
+
+[[element]]
+id = "L1"
+kind = "lens"
+body = { product = "lens" }
+material = 1.5
+
+[[source]]
+id = "beam"
+kind = "collimated"
+wavelength_um = 0.55
+power_w = 0.001
+diameter = 4.0
+rings = 6
+position = [0, 0, 20]
+axis = [0, 0, -1]
+
+[[detector]]
+id = "focus"
+position = [0, 0, -56.666666666667]
+axis = [0, 0, -1]
+size = [2, 2]
+pixels = [40, 40]

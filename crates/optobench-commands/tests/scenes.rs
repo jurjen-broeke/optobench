@@ -84,3 +84,28 @@ fn layout_view_is_written() {
     assert!(text.starts_with("<svg") && text.contains("side view") && text.contains(">screen<"));
     let _ = std::fs::remove_file(&svg);
 }
+
+#[test]
+fn sidecar_with_step_traces_through_the_command() {
+    // The lens fixture of optobench-io: plano-convex R = 30, n = 1.5, focus 56.667 mm
+    // below the flat face (f − t/n with f = R/(n − 1); Hecht, Optics, 5th ed., ch. 6).
+    let path = format!(
+        "{}/../optobench-io/tests/step/lens.optobench",
+        env!("CARGO_MANIFEST_DIR")
+    );
+    let result = Registry::standard()
+        .run("trace", &json!({ "path": path }))
+        .expect("the sidecar traces");
+    let focus = &result["detectors"][0];
+    assert!(number(&focus["rms_radius_mm"]) < 5e-3);
+    assert!(number(&focus["centroid_mm"][0]).abs() < 1e-9);
+    balanced(&result);
+    let step = format!(
+        "{}/../optobench-io/tests/step/lens.step",
+        env!("CARGO_MANIFEST_DIR")
+    );
+    let bodies = Registry::standard()
+        .run("bodies", &json!({ "path": step }))
+        .expect("lists bodies");
+    assert_eq!(bodies["bodies"][0]["body"], "Lens");
+}

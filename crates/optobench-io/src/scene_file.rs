@@ -90,7 +90,7 @@ impl core::fmt::Display for FileError {
 
 impl std::error::Error for FileError {}
 
-fn error(message: impl Into<String>) -> FileError {
+pub(crate) fn error(message: impl Into<String>) -> FileError {
     FileError(message.into())
 }
 
@@ -120,7 +120,7 @@ const LATER: &[(&str, &str)] = &[
 ];
 
 /// Rejects any key of `table` not in `allowed`, naming the closest valid one.
-fn check_keys(table: &Table, allowed: &[&str], context: &str) -> Result<(), FileError> {
+pub(crate) fn check_keys(table: &Table, allowed: &[&str], context: &str) -> Result<(), FileError> {
     for key in table.keys() {
         if allowed.contains(&key.as_str()) {
             continue;
@@ -147,19 +147,19 @@ fn check_keys(table: &Table, allowed: &[&str], context: &str) -> Result<(), File
 pub type MaterialLookup<'a> = dyn Fn(&str) -> Result<Medium, String> + 'a;
 
 /// One `[[...]]` item, with helpers that name the item in errors.
-struct Item<'a> {
-    table: &'a Table,
-    context: String,
+pub(crate) struct Item<'a> {
+    pub(crate) table: &'a Table,
+    pub(crate) context: String,
 }
 
 impl<'a> Item<'a> {
-    fn get(&self, key: &str) -> Result<&'a Value, FileError> {
+    pub(crate) fn get(&self, key: &str) -> Result<&'a Value, FileError> {
         self.table
             .get(key)
             .ok_or_else(|| error(format!("{}: missing `{key}`", self.context)))
     }
 
-    fn number_of(&self, value: &Value, key: &str) -> Result<f64, FileError> {
+    pub(crate) fn number_of(&self, value: &Value, key: &str) -> Result<f64, FileError> {
         match value {
             Value::Float(f) => Ok(*f),
             Value::Integer(i) => Ok(*i as f64),
@@ -167,11 +167,11 @@ impl<'a> Item<'a> {
         }
     }
 
-    fn number(&self, key: &str) -> Result<f64, FileError> {
+    pub(crate) fn number(&self, key: &str) -> Result<f64, FileError> {
         self.number_of(self.get(key)?, key)
     }
 
-    fn positive(&self, key: &str) -> Result<f64, FileError> {
+    pub(crate) fn positive(&self, key: &str) -> Result<f64, FileError> {
         let value = self.number(key)?;
         if value > 0.0 && value.is_finite() {
             Ok(value)
@@ -180,20 +180,20 @@ impl<'a> Item<'a> {
         }
     }
 
-    fn optional_number(&self, key: &str, default: f64) -> Result<f64, FileError> {
+    pub(crate) fn optional_number(&self, key: &str, default: f64) -> Result<f64, FileError> {
         match self.table.get(key) {
             None => Ok(default),
             Some(v) => self.number_of(v, key),
         }
     }
 
-    fn text(&self, key: &str) -> Result<&'a str, FileError> {
+    pub(crate) fn text(&self, key: &str) -> Result<&'a str, FileError> {
         self.get(key)?
             .as_str()
             .ok_or_else(|| error(format!("{}: `{key}` must be text", self.context)))
     }
 
-    fn numbers(&self, key: &str, count: Option<usize>) -> Result<Vec<f64>, FileError> {
+    pub(crate) fn numbers(&self, key: &str, count: Option<usize>) -> Result<Vec<f64>, FileError> {
         let array = self
             .get(key)?
             .as_array()
@@ -213,17 +213,17 @@ impl<'a> Item<'a> {
         Ok(values)
     }
 
-    fn vector(&self, key: &str) -> Result<Vec3, FileError> {
+    pub(crate) fn vector(&self, key: &str) -> Result<Vec3, FileError> {
         let v = self.numbers(key, Some(3))?;
         Ok(Vec3::new(v[0], v[1], v[2]))
     }
 
-    fn pair(&self, key: &str) -> Result<(f64, f64), FileError> {
+    pub(crate) fn pair(&self, key: &str) -> Result<(f64, f64), FileError> {
         let v = self.numbers(key, Some(2))?;
         Ok((v[0], v[1]))
     }
 
-    fn count_pair(&self, key: &str) -> Result<(usize, usize), FileError> {
+    pub(crate) fn count_pair(&self, key: &str) -> Result<(usize, usize), FileError> {
         let (a, b) = self.pair(key)?;
         let whole = |v: f64| (v >= 1.0 && v.fract() == 0.0).then_some(v as usize);
         match (whole(a), whole(b)) {
@@ -235,7 +235,7 @@ impl<'a> Item<'a> {
         }
     }
 
-    fn radius(&self, value: &Value) -> Result<f64, FileError> {
+    pub(crate) fn radius(&self, value: &Value) -> Result<f64, FileError> {
         match value {
             Value::String(s) if s == "inf" || s == "-inf" => Ok(f64::INFINITY),
             other => self.number_of(other, "radius"),
@@ -276,11 +276,11 @@ impl Placement {
     }
 }
 
-fn with(base: &[&'static str], extra: &[&'static str]) -> Vec<&'static str> {
+pub(crate) fn with(base: &[&'static str], extra: &[&'static str]) -> Vec<&'static str> {
     base.iter().chain(extra).copied().collect()
 }
 
-fn items<'a>(root: &'a Table, key: &str) -> Result<Vec<Item<'a>>, FileError> {
+pub(crate) fn items<'a>(root: &'a Table, key: &str) -> Result<Vec<Item<'a>>, FileError> {
     let Some(value) = root.get(key) else {
         return Ok(Vec::new());
     };
@@ -303,7 +303,11 @@ fn items<'a>(root: &'a Table, key: &str) -> Result<Vec<Item<'a>>, FileError> {
         .collect()
 }
 
-fn medium(value: &Value, lookup: &MaterialLookup, context: &str) -> Result<Medium, FileError> {
+pub(crate) fn medium(
+    value: &Value,
+    lookup: &MaterialLookup,
+    context: &str,
+) -> Result<Medium, FileError> {
     match value {
         Value::Float(f) => Ok((*f).into()),
         Value::Integer(i) => Ok((*i as f64).into()),
@@ -315,7 +319,7 @@ fn medium(value: &Value, lookup: &MaterialLookup, context: &str) -> Result<Mediu
 }
 
 /// Checks the first two lines: the format tag and the kind.
-fn check_header(text: &str) -> Result<(), FileError> {
+pub(crate) fn check_header(text: &str) -> Result<(), FileError> {
     let mut lines = text
         .lines()
         .map(str::trim)
@@ -443,6 +447,7 @@ pub fn parse(text: &str, lookup: &MaterialLookup) -> Result<Scene, FileError> {
         sources: Vec::new(),
         proxies: Vec::new(),
         detectors: Vec::new(),
+        solids: Vec::new(),
     };
 
     for item in items(&root, "source")? {

@@ -22,6 +22,11 @@
 //! launched = final power + reflected + absorbed, and the final power is booked as
 //! detected, clipped, escaped or stopped.
 //!
+//! Coincident faces (two solids sharing a face, as in a cemented doublet) are resolved
+//! together: the ray leaves the inside medium of the body it exits and enters the inside
+//! medium of the body it enters, or the surrounding medium of the face if it enters none.
+//! So a cemented interface refracts once, glass to glass.
+//!
 //! The nearest-hit search uses a BVH over the faces' bounding boxes once
 //! [`NonSequentialSystem::build_index`] has been called, and tests every face otherwise.
 
@@ -41,6 +46,10 @@ use crate::sequential::Coating;
 /// Hits closer than this to a ray's origin are ignored, so a ray leaving a face does not
 /// hit it again through rounding (mm).
 pub const MINIMUM_DISTANCE: f64 = 1e-9;
+
+/// Faces hit within this distance of each other at the same point are coincident: the
+/// shared face of two cemented or touching bodies (mm).
+pub const COINCIDENT: f64 = 1e-6;
 
 /// Default limit on interactions per ray.
 pub const DEFAULT_INTERACTION_LIMIT: usize = 1000;
@@ -355,8 +364,8 @@ pub struct NonSequentialSystem {
     pub start_medium: usize,
     /// The most interactions a ray may have.
     pub interaction_limit: usize,
-    /// The search index over `faces`, if built.
-    index: Option<Bvh>,
+    /// The search index over `faces`, if built, with the faces' bounding boxes.
+    index: Option<(Bvh, Vec<Aabb>)>,
 }
 
 impl NonSequentialSystem {
@@ -392,15 +401,47 @@ impl NonSequentialSystem {
     /// a stale index (built over a different number of faces) is ignored.
     pub fn build_index(&mut self) {
         let boxes: Vec<Aabb> = self.faces.iter().map(Face::bounds).collect();
-        self.index = Some(Bvh::build(&boxes));
+        self.index = Some((Bvh::build(&boxes), boxes));
     }
 
-    /// The nearest face hit by the ray, with the local hit.
-    fn nearest(&self, ray: &Ray) -> Option<(usize, LocalHit)> {
-        if let Some(index) = self.index.as_ref().filter(|i| i.len() == self.faces.len()) {
+    fn current_index(&self) -> Option<&Bvh> {
+        self.index
+            .as_ref()
+            .map(|(bvh, _)| bvh)
+            .filter(|bvh| bvh.len() == self.faces.len())
+    }
+
+    /// Faces other than `primary` that the ray meets at the same point (within
+    /// [`COINCIDENT`]) and that refract.
+    fn coincident(&self, primary: usize, ray: &Ray, distance: f64) -> Vec<(usize, LocalHit)> {
+        let point = ray.position + ray.direction * distance;
+        let candidates: Vec<usize> = match self.current_index() {
+            Some(bvh) => bvh.containing(point),
+            None => (0..self.faces.len()).collect(),
+        };
+        candidates
+            .into_iter()
+            .filter(|&i| i != primary && matches!(self.faces[i].role, Role::Refract { .. }))
+            .filter_map(|i| {
+                self.faces[i]
+                    .intersect(ray.position, ray.direction)
+                    .map(|h| (i, h))
+            })
+            .filter(|(_, h)| (h.distance - distance).abs() < COINCIDENT)
+            .collect()
+    }
+
+    /// The nearest face hit by the ray, with the local hit. Faces in `skip` are ignored
+    /// within [`COINCIDENT`] of the ray's start, where they were just handled.
+    fn nearest(&self, ray: &Ray, skip: &[usize]) -> Option<(usize, LocalHit)> {
+        let skipped = |i: usize, hit: &LocalHit| skip.contains(&i) && hit.distance < COINCIDENT;
+        if let Some(index) = self.current_index() {
             let mut found: Option<LocalHit> = None;
             let best = index.nearest(ray.position, ray.direction, |i| {
                 let hit = self.faces[i].intersect(ray.position, ray.direction)?;
+                if skipped(i, &hit) {
+                    return None;
+                }
                 let distance = hit.distance;
                 if found.as_ref().is_none_or(|f| distance < f.distance) {
                     found = Some(hit);
@@ -414,6 +455,7 @@ impl NonSequentialSystem {
             .iter()
             .enumerate()
             .filter_map(|(i, face)| face.intersect(ray.position, ray.direction).map(|h| (i, h)))
+            .filter(|(i, h)| !skipped(*i, h))
             .min_by(|a, b| a.1.distance.total_cmp(&b.1.distance))
     }
 
@@ -429,6 +471,7 @@ impl NonSequentialSystem {
             detector_point: None,
         };
         let mut medium = self.start_medium;
+        let mut skip: Vec<usize> = Vec::new();
         for _ in 0..self.interaction_limit {
             let (index_here, alpha) = match self.medium(medium, launched.wavelength) {
                 Ok(values) => values,
@@ -437,11 +480,20 @@ impl NonSequentialSystem {
                     return record;
                 }
             };
-            let Some((face_index, hit)) = self.nearest(&record.ray) else {
+            let Some((face_index, hit)) = self.nearest(&record.ray, &skip) else {
                 record.end = End::Escaped;
                 return record;
             };
             let face = &self.faces[face_index];
+            // Coincident refracting faces, found before the ray moves.
+            let coincident = if matches!(face.role, Role::Refract { .. }) {
+                self.coincident(face_index, &record.ray, hit.distance)
+            } else {
+                Vec::new()
+            };
+            skip.clear();
+            skip.push(face_index);
+            skip.extend(coincident.iter().map(|(i, _)| *i));
             let ray = &mut record.ray;
 
             // Propagate to the hit.
@@ -484,13 +536,26 @@ impl NonSequentialSystem {
                         return record;
                     }
                     let normal = face.placement.apply_vector(hit.normal);
-                    // Which side the ray comes from decides the two media.
+                    // Which side the ray comes from decides the two media. With coincident
+                    // faces, the ray leaves the inside of the body it exits and enters the
+                    // inside of the body it enters.
                     let towards_positive = ray.direction.dot(normal) > 0.0;
-                    let (from, to) = if towards_positive {
+                    let (mut from, mut to) = if towards_positive {
                         (face.negative_medium, face.positive_medium)
                     } else {
                         (face.positive_medium, face.negative_medium)
                     };
+                    for (other, other_hit) in &coincident {
+                        let other_face = &self.faces[*other];
+                        let other_normal = other_face.placement.apply_vector(other_hit.normal);
+                        if ray.direction.dot(other_normal) > 0.0 {
+                            // The ray leaves this body.
+                            from = other_face.negative_medium;
+                        } else {
+                            // The ray enters this body.
+                            to = other_face.negative_medium;
+                        }
+                    }
                     let (n1, n2) = match (
                         self.medium(from, launched.wavelength),
                         self.medium(to, launched.wavelength),
