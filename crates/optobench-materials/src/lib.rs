@@ -11,10 +11,12 @@
 //! - Every model has a valid wavelength range. Outside it, evaluation is an error rather
 //!   than a silent extrapolation.
 //! - This crate holds models only. Coefficients for real glasses come from catalogues the
-//!   user downloads (docs/design.md, Ground rules), or from formula-defined materials
-//!   bundled after the licence review in M2c.
+//!   user downloads (docs/design.md, Ground rules). The few bundled materials admitted by
+//!   the licence review are in [`bundled`].
 
 #![forbid(unsafe_code)]
+
+pub mod bundled;
 
 use std::sync::Arc;
 

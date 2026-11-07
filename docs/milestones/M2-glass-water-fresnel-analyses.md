@@ -25,8 +25,9 @@ where datasets and literature values come in, and every number there is cited.
 - [x] Zernike fit of the OPD over the unit pupil (indexing scheme documented)
 
 ## M2c Data, water, fetch, literature cases
-- [ ] Licence review of candidate open datasets (glass, refractive index, water), recorded in `docs/licence-review.md` for a decision
-- [ ] Formula-defined materials that pass the review (fused silica, air), with cited coefficients
-- [ ] Water: dispersion, absorption, temperature, from the sources the review admits
+- [x] Licence review of candidate open datasets (glass, refractive index, water), recorded in `docs/licence-review.md` for a decision (decided 2026-11-07)
+- [x] Formula-defined materials that pass the review (fused silica, air), with cited coefficients (air: standard dry air only)
+- [x] Water: dispersion, absorption, temperature, from the sources the review admits (19–24 °C)
 - [ ] `optobench fetch <source>` and file import into the user data directory, with the licence shown first
+- [ ] Verify the bundled values against the original papers (papers not yet available); then the exit criterion for water is met
 - [ ] Literature cases: a Cooke triplet and an achromatic doublet against published paraxial and aberration values

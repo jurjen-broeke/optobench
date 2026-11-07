@@ -53,6 +53,17 @@ Notes:
 - Water temperature dependence: Daimon & Masumura give coefficients at four temperatures
   (19–24 °C). Wider ranges need another source.
 
+### Known differences between the water datasets
+
+Daimon & Masumura (2007, 20 °C) and Hale & Querry (1973, 25 °C) agree to within
+±1.8 × 10⁻³ from 0.5 to 1.0 µm, as expected from Hale & Querry's three-decimal values and
+the 5 K temperature difference. Below 0.45 µm they diverge steadily, reaching 0.028 at
+0.2 µm. The bundled `Water` material therefore takes its index from Daimon & Masumura and
+only its extinction coefficient from Hale & Querry. To be checked against both papers.
+
+Also to be checked: the Daimon 20 °C formula gives n = 1.33335 at 589.3 nm, while the
+paper reports agreement within 6 × 10⁻⁶ with the 1938 formula of Tilton and Taylor.
+
 ### Manufacturer glass catalogues (Schott, Ohara, Hoya, CDGM, Sumita, Hikari)
 
 - No public licence or redistribution terms were found for the downloadable catalogue
@@ -94,15 +105,15 @@ Notes:
 - [ ] Original papers available for verification (Malitson 1965, Daimon & Masumura 2007,
       Hale & Querry 1973, Ciddor 1996), placed in the local `corpus/`. Not available yet.
 
-## Open question
+## Recommendation 4 while the papers are unavailable
 
 Recommendation 4 asks for each bundled value to be checked against its original paper
-before bundling, and the papers are not available yet. Either the four datasets wait for
-the papers, or they are bundled now as transcriptions from the CC0 database, marked "not
-yet verified against the original paper" until checked. Not decided.
+before bundling, and the papers are not available yet. Decided 2026-11-07: bundle now
+(see the decision record).
 
 ## Decision record
 
 | Date | Decision | By |
 | --- | --- | --- |
 | 2026-11-07 | Recommendations 1, 2 and 3 approved. Original papers not available yet. | Jurjen Broeke |
+| 2026-11-07 | Bundle the four datasets now as transcriptions from the CC0 database, each marked "not yet verified against the original paper" in its provenance, `ATTRIBUTION.md` and `assets/manifest.toml`. The M2 exit criterion for water stays open until the values are checked against the papers. | Jurjen Broeke |
