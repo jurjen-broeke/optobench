@@ -1,9 +1,16 @@
 //! The .optobench file format (sidecar and layout), STEP import, reports, and sources the user fetches.
 //!
 //! Layer L5. See `docs/design.md`, section Architecture.
-//! Milestone where this crate gets its first real content: M3.
+//! M2: import of refractiveindex.info material files into the user data directory
+//! ([`refractiveindex`], [`store`]). File formats and STEP follow in M3 and M4.
 
 #![forbid(unsafe_code)]
+
+pub mod refractiveindex;
+mod sha256;
+pub mod store;
+
+pub use sha256::{sha256, sha256_hex};
 
 /// The file extension for every file optobench writes for people to keep.
 pub const EXTENSION: &str = "optobench";

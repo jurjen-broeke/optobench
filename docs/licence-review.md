@@ -69,7 +69,7 @@ paper reports agreement within 6 × 10⁻⁶ with the 1938 formula of Tilton and
 - No public licence or redistribution terms were found for the downloadable catalogue
   data files. Absence of terms is not permission.
 - Treatment: never bundled. The user downloads a catalogue (from the manufacturer, or the
-  vendor files mirrored in refractiveindex.info) with `optobench fetch` or by import, and
+  vendor files mirrored in refractiveindex.info) and imports it (`optobench import-material`), and
   it is marked `redistribute = false` until its terms are known, so the tool asks before
   embedding values in a shared design.
 

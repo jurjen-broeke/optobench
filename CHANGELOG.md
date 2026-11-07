@@ -5,6 +5,14 @@ with the release that introduced them.
 
 ## Unreleased
 
+- M2c import: commands `import-material` (a refractiveindex.info YAML file the user
+  downloaded; first call shows its notice and references, `accept_licence: true` stores
+  it under `<data directory>/optobench/sources/refractiveindex.info/<sha256>/`, marked
+  `redistribute = false` unless asked) and `materials` (bundled and imported).
+  `optobench-materials`: all nine refractiveindex.info dispersion formulas
+  (`DispersionFormula`) and `Composite` (n and k from separate models).
+  `optobench-io`: strict reader for the database's YAML subset, the material store, and
+  SHA-256 (FIPS 180-4) for checksums. No network download (decided 2026-11-07).
 - M2c licence review (`docs/licence-review.md`), decided 2026-11-07: four literature
   datasets bundled as CC0 transcriptions from the refractiveindex.info database, not yet
   verified against the original papers; manufacturer catalogues are fetch-only.

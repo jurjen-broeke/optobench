@@ -45,6 +45,7 @@ name = "optobench-commands"
 version = "0.0.1"
 dependencies = [
  "optobench-io",
+ "optobench-materials",
  "serde_json",
 ]
 
@@ -53,7 +54,9 @@ name = "optobench-io"
 version = "0.0.1"
 dependencies = [
  "optobench-library",
+ "optobench-materials",
  "optobench-scene",
+ "serde_json",
 ]
 
 [[package]]
