@@ -17,6 +17,8 @@ pub mod sidecar;
 pub mod step;
 pub mod store;
 pub mod svg;
+pub mod xlsx;
+mod zip;
 
 pub use sha256::{sha256, sha256_hex};
 

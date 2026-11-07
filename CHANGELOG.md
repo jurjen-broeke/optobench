@@ -5,6 +5,13 @@ with the release that introduced them.
 
 ## Unreleased
 
+- `import-curve` reads spreadsheets (`.xlsx`) as vendors publish measured curves, with
+  our own ZIP reader (APPNOTE), Deflate (RFC 1951), CRC-32 and a small XML reader for the
+  sheet cells (`optobench_io::xlsx`); no new dependencies. Columns and units now come from
+  a header row naming the wavelength (`Wavelength (nm) | Optical Density |
+  % Transmission`), for delimited text too, which also reads quoted cells. New parameter
+  `sheet`; the record keeps the header and the vendor's notes (description, disclaimer,
+  citation request). Checked on Thorlabs' MVF52A data: CWL 525.5 nm, FWHM 39 nm.
 - M5c2 coatings in files: `coating` is `"uncoated"`, `"ideal"`, `{ curve = "<name>" }`
   or `{ layers = [...] }` (thickness in nm or a quarter wave at a wavelength, listed from
   the air side), and `coatings` gives one per surface, in part, layout and sidecar files.

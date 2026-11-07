@@ -6,7 +6,10 @@
 //! <data directory>/optobench/library/curves/<name>.json   where it came from and how it was read
 //! ```
 //!
-//! A curve is used as `coating = { curve = "<name>" }` in part, layout and sidecar files.
+//! Tables are delimited text (CSV, tab- or space-separated) or spreadsheets (`.xlsx`, as
+//! vendors publish them; see `xlsx`). Columns and units come from a header row when one
+//! names the wavelength. A curve is used as `coating = { curve = "<name>" }` in part,
+//! layout and sidecar files.
 //! Imports are marked `redistribute = false` unless the user says otherwise: vendor data
 //! stays on the user's machine.
 
@@ -59,29 +62,22 @@ impl Column {
     }
 }
 
-/// How to read a table.
-#[derive(Debug, Clone, PartialEq)]
+/// How to read a table. Left as `None`, the columns and units come from a header row
+/// such as `Wavelength (nm) | Optical Density | % Transmission`, as vendors write them.
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct Options {
-    /// The columns, in order (more columns in the file are ignored).
-    pub columns: Vec<Column>,
-    /// Whether wavelengths are in nm (else µm).
-    pub nanometres: bool,
-    /// Whether R and T are percentages; `None` decides from the values (any above 1.5).
+    /// The columns, in order (more columns in the file are ignored); `None`: from the
+    /// header, else wavelength then transmittance.
+    pub columns: Option<Vec<Column>>,
+    /// Whether wavelengths are in nm (else µm); `None`: from the header, else nm.
+    pub nanometres: Option<bool>,
+    /// Whether R and T are percentages; `None`: from the header (`%`), else from the
+    /// values (any above 1.5).
     pub percent: Option<bool>,
-    /// Without a reflectance column: R = 1 − T (true, for low-loss dielectric coatings)
-    /// or R = 0 (false, for absorbing filters).
-    pub reflectance_is_complement: bool,
-}
-
-impl Default for Options {
-    fn default() -> Self {
-        Self {
-            columns: vec![Column::Wavelength, Column::Transmittance],
-            nanometres: true,
-            percent: None,
-            reflectance_is_complement: true,
-        }
-    }
+    /// Without a reflectance column, R = 0 (for absorbing filters) instead of R = 1 − T.
+    pub reflectance_zero: bool,
+    /// The sheet of a spreadsheet; `None`: the first.
+    pub sheet: Option<String>,
 }
 
 /// A table as read, with what had to be adjusted.
@@ -89,8 +85,18 @@ impl Default for Options {
 pub struct Table {
     /// (wavelength µm, R, T), increasing in wavelength.
     pub points: Vec<(f64, f64, f64)>,
+    /// The columns as used.
+    pub columns: Vec<Column>,
+    /// Whether wavelengths were read as nm.
+    pub nanometres: bool,
     /// Whether R and T were read as percentages.
     pub percent: bool,
+    /// The header row the columns came from, if they did.
+    pub header: Option<Vec<String>>,
+    /// The spreadsheet's sheet, for spreadsheets.
+    pub sheet: Option<String>,
+    /// Other text in the table (a vendor's description and disclaimer), up to 20 cells.
+    pub notes: Vec<String>,
     /// Lines that were not data (headers, notes).
     pub skipped_lines: usize,
     /// Values outside 0..1 (measurement noise), clipped into it.
@@ -101,39 +107,128 @@ pub struct Table {
     pub repeated_wavelengths: usize,
 }
 
-fn cells(line: &str) -> Vec<&str> {
-    let separators: &[char] = if line.contains([',', ';', '\t']) {
-        &[',', ';', '\t']
-    } else {
-        &[' ']
-    };
-    line.split(separators)
-        .map(str::trim)
-        .filter(|c| !c.is_empty() || separators != [' '])
-        .collect()
+/// The cells of one line of delimited text: split on commas, semicolons or tabs (outside
+/// double quotes), else on spaces.
+fn cells(line: &str) -> Vec<String> {
+    if !line.contains([',', ';', '\t']) {
+        return line.split_whitespace().map(str::to_owned).collect();
+    }
+    let mut out = Vec::new();
+    let mut cell = String::new();
+    let mut quoted = false;
+    let mut chars = line.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '"' if quoted && chars.peek() == Some(&'"') => {
+                cell.push('"');
+                chars.next();
+            }
+            '"' => quoted = !quoted,
+            ',' | ';' | '\t' if !quoted => out.push(core::mem::take(&mut cell).trim().to_owned()),
+            c => cell.push(c),
+        }
+    }
+    out.push(cell.trim().to_owned());
+    out
 }
 
-/// Reads a table of wavelength against R and/or T.
+/// Columns and units from a header row naming a wavelength.
+fn header_columns(row: &[String]) -> Option<(Vec<Column>, Option<bool>, Option<bool>)> {
+    let lower: Vec<String> = row.iter().map(|c| c.to_lowercase()).collect();
+    let wavelength = lower.iter().position(|c| c.contains("wavelength"))?;
+    let columns: Vec<Column> = lower
+        .iter()
+        .enumerate()
+        .map(|(i, c)| {
+            if i == wavelength {
+                Column::Wavelength
+            } else if c.contains("transmi") {
+                Column::Transmittance
+            } else if c.contains("reflect") {
+                Column::Reflectance
+            } else {
+                Column::Skip
+            }
+        })
+        .collect();
+    if !columns
+        .iter()
+        .any(|c| matches!(c, Column::Transmittance | Column::Reflectance))
+    {
+        return None;
+    }
+    let w = &lower[wavelength];
+    let nanometres = if w.contains("nm") {
+        Some(true)
+    } else if w.contains("µm") || w.contains("um)") || w.contains("micron") {
+        Some(false)
+    } else {
+        None
+    };
+    let percent = columns
+        .iter()
+        .zip(&lower)
+        .filter(|(c, _)| matches!(c, Column::Transmittance | Column::Reflectance))
+        .any(|(_, text)| text.contains('%'))
+        .then_some(true);
+    Some((columns, nanometres, percent))
+}
+
+/// Reads a table of wavelength against R and/or T from delimited text.
 pub fn read_table(text: &str, options: &Options) -> Result<Table, String> {
-    let index = |column: Column| options.columns.iter().position(|c| *c == column);
+    let rows: Vec<Vec<String>> = text.lines().map(cells).collect();
+    read_rows(&rows, options)
+}
+
+/// Reads a table from a file's contents: a spreadsheet (`.xlsx`, a ZIP archive) or
+/// delimited text.
+pub fn read_file(bytes: &[u8], options: &Options) -> Result<Table, String> {
+    if bytes.starts_with(b"PK\x03\x04") {
+        let (sheet, rows) = crate::xlsx::read_sheet(bytes, options.sheet.as_deref())?;
+        let mut table = read_rows(&rows, options)?;
+        table.sheet = Some(sheet);
+        Ok(table)
+    } else {
+        read_table(&String::from_utf8_lossy(bytes), options)
+    }
+}
+
+/// Reads a table from rows of cells.
+pub fn read_rows(rows: &[Vec<String>], options: &Options) -> Result<Table, String> {
+    let found_header = if options.columns.is_none() {
+        rows.iter()
+            .take(100)
+            .enumerate()
+            .find_map(|(i, r)| header_columns(r).map(|h| (i, h)))
+    } else {
+        None
+    };
+    let columns = match (&options.columns, &found_header) {
+        (Some(c), _) => c.clone(),
+        (None, Some((_, (c, _, _)))) => c.clone(),
+        (None, None) => vec![Column::Wavelength, Column::Transmittance],
+    };
+    let header_row = found_header.as_ref().map(|(i, _)| *i);
+    let nanometres = options
+        .nanometres
+        .or(found_header.as_ref().and_then(|(_, (_, n, _))| *n))
+        .unwrap_or(true);
+    let index = |column: Column| columns.iter().position(|c| *c == column);
     let wavelength = index(Column::Wavelength).ok_or("the columns need a `wavelength`")?;
     let transmittance = index(Column::Transmittance);
     let reflectance = index(Column::Reflectance);
     if transmittance.is_none() && reflectance.is_none() {
         return Err("the columns need a `transmittance` or a `reflectance`".into());
     }
-    let mut rows: Vec<(f64, Option<f64>, Option<f64>)> = Vec::new();
+    let parse = |c: &str| c.trim().parse::<f64>().ok().filter(|v| v.is_finite());
+    let mut data: Vec<(f64, Option<f64>, Option<f64>)> = Vec::new();
     let mut skipped_lines = 0;
-    for line in text.lines() {
-        let cells = cells(line);
+    let mut notes: Vec<String> = Vec::new();
+    for (row, cells) in rows.iter().enumerate() {
         let number = |i: Option<usize>| -> Option<Option<f64>> {
             match i {
                 None => Some(None),
-                Some(i) => cells
-                    .get(i)
-                    .and_then(|c| c.parse::<f64>().ok())
-                    .filter(|v| v.is_finite())
-                    .map(Some),
+                Some(i) => cells.get(i).and_then(|c| parse(c)).map(Some),
             }
         };
         match (
@@ -141,38 +236,52 @@ pub fn read_table(text: &str, options: &Options) -> Result<Table, String> {
             number(transmittance),
             number(reflectance),
         ) {
-            (Some(Some(w)), Some(t), Some(r)) if w > 0.0 => rows.push((w, t, r)),
+            (Some(Some(w)), Some(t), Some(r)) if w > 0.0 => data.push((w, t, r)),
             _ => skipped_lines += 1,
         }
+        if Some(row) != header_row {
+            for c in cells {
+                let c = c.trim();
+                if !c.is_empty()
+                    && parse(c).is_none()
+                    && notes.len() < 20
+                    && !notes.iter().any(|n| n == c)
+                {
+                    notes.push(c.to_owned());
+                }
+            }
+        }
     }
-    if rows.len() < 2 {
+    if data.len() < 2 {
         return Err("fewer than two rows of numbers in the columns given".into());
     }
-    let percent = options.percent.unwrap_or_else(|| {
-        rows.iter()
-            .flat_map(|&(_, t, r)| [t, r])
-            .flatten()
-            .any(|v| v > 1.5)
-    });
+    let percent = options
+        .percent
+        .or(found_header.as_ref().and_then(|(_, (_, _, p))| *p))
+        .unwrap_or_else(|| {
+            data.iter()
+                .flat_map(|&(_, t, r)| [t, r])
+                .flatten()
+                .any(|v| v > 1.5)
+        });
     let scale = if percent { 0.01 } else { 1.0 };
-    let unit = if options.nanometres { 1e-3 } else { 1.0 };
+    let unit = if nanometres { 1e-3 } else { 1.0 };
     let mut clipped_values = 0;
     let mut clip = |v: f64| {
-        let c = v.clamp(0.0, 1.0);
         if !(0.0..=1.0).contains(&v) {
             clipped_values += 1;
         }
-        c
+        v.clamp(0.0, 1.0)
     };
-    let mut points: Vec<(f64, f64, f64)> = rows
+    let mut points: Vec<(f64, f64, f64)> = data
         .into_iter()
         .map(|(w, t, r)| {
             let t = t.map(|t| clip(t * scale));
             let r = r.map(|r| clip(r * scale));
             let (r, t) = match (r, t) {
                 (Some(r), Some(t)) => (r, t),
-                (None, Some(t)) if options.reflectance_is_complement => (1.0 - t, t),
-                (None, Some(t)) => (0.0, t),
+                (None, Some(t)) if options.reflectance_zero => (0.0, t),
+                (None, Some(t)) => (1.0 - t, t),
                 (Some(r), None) => (r, 1.0 - r),
                 (None, None) => (0.0, 0.0),
             };
@@ -192,7 +301,12 @@ pub fn read_table(text: &str, options: &Options) -> Result<Table, String> {
     }
     Ok(Table {
         points,
+        header: header_row.map(|i| rows[i].clone()),
+        columns,
+        nanometres,
         percent,
+        sheet: None,
+        notes,
         skipped_lines,
         clipped_values,
         lowered_reflectance,
@@ -214,8 +328,7 @@ pub fn import(
 ) -> Result<Value, String> {
     check_name(name).map_err(|e| e.to_string())?;
     let bytes = fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
-    let text = String::from_utf8_lossy(&bytes);
-    let table = read_table(&text, options).map_err(|e| format!("{}: {e}", path.display()))?;
+    let table = read_file(&bytes, options).map_err(|e| format!("{}: {e}", path.display()))?;
     CoatingCurve::new(table.points.clone()).map_err(|e| format!("{}: {e:?}", path.display()))?;
     let directory = curves_directory(root);
     let csv_path = directory.join(format!("{name}.csv"));
@@ -244,16 +357,19 @@ pub fn import(
         "source": source,
         "original_path": path.to_string_lossy(),
         "sha256": sha256,
-        "columns": options.columns.iter().map(|c| c.name()).collect::<Vec<_>>(),
-        "wavelength_unit": if options.nanometres { "nm" } else { "um" },
+        "sheet": table.sheet,
+        "header": table.header,
+        "columns": table.columns.iter().map(|c| c.name()).collect::<Vec<_>>(),
+        "wavelength_unit": if table.nanometres { "nm" } else { "um" },
         "percent": table.percent,
-        "reflectance": if options.columns.contains(&Column::Reflectance) {
+        "reflectance": if table.columns.contains(&Column::Reflectance) {
             "measured"
-        } else if options.reflectance_is_complement {
-            "1 - transmittance"
-        } else {
+        } else if options.reflectance_zero {
             "0"
+        } else {
+            "1 - transmittance"
         },
+        "notes": table.notes,
         "rows": table.points.len(),
         "range_um": [first, last],
         "skipped_lines": table.skipped_lines,
@@ -275,14 +391,14 @@ pub fn load(root: &Path, name: &str) -> Result<CoatingCurve, String> {
         format!("no curve `{name}` in the library (see the `curves` command and `import-curve`)")
     })?;
     let options = Options {
-        columns: vec![
+        columns: Some(vec![
             Column::Wavelength,
             Column::Reflectance,
             Column::Transmittance,
-        ],
-        nanometres: false,
+        ]),
+        nanometres: Some(false),
         percent: Some(false),
-        reflectance_is_complement: false,
+        ..Options::default()
     };
     let table = read_table(&text, &options).map_err(|e| format!("{}: {e}", path.display()))?;
     CoatingCurve::new(table.points).map_err(|e| format!("{}: {e:?}", path.display()))
@@ -330,12 +446,12 @@ mod tests {
         // Comma separated, µm, fractions, with a measured reflectance column first.
         let text = "um,R,T\n0.4,0.9,0.05\n0.8,0.05,0.97\n";
         let options = Options {
-            columns: vec![
+            columns: Some(vec![
                 Column::Wavelength,
                 Column::Reflectance,
                 Column::Transmittance,
-            ],
-            nanometres: false,
+            ]),
+            nanometres: Some(false),
             ..Options::default()
         };
         let table = read_table(text, &options).expect("reads");
@@ -345,12 +461,123 @@ mod tests {
         assert!((table.points[1].1 - 0.03).abs() < 1e-12);
         // An absorbing filter: R = 0.
         let options = Options {
-            reflectance_is_complement: false,
+            reflectance_zero: true,
             ..Options::default()
         };
         let table = read_table("500 0.2\n600 0.8\n", &options).expect("spaces");
         assert_eq!(table.points[0].1, 0.0);
         assert!(read_table("500,0.5\n", &Options::default()).is_err());
+    }
+
+    /// A ZIP archive of stored (uncompressed) entries, laid out as APPNOTE.TXT describes.
+    fn stored_zip(entries: &[(&str, String)]) -> Vec<u8> {
+        let (mut out, mut directory) = (Vec::new(), Vec::new());
+        for (name, text) in entries {
+            let (data, crc) = (text.as_bytes(), crate::zip::crc32(text.as_bytes()));
+            let offset = out.len() as u32;
+            let sizes = [crc, data.len() as u32, data.len() as u32];
+            out.extend_from_slice(&0x0403_4B50u32.to_le_bytes());
+            out.extend_from_slice(&[20, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+            sizes
+                .iter()
+                .for_each(|v| out.extend_from_slice(&v.to_le_bytes()));
+            out.extend_from_slice(&(name.len() as u16).to_le_bytes());
+            out.extend_from_slice(&[0, 0]);
+            out.extend_from_slice(name.as_bytes());
+            out.extend_from_slice(data);
+            directory.extend_from_slice(&0x0201_4B50u32.to_le_bytes());
+            directory.extend_from_slice(&[20, 0, 20, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+            sizes
+                .iter()
+                .for_each(|v| directory.extend_from_slice(&v.to_le_bytes()));
+            directory.extend_from_slice(&(name.len() as u16).to_le_bytes());
+            directory.extend_from_slice(&[0; 12]);
+            directory.extend_from_slice(&offset.to_le_bytes());
+            directory.extend_from_slice(name.as_bytes());
+        }
+        let start = out.len() as u32;
+        out.extend_from_slice(&directory);
+        out.extend_from_slice(&0x0605_4B50u32.to_le_bytes());
+        out.extend_from_slice(&[0, 0, 0, 0]);
+        let count = (entries.len() as u16).to_le_bytes();
+        out.extend_from_slice(&count);
+        out.extend_from_slice(&count);
+        out.extend_from_slice(&(directory.len() as u32).to_le_bytes());
+        out.extend_from_slice(&start.to_le_bytes());
+        out.extend_from_slice(&[0, 0]);
+        out
+    }
+
+    #[test]
+    fn vendor_spreadsheets_are_read_from_their_header() {
+        // The layout vendors use: notes in columns A and B, a header row naming the
+        // columns, wavelength (nm) descending, optical density, % transmission; text in
+        // the shared string table.
+        let strings = [
+            "Wavelength (nm)",
+            "Optical Density",
+            "% Transmission",
+            "Item #",
+            "F1 &amp; co",
+        ];
+        let shared = format!(
+            "<?xml version=\"1.0\"?><sst xmlns=\"x\">{}</sst>",
+            strings
+                .iter()
+                .map(|s| format!("<si><t>{s}</t></si>"))
+                .collect::<String>()
+        );
+        let row = |r: usize, w: f64, t: f64| {
+            format!(
+                "<row r=\"{r}\"><c r=\"C{r}\"><v>{w}</v></c><c r=\"D{r}\"><v>1</v></c><c r=\"E{r}\"><v>{t}</v></c></row>"
+            )
+        };
+        let sheet = format!(
+            "<worksheet><sheetData><row r=\"1\"><c r=\"C1\" t=\"s\"><v>0</v></c><c r=\"D1\" t=\"s\"><v>1</v></c><c r=\"E1\" t=\"s\"><v>2</v></c></row>\
+             <row r=\"2\"><c r=\"A2\" t=\"s\"><v>3</v></c><c r=\"B2\" t=\"s\"><v>4</v></c></row>{}{}{}</sheetData></worksheet>",
+            row(3, 600.0, 2.0),
+            row(4, 550.0, 90.0),
+            row(5, 500.0, 2.0)
+        );
+        let workbook = "<workbook xmlns:r=\"r\"><sheets><sheet name=\"Data\" sheetId=\"1\" r:id=\"rId1\"/></sheets></workbook>".to_owned();
+        let relations = "<Relationships><Relationship Id=\"rId1\" Target=\"worksheets/sheet1.xml\"/></Relationships>".to_owned();
+        let file = stored_zip(&[
+            ("xl/workbook.xml", workbook),
+            ("xl/_rels/workbook.xml.rels", relations),
+            ("xl/sharedStrings.xml", shared),
+            ("xl/worksheets/sheet1.xml", sheet),
+        ]);
+        let table = read_file(&file, &Options::default()).expect("reads");
+        assert_eq!(table.sheet.as_deref(), Some("Data"));
+        assert_eq!(
+            table.columns,
+            vec![
+                Column::Skip,
+                Column::Skip,
+                Column::Wavelength,
+                Column::Skip,
+                Column::Transmittance
+            ]
+        );
+        assert!(table.nanometres && table.percent);
+        assert_eq!(table.notes, vec!["Item #".to_owned(), "F1 & co".to_owned()]);
+        assert_eq!(table.points.len(), 3);
+        let (w, r, t) = table.points[1];
+        assert!((w - 0.55).abs() < 1e-15 && (t - 0.9).abs() < 1e-15 && (r - 0.1).abs() < 1e-15);
+        let error = read_file(
+            &file,
+            &Options {
+                sheet: Some("Other".into()),
+                ..Options::default()
+            },
+        )
+        .expect_err("no such sheet");
+        assert!(error.contains("`Data`"), "{error}");
+        // Delimited text with the same header, the description quoted with commas in it.
+        let csv = "\"Filter, mounted\"\nWavelength (µm),% Transmission\n0.5,2\n0.55,90\n";
+        let table = read_table(csv, &Options::default()).expect("reads");
+        assert!(!table.nanometres && table.percent);
+        assert_eq!(table.notes, vec!["Filter, mounted".to_owned()]);
     }
 
     #[test]

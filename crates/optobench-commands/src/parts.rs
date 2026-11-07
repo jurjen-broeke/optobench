@@ -104,11 +104,12 @@ pub(crate) fn parts(parameters: &Parameters) -> Result<Value, CommandError> {
     }))
 }
 
-/// `import-curve`: read a measured R/T table (CSV as a spreadsheet exports it) and store
-/// it in the parts library as `name`. Parameters `path`, `name`; optionally `columns`
-/// (default `["wavelength", "transmittance"]`; also `reflectance` and `skip`),
-/// `wavelength_unit` (`nm`, default, or `um`), `percent` (default: decided from the
-/// values), `reflectance` (without a reflectance column: `complement`, default, R = 1 − T,
+/// `import-curve`: read a measured R/T table (a spreadsheet `.xlsx`, as vendors publish
+/// them, or delimited text) and store it in the parts library as `name`. Parameters
+/// `path`, `name`; optionally `sheet` (default the first), `columns` (default: from a
+/// header row naming the wavelength, else `["wavelength", "transmittance"]`; also
+/// `reflectance` and `skip`), `wavelength_unit` (`nm` or `um`; default from the header,
+/// else nm), `percent` (default: from the header, else from the values), `reflectance` (without a reflectance column: `complement`, default, R = 1 − T,
 /// or `zero` for absorbing filters), `source` (where it came from), `redistribute`
 /// (default false), `replace` and `data_directory`.
 pub(crate) fn import_curve(parameters: &Parameters) -> Result<Value, CommandError> {
@@ -122,6 +123,7 @@ pub(crate) fn import_curve(parameters: &Parameters) -> Result<Value, CommandErro
             "wavelength_unit",
             "percent",
             "reflectance",
+            "sheet",
             "source",
             "redistribute",
             "replace",
@@ -133,38 +135,48 @@ pub(crate) fn import_curve(parameters: &Parameters) -> Result<Value, CommandErro
     let name = required(parameters, "name")?;
     let mut options = Options::default();
     if let Some(columns) = parameters.get("columns") {
-        options.columns = columns
-            .as_array()
-            .and_then(|a| {
-                a.iter()
-                    .map(|c| c.as_str().and_then(Column::parse))
-                    .collect::<Option<Vec<_>>>()
-            })
-            .ok_or_else(|| {
-                invalid("`columns` lists wavelength, transmittance, reflectance or skip".into())
-            })?;
+        options.columns = Some(
+            columns
+                .as_array()
+                .and_then(|a| {
+                    a.iter()
+                        .map(|c| c.as_str().and_then(Column::parse))
+                        .collect::<Option<Vec<_>>>()
+                })
+                .ok_or_else(|| {
+                    invalid("`columns` lists wavelength, transmittance, reflectance or skip".into())
+                })?,
+        );
     }
-    options.nanometres = match parameters.get("wavelength_unit").and_then(Value::as_str) {
-        None if parameters.get("wavelength_unit").is_none() => true,
-        Some("nm") => true,
-        Some("um") => false,
-        _ => return Err(invalid("`wavelength_unit` is \"nm\" or \"um\"".into())),
+    options.nanometres = match parameters.get("wavelength_unit") {
+        None => None,
+        Some(v) => match v.as_str() {
+            Some("nm") => Some(true),
+            Some("um") => Some(false),
+            _ => return Err(invalid("`wavelength_unit` is \"nm\" or \"um\"".into())),
+        },
     };
     options.percent = match parameters.get("percent") {
         None => None,
         Some(Value::Bool(b)) => Some(*b),
         Some(_) => return Err(invalid("`percent` is true or false".into())),
     };
-    options.reflectance_is_complement = match parameters.get("reflectance").and_then(Value::as_str)
-    {
-        None if parameters.get("reflectance").is_none() => true,
-        Some("complement") => true,
-        Some("zero") => false,
-        _ => {
-            return Err(invalid(
-                "`reflectance` is \"complement\" or \"zero\"".into(),
-            ));
-        }
+    options.reflectance_zero = match parameters.get("reflectance") {
+        None => false,
+        Some(v) => match v.as_str() {
+            Some("complement") => false,
+            Some("zero") => true,
+            _ => {
+                return Err(invalid(
+                    "`reflectance` is \"complement\" or \"zero\"".into(),
+                ));
+            }
+        },
+    };
+    options.sheet = match parameters.get("sheet") {
+        None => None,
+        Some(Value::String(s)) => Some(s.clone()),
+        Some(_) => return Err(invalid("`sheet` must be text".into())),
     };
     let source = match parameters.get("source") {
         None => "",
