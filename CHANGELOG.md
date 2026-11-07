@@ -5,6 +5,13 @@ with the release that introduced them.
 
 ## Unreleased
 
+- M2b analyses (`optobench-analysis`): aperture stop, paraxial entrance and exit pupils,
+  fields as angles (object at infinity), paraxial or real ray aiming; spot diagram
+  (hexapolar sampling, centroid, RMS and geometric radius); tangential and sagittal ray
+  fans; OPD against a reference sphere on the chief ray's image point; Zernike fit in
+  ANSI/OSA order with unit-RMS normalisation. Supporting changes: Householder QR least
+  squares in `optobench-math`, `trace_ignoring_apertures`, and a 1e-9 mm edge tolerance
+  on clear apertures.
 - M2a dispersion models and power on rays:
   - `optobench-materials`: `Material` trait (n, k, absorption coefficient; errors outside
     the valid range), models Constant, Sellmeier, Schott, Cauchy and Tabulated n,k.

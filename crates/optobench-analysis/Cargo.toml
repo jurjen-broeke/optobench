@@ -13,6 +13,8 @@ layer = "L4"
 
 [dependencies]
 optobench-math.workspace = true
+optobench-surfaces.workspace = true
+optobench-materials.workspace = true
 optobench-trace.workspace = true
 optobench-scene.workspace = true
 
