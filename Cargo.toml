@@ -8,7 +8,7 @@ version = "0.0.1"
 edition = "2024"
 rust-version = "1.85"
 license = "MIT OR Apache-2.0"
-repository = "https://github.com/<owner>/optobench"
+repository = "https://github.com/jurjen-broeke/optobench"
 
 [workspace.dependencies]
 # Workspace crates, listed by layer. A crate may depend only on crates in its own or a lower layer;
