@@ -105,6 +105,9 @@ pub struct Table {
     pub lowered_reflectance: usize,
     /// Rows dropped because their wavelength repeated an earlier one.
     pub repeated_wavelengths: usize,
+    /// The angle of incidence the curve was measured or designed for (degrees), when the
+    /// file says (`AOI: 45`).
+    pub angle_of_incidence: Option<f64>,
 }
 
 /// The cells of one line of delimited text: split on commas, semicolons or tabs (outside
@@ -165,19 +168,34 @@ fn header_columns(row: &[String]) -> Option<(Vec<Column>, Option<bool>, Option<b
     } else {
         None
     };
-    let percent = columns
+    let value_headers: Vec<&String> = columns
         .iter()
         .zip(&lower)
         .filter(|(c, _)| matches!(c, Column::Transmittance | Column::Reflectance))
-        .any(|(_, text)| text.contains('%'))
-        .then_some(true);
+        .map(|(_, text)| text)
+        .collect();
+    let percent = if value_headers.iter().any(|t| t.contains('%')) {
+        Some(true)
+    } else if value_headers
+        .iter()
+        .any(|t| t.contains("0 to 1") || t.contains("fraction"))
+    {
+        Some(false)
+    } else {
+        None
+    };
     Some((columns, nanometres, percent))
 }
 
 /// Reads a table of wavelength against R and/or T from delimited text.
 pub fn read_table(text: &str, options: &Options) -> Result<Table, String> {
-    let rows: Vec<Vec<String>> = text.lines().map(cells).collect();
-    read_rows(&rows, options)
+    // Some vendors describe the columns as `Wavelength (nm) <tab> Transmission (0 to 1)`.
+    let lines: Vec<String> = text.lines().map(|l| l.trim().to_owned()).collect();
+    let rows: Vec<Vec<String>> = lines
+        .iter()
+        .map(|line| cells(&line.replace("<tab>", "\t")))
+        .collect();
+    read_lines(&rows, Some(&lines), options)
 }
 
 /// Reads a table from a file's contents: a spreadsheet (`.xlsx`, a ZIP archive) or
@@ -195,6 +213,15 @@ pub fn read_file(bytes: &[u8], options: &Options) -> Result<Table, String> {
 
 /// Reads a table from rows of cells.
 pub fn read_rows(rows: &[Vec<String>], options: &Options) -> Result<Table, String> {
+    read_lines(rows, None, options)
+}
+
+/// Reads a table from rows of cells, with the text lines they came from (for notes).
+fn read_lines(
+    rows: &[Vec<String>],
+    lines: Option<&[String]>,
+    options: &Options,
+) -> Result<Table, String> {
     let found_header = if options.columns.is_none() {
         rows.iter()
             .take(100)
@@ -231,24 +258,51 @@ pub fn read_rows(rows: &[Vec<String>], options: &Options) -> Result<Table, Strin
                 Some(i) => cells.get(i).and_then(|c| parse(c)).map(Some),
             }
         };
-        match (
+        let is_data = match (
             number(Some(wavelength)),
             number(transmittance),
             number(reflectance),
         ) {
-            (Some(Some(w)), Some(t), Some(r)) if w > 0.0 => data.push((w, t, r)),
-            _ => skipped_lines += 1,
+            (Some(Some(w)), Some(t), Some(r)) if w > 0.0 => {
+                data.push((w, t, r));
+                true
+            }
+            _ => {
+                skipped_lines += 1;
+                false
+            }
+        };
+        if Some(row) == header_row {
+            continue;
         }
-        if Some(row) != header_row {
-            for c in cells {
-                let c = c.trim();
-                if !c.is_empty()
-                    && parse(c).is_none()
-                    && notes.len() < 20
-                    && !notes.iter().any(|n| n == c)
-                {
-                    notes.push(c.to_owned());
-                }
+        // A line that is not data is one note; on a data line, each text cell is one.
+        let texts: Vec<String> = if is_data {
+            cells
+                .iter()
+                .map(|c| c.trim())
+                .filter(|c| !c.is_empty() && parse(c).is_none())
+                .map(str::to_owned)
+                .collect()
+        } else if let Some(line) = lines.and_then(|l| l.get(row)) {
+            // One cell (perhaps quoted): its text; several: the line as written.
+            let filled: Vec<&String> = cells.iter().filter(|c| !c.trim().is_empty()).collect();
+            match filled[..] {
+                [] => Vec::new(),
+                [one] => vec![one.trim().to_owned()],
+                _ => vec![line.clone()],
+            }
+        } else {
+            let line = cells
+                .iter()
+                .map(|c| c.trim())
+                .filter(|c| !c.is_empty())
+                .collect::<Vec<_>>()
+                .join(" ");
+            vec![line].into_iter().filter(|l| !l.is_empty()).collect()
+        };
+        for text in texts {
+            if notes.len() < 20 && !notes.contains(&text) {
+                notes.push(text);
             }
         }
     }
@@ -299,8 +353,22 @@ pub fn read_rows(rows: &[Vec<String>], options: &Options) -> Result<Table, Strin
             lowered_reflectance += 1;
         }
     }
+    // The angle of incidence the curve is for, when the notes say (`AOI: 45`).
+    let angle_of_incidence = notes.iter().find_map(|n| {
+        let lower = n.to_lowercase();
+        let rest = lower
+            .strip_prefix("aoi")
+            .or_else(|| lower.split("angle of incidence").nth(1))?;
+        let digits: String = rest
+            .trim_start_matches(|c: char| !c.is_ascii_digit())
+            .chars()
+            .take_while(|c| c.is_ascii_digit() || *c == '.')
+            .collect();
+        digits.parse::<f64>().ok()
+    });
     Ok(Table {
         points,
+        angle_of_incidence,
         header: header_row.map(|i| rows[i].clone()),
         columns,
         nanometres,
@@ -314,26 +382,136 @@ pub fn read_rows(rows: &[Vec<String>], options: &Options) -> Result<Table, Strin
     })
 }
 
-/// Imports a table under `name` into the library under `root`: the curve as
-/// `<name>.csv` and what was read as `<name>.json`. A different file under a name already
-/// taken needs `replace`. `source` says where it came from (a spec sheet's address).
+/// A curve name from a file name: lower case, other characters as `-`.
+pub fn name_from_file(file: &str) -> String {
+    let stem = Path::new(file)
+        .file_stem()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let name: String = stem
+        .to_lowercase()
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || "-_.".contains(c) {
+                c
+            } else {
+                '-'
+            }
+        })
+        .collect();
+    name.trim_start_matches(|c: char| !c.is_ascii_alphanumeric())
+        .to_owned()
+}
+
+/// Imports a file into the library under `root`: a table (delimited text or a
+/// spreadsheet) as one curve, or a ZIP archive of tables (a vendor's filter set) as one
+/// curve per table. Each curve is stored as `<name>.csv` with what was read as
+/// `<name>.json`. `name` names a single table's curve, or prefixes an archive's curves
+/// (`<name>-<file>`); without it, curves are named after their files. A different file
+/// under a name already taken needs `replace`. `source` says where it came from.
 pub fn import(
     root: &Path,
     path: &Path,
+    name: Option<&str>,
+    options: &Options,
+    source: &str,
+    redistribute: bool,
+    replace: bool,
+) -> Result<Vec<Value>, String> {
+    let bytes = fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let archive = if bytes.starts_with(b"PK\x03\x04") {
+        let archive =
+            crate::zip::Archive::new(&bytes).map_err(|e| format!("{}: {e}", path.display()))?;
+        let spreadsheet = archive.names().any(|n| n == "xl/workbook.xml");
+        (!spreadsheet).then_some(archive)
+    } else {
+        None
+    };
+    let original = path.to_string_lossy().into_owned();
+    let Some(archive) = archive else {
+        let name = match name {
+            Some(n) => n.to_owned(),
+            None => name_from_file(&original),
+        };
+        return import_bytes(
+            root,
+            &bytes,
+            &original,
+            &name,
+            options,
+            source,
+            redistribute,
+            replace,
+            None,
+        )
+        .map(|r| vec![r]);
+    };
+    let set = name_from_file(&original);
+    let members: Vec<String> = archive
+        .names()
+        .filter(|n| {
+            let lower = n.to_lowercase();
+            !n.ends_with('/')
+                && !n.starts_with("__MACOSX")
+                && !Path::new(n)
+                    .file_name()
+                    .is_some_and(|f| f.to_string_lossy().starts_with('.'))
+                && [".txt", ".csv", ".tsv", ".dat", ".xlsx"]
+                    .iter()
+                    .any(|x| lower.ends_with(x))
+        })
+        .map(str::to_owned)
+        .collect();
+    if members.is_empty() {
+        return Err(format!("{}: the archive holds no tables", path.display()));
+    }
+    members
+        .iter()
+        .map(|member| {
+            let contents = archive
+                .read(member)
+                .map_err(|e| format!("{}: {e}", path.display()))?;
+            let file = name_from_file(member);
+            let curve = match name {
+                Some(prefix) => format!("{prefix}-{file}"),
+                None => file,
+            };
+            import_bytes(
+                root,
+                &contents,
+                &format!("{original}!{member}"),
+                &curve,
+                options,
+                source,
+                redistribute,
+                replace,
+                Some(&set),
+            )
+        })
+        .collect()
+}
+
+/// Imports one table's bytes as curve `name`.
+#[allow(clippy::too_many_arguments)]
+fn import_bytes(
+    root: &Path,
+    bytes: &[u8],
+    original: &str,
     name: &str,
     options: &Options,
     source: &str,
     redistribute: bool,
     replace: bool,
+    set: Option<&str>,
 ) -> Result<Value, String> {
-    check_name(name).map_err(|e| e.to_string())?;
-    let bytes = fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
-    let table = read_file(&bytes, options).map_err(|e| format!("{}: {e}", path.display()))?;
+    check_name(name).map_err(|e| format!("{original}: {e}"))?;
+    let path = Path::new(original);
+    let table = read_file(bytes, options).map_err(|e| format!("{}: {e}", path.display()))?;
     CoatingCurve::new(table.points.clone()).map_err(|e| format!("{}: {e:?}", path.display()))?;
     let directory = curves_directory(root);
     let csv_path = directory.join(format!("{name}.csv"));
     let json_path = directory.join(format!("{name}.json"));
-    let sha256 = sha256_hex(&bytes);
+    let sha256 = sha256_hex(bytes);
     if let Ok(existing) = fs::read_to_string(&json_path) {
         let same = serde_json::from_str::<Value>(&existing)
             .ok()
@@ -355,7 +533,9 @@ pub fn import(
     let record = json!({
         "name": name,
         "source": source,
-        "original_path": path.to_string_lossy(),
+        "original_path": original,
+        "set": set,
+        "angle_of_incidence_deg": table.angle_of_incidence,
         "sha256": sha256,
         "sheet": table.sheet,
         "header": table.header,
@@ -560,7 +740,8 @@ mod tests {
             ]
         );
         assert!(table.nanometres && table.percent);
-        assert_eq!(table.notes, vec!["Item #".to_owned(), "F1 & co".to_owned()]);
+        // A row without data is one note, its cells joined.
+        assert_eq!(table.notes, vec!["Item # F1 & co".to_owned()]);
         assert_eq!(table.points.len(), 3);
         let (w, r, t) = table.points[1];
         assert!((w - 0.55).abs() < 1e-15 && (t - 0.9).abs() < 1e-15 && (r - 0.1).abs() < 1e-15);
@@ -580,6 +761,100 @@ mod tests {
         assert_eq!(table.notes, vec!["Filter, mounted".to_owned()]);
     }
 
+    /// A table in the layout one vendor uses for filter spectra: description lines, an
+    /// `AOI:` line, and a `Data format:` line with `<tab>` between the column names.
+    fn vendor_text(name: &str, aoi: u32) -> String {
+        format!(
+            "Theoretical Spectrum of {name} Optical Filter\r\nHowever, note that designs may change.\r\n\
+             Specifications:\r\nAOI: {aoi}\r\nPolarization: A\r\n\
+             Data format:  Wavelength (nm) <tab> Transmission (0 to 1)\r\n\r\n\
+             400.0\t0.001\r\n500.0\t0.95\r\n600.0\t0.002\r\n"
+        )
+    }
+
+    #[test]
+    fn filter_spectra_in_text_with_a_described_format() {
+        let table = read_table(&vendor_text("F-500", 45), &Options::default()).expect("reads");
+        assert_eq!(
+            table.columns,
+            vec![Column::Wavelength, Column::Transmittance]
+        );
+        // "(0 to 1)": fractions, even though no value is above 1.5 either way.
+        assert!(table.nanometres && !table.percent);
+        assert_eq!(table.angle_of_incidence, Some(45.0));
+        assert_eq!(table.points.len(), 3);
+        assert!((table.points[1].2 - 0.95).abs() < 1e-15);
+        // Note lines are kept whole, commas included.
+        assert!(
+            table
+                .notes
+                .iter()
+                .any(|n| n == "However, note that designs may change.")
+        );
+        assert_eq!(name_from_file("Set/Di03-R488_561.txt"), "di03-r488_561");
+        assert_eq!(name_from_file("FF03-525/50 (x).txt"), "50--x-");
+    }
+
+    #[test]
+    fn a_filter_set_archive_imports_every_table() {
+        let root = std::env::temp_dir().join(format!("optobench-set-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).expect("scratch");
+        let archive = stored_zip(&[
+            ("SET-1/FF01-500_20.txt", vendor_text("FF01-500/20", 0)),
+            ("SET-1/Di01-R450.txt", vendor_text("Di01-R450", 45)),
+            (
+                "__MACOSX/SET-1/._FF01-500_20.txt",
+                "resource fork".to_owned(),
+            ),
+            ("SET-1/.DS_Store", "finder".to_owned()),
+        ]);
+        let file = root.join("SET-1.zip");
+        fs::write(&file, archive).expect("written");
+        let records = import(
+            &root,
+            &file,
+            None,
+            &Options::default(),
+            "test",
+            false,
+            false,
+        )
+        .expect("imports the set");
+        let names: Vec<&str> = records.iter().filter_map(|r| r["name"].as_str()).collect();
+        assert_eq!(names, vec!["ff01-500_20", "di01-r450"]);
+        assert!(records.iter().all(|r| r["set"] == "set-1"));
+        assert_eq!(records[1]["angle_of_incidence_deg"], 45.0);
+        assert!(load(&root, "di01-r450").is_ok());
+        // With a name, it prefixes the set's curves.
+        let records = import(
+            &root,
+            &file,
+            Some("lab"),
+            &Options::default(),
+            "test",
+            false,
+            false,
+        )
+        .expect("imports again");
+        assert_eq!(records[0]["name"], "lab-ff01-500_20");
+        let empty = root.join("empty.zip");
+        fs::write(&empty, stored_zip(&[("readme.md", "no tables".to_owned())])).expect("written");
+        assert!(
+            import(
+                &root,
+                &empty,
+                None,
+                &Options::default(),
+                "test",
+                false,
+                false
+            )
+            .is_err()
+        );
+        let _ = fs::remove_dir_all(&root);
+    }
+
     #[test]
     fn import_and_load_round_trip() {
         let root = std::env::temp_dir().join(format!("optobench-curves-{}", std::process::id()));
@@ -590,13 +865,14 @@ mod tests {
         let record = import(
             &root,
             &file,
-            "test-filter",
+            Some("test-filter"),
             &Options::default(),
             "test",
             false,
             false,
         )
-        .expect("imported");
+        .expect("imported")
+        .remove(0);
         assert_eq!(record["reflectance"], "1 - transmittance");
         assert_eq!(record["redistribute"], false);
         let curve = load(&root, "test-filter").expect("loads");
@@ -616,7 +892,7 @@ mod tests {
             import(
                 &root,
                 &file,
-                "test-filter",
+                Some("test-filter"),
                 &Options::default(),
                 "test",
                 false,
@@ -627,7 +903,7 @@ mod tests {
         import(
             &root,
             &file,
-            "test-filter",
+            Some("test-filter"),
             &Options::default(),
             "test",
             false,

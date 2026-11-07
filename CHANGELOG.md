@@ -5,6 +5,14 @@ with the release that introduced them.
 
 ## Unreleased
 
+- `import-curve` imports a vendor's filter set from a ZIP archive of tables, one curve
+  per table named after its file (`name` becomes an optional prefix), and reads filter
+  spectra as text with a described format (`Data format: Wavelength (nm) <tab>
+  Transmission (0 to 1)`, as Semrock publishes them). The record keeps the angle of
+  incidence the curve is for (`AOI: 45`) and the set it came from; note lines are kept
+  whole. `name` is optional for single files too (named after the file). Checked on
+  Semrock FF03-525/50 and the LF488/561-2X2M-C set (two exciters, two emitters, the
+  Di03-R488/561 dichroic at 45°).
 - `import-curve` reads spreadsheets (`.xlsx`) as vendors publish measured curves, with
   our own ZIP reader (APPNOTE), Deflate (RFC 1951), CRC-32 and a small XML reader for the
   sheet cells (`optobench_io::xlsx`); no new dependencies. Columns and units now come from

@@ -105,8 +105,10 @@ pub(crate) fn parts(parameters: &Parameters) -> Result<Value, CommandError> {
 }
 
 /// `import-curve`: read a measured R/T table (a spreadsheet `.xlsx`, as vendors publish
-/// them, or delimited text) and store it in the parts library as `name`. Parameters
-/// `path`, `name`; optionally `sheet` (default the first), `columns` (default: from a
+/// them, or delimited text) and store it in the parts library, or every table of a ZIP
+/// archive (a vendor's filter set). Parameter `path`; optionally `name` (the curve's name,
+/// or a prefix for an archive's curves; default: named after the files), `sheet`
+/// (default the first), `columns` (default: from a
 /// header row naming the wavelength, else `["wavelength", "transmittance"]`; also
 /// `reflectance` and `skip`), `wavelength_unit` (`nm` or `um`; default from the header,
 /// else nm), `percent` (default: from the header, else from the values), `reflectance` (without a reflectance column: `complement`, default, R = 1 − T,
@@ -132,7 +134,11 @@ pub(crate) fn import_curve(parameters: &Parameters) -> Result<Value, CommandErro
     )?;
     let invalid = |message: String| CommandError::new(ErrorCode::InvalidParameters, message);
     let path = Path::new(required(parameters, "path")?);
-    let name = required(parameters, "name")?;
+    let name = match parameters.get("name") {
+        None => None,
+        Some(Value::String(s)) => Some(s.as_str()),
+        Some(_) => return Err(invalid("`name` must be text".into())),
+    };
     let mut options = Options::default();
     if let Some(columns) = parameters.get("columns") {
         options.columns = Some(
@@ -184,7 +190,7 @@ pub(crate) fn import_curve(parameters: &Parameters) -> Result<Value, CommandErro
         Some(_) => return Err(invalid("`source` must be text".into())),
     };
     let root = data_directory(parameters)?;
-    let record = curves::import(
+    let records = curves::import(
         &root,
         path,
         name,
@@ -194,7 +200,14 @@ pub(crate) fn import_curve(parameters: &Parameters) -> Result<Value, CommandErro
         flag(parameters, "replace")?,
     )
     .map_err(|e| CommandError::new(ErrorCode::Failed, e))?;
-    Ok(json!({ "stored": true, "curve": record }))
+    // One table gives one curve; an archive (a filter set) one per table.
+    Ok(match <[Value; 1]>::try_from(records) {
+        Ok([record]) if !path.to_string_lossy().to_lowercase().ends_with(".zip") => {
+            json!({ "stored": true, "curve": record })
+        }
+        Ok(one) => json!({ "stored": true, "curves": one }),
+        Err(many) => json!({ "stored": true, "curves": many }),
+    })
 }
 
 /// `curves`: every R/T curve in the parts library.
