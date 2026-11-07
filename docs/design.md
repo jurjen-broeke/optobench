@@ -104,7 +104,7 @@ The model is geometric ray optics carrying power, with wave optics only where mi
 
 - **Ray:** position, unit direction, wavelength (µm), power (W), accumulated optical path length, and an optional Jones vector for polarization. Rays are traced in batches of struct-of-arrays for SIMD and later GPU.
 - **Sequential trace:** an ordered list of analytic surfaces in local frames. Intersection is closed-form for planes, spheres and conics, and Newton on the sag function for aspheres and freeforms. Used for lens prescriptions, paraxial analysis and optimization.
-- **Non-sequential trace:** rays hit any body in the scene. Candidates come from a BVH over the faces' bounding boxes, and every hit is computed on the exact B-rep surface (closed form for analytic surfaces, Newton for B-splines and swept surfaces), so refraction never uses faceted normals; a library prescription, when there is one, replaces the STEP surface of a tagged optical face. A triangle mesh is only needed for display and comes with the UI (decided 2026-11-07, M4b). Untagged bodies absorb and record the hit as clipping.
+- **Non-sequential trace:** rays hit any body in the scene. Candidates come from a BVH over the faces' bounding boxes, and every hit is computed on the exact B-rep surface (closed form for analytic surfaces, Newton for B-splines and swept surfaces), so refraction never uses faceted normals; a library prescription, when there is one, is checked against the STEP faces (differences above 0.05 mm reported) while the exact STEP faces are traced (M5c1; whether a prescription should replace them is open). A triangle mesh is only needed for display and comes with the UI (decided 2026-11-07, M4b). Untagged bodies absorb and record the hit as clipping.
 - **Interactions:** vector Snell's law with total internal reflection; Fresnel s/p amplitude coefficients; Beer–Lambert bulk absorption; thin-film stacks by transfer matrix; ideal mirror, beamsplitter and filter (from tabulated R/T curves the user supplies); grating equation; Lambertian and Gaussian scatter on chosen faces; ray splitting with a power cutoff (default 1e-6 of source power).
 - **Materials:** Sellmeier, Schott, Cauchy and tabulated n,k data, with coefficient databases the user downloads (see Ground rules); bundled only when the data is truly open under compatible terms (formula-defined materials such as air and fused silica always are). Air at the user's temperature and pressure.
 - **Sources:** collimated beam, Gaussian beam (waist, M²), fiber (core diameter, NA), Lambertian LED (emitter size), point source, each with power and a spectrum.
@@ -190,7 +190,7 @@ format = "optobench/1"
 kind = "part"
 part = "LA1xxx-A"
 vendor = "Thorlabs"
-type = "singlet"
+type = "lens"                             # or "filter" (flat plate), "mirror"
 source = "https://www.thorlabs.com/..."   # spec sheet the numbers came from
 diameter = 25.4
 clear_aperture = 22.9
@@ -200,11 +200,11 @@ surfaces = [
 ]
 thickness = [5.0]
 glass = ["N-BK7"]
-coating = { name = "AR 350-700 nm", curve = "user" }   # user supplies the curve
-mechanical = { axis_from_step = "auto" }                  # find the optical axis from the spherical faces
+coating = { name = "AR 350-700 nm", curve = "user" }   # user supplies the curve (M5c2)
+products = ["ttn189114-e0w"]                            # other names of its STEP product
 ```
 
-When a part is matched, `io` reads the radii and centre thickness from the exact spherical and planar faces in the STEP file and compares them with the library entry. A difference above 0.05 mm is reported, catching simplified or wrong vendor models.
+A STEP product named after a part (its part number or one of `products`) is that part. The optical axis of each of its bodies comes from the rim cylinder (for a rectangular plate, its thinnest pair of opposite flat faces); `io` reads the radii and centre thicknesses from the exact spherical and planar faces along it and compares them with the library entry. The bodies that match are the part's glasses, the rest (the mount) absorbs. A difference above 0.05 mm is reported, catching simplified or wrong vendor models. Matching by product name rather than geometry fingerprint is deliberate: vendor product names are internal numbers, but SolidCraft names a component after its file, and its export merges faces, so fingerprints change (M5c1).
 
 **Standalone scene** (`<name>.optobench`) uses the same element, source and detector tables as the sidecar, but places elements itself instead of pointing at bodies. Example of a planar layout (values illustrative):
 

@@ -6,6 +6,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod library;
 pub mod placements;
 pub mod refractiveindex;
 pub mod scene_file;

@@ -5,6 +5,15 @@ with the release that introduced them.
 
 ## Unreleased
 
+- M5c1 parts library: part files (`kind = "part"`: prescription, glasses, outline, spec
+  sheet source) in `<user data directory>/optobench/library/parts/<vendor>/`; commands
+  `import-part` and `parts`. Layout elements take `library = "<vendor>/<part>"` (with
+  `reversed`); sidecar lens elements take `library` and pick the part's glass bodies by
+  shape, leaving its mount to absorb. STEP products named after a part are tagged
+  automatically (`[library] automatic = false` to switch off). Radii, centre thicknesses
+  and diameters read from STEP are checked against the part and differences above
+  0.05 mm reported in the trace report (`parts`). `optobench-library` gets its first
+  content: `Part`, `Library`, `profile`, `compare`.
 - M5b sources and detectors: Gaussian beams (1/e² waist diameter, M²; the ray bundle's
   second-moment width follows w(z) = w₀√(1 + (z/z_R)²) exactly), fiber ends (core
   diameter, NA) and Lambertian LEDs (square emitter), each with an optional `spectrum` of

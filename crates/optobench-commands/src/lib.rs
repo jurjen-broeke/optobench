@@ -16,6 +16,7 @@
 #![forbid(unsafe_code)]
 
 mod materials;
+mod parts;
 mod trace;
 
 use serde_json::{Map, Value, json};
@@ -127,6 +128,16 @@ const STANDARD: &[Command] = &[
         id: "import-material",
         summary: "import a downloaded refractiveindex.info material file, licence shown first",
         handler: materials::import_material,
+    },
+    Command {
+        id: "parts",
+        summary: "the parts in the user's parts library",
+        handler: parts::parts,
+    },
+    Command {
+        id: "import-part",
+        summary: "check a part file and copy it into the parts library",
+        handler: parts::import_part,
     },
 ];
 
