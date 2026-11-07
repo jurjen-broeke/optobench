@@ -85,18 +85,26 @@ fn reexport_after_a_move_keeps_every_match() {
         parse(&text, &fixtures().join("cage-relay.optobench"), &lookup).expect("matches");
     // Point the same sidecar at the re-export, whatever the line endings of the checkout
     // (a Windows checkout may have CRLF).
+    let mut inserted = false;
     let moved_text: String = text
         .lines()
         .flat_map(|line| {
             let mut out = vec![line.to_owned()];
-            if line.trim_start().starts_with("kind") {
+            // After the header's `kind` line only (elements have `kind` lines too).
+            if !inserted && line.trim_start().starts_with("kind") {
                 out.push("step = \"cage-relay-moved.step\"".to_owned());
+                inserted = true;
             }
             out
         })
         .collect::<Vec<_>>()
         .join("\n");
     assert!(moved_text.contains("step = \"cage-relay-moved.step\""));
+    // The same sidecar as a Windows checkout would have it (CRLF) reads the same.
+    let crlf = moved_text.replace('\n', "\r\n");
+    let from_crlf = parse(&crlf, &fixtures().join("cage-relay.optobench"), &lookup)
+        .expect("CRLF line endings read the same");
+    assert_eq!(from_crlf.solids.len(), original.solids.len());
     let moved = parse(
         &moved_text,
         &fixtures().join("cage-relay.optobench"),
