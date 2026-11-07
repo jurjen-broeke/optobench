@@ -14,6 +14,7 @@ fn beam(frame: Frame, diameter: f64) -> Source {
         wavelength: WAVELENGTH,
         power: 1.0,
         rings: 6,
+        spectrum: vec![],
     }
 }
 
@@ -182,6 +183,7 @@ fn tube_clips_the_wide_part_of_a_cone() {
             wavelength: WAVELENGTH,
             power: 1.0,
             rings: 8,
+            spectrum: vec![],
         }],
         proxies: vec![Proxy {
             id: "tube".into(),
@@ -240,4 +242,159 @@ fn invalid_scenes_are_rejected_with_the_item_named() {
         ..empty()
     };
     assert!(message(twice).contains("used more than once"));
+}
+
+fn free_space(source: Source, detector_z: f64, size: f64) -> SceneTrace {
+    // A source on the z axis and a large detector across it at z, nothing between.
+    let frame = |z: f64| frame_along(Vec3::new(0.0, 0.0, z), Vec3::Z).expect("valid");
+    let scene = Scene {
+        sources: vec![Source {
+            frame: frame(0.0),
+            ..source
+        }],
+        detectors: vec![Detector {
+            id: "screen".into(),
+            frame: frame(detector_z),
+            size: (size, size),
+            pixels: (10, 10),
+        }],
+        ..empty()
+    };
+    scene.trace().expect("traces")
+}
+
+fn source(kind: SourceKind, rings: usize) -> Source {
+    Source {
+        id: "source".into(),
+        frame: Frame::PARENT,
+        kind,
+        wavelength: 1.064,
+        power: 1.0,
+        rings,
+        spectrum: vec![],
+    }
+}
+
+#[test]
+fn gaussian_beam_follows_the_embedded_gaussian_law() {
+    // w(z) = w₀ √(1 + (z/z_R)²), z_R = π w₀² / (M² λ) (Siegman, Lasers, ch. 17), for the
+    // second-moment width 2σₓ of the ray bundle. Per axis σₓ = rms radius / √2.
+    let (w0, m2, lambda) = (0.5_f64, 1.3_f64, 1.064e-3_f64);
+    let rayleigh = core::f64::consts::PI * w0 * w0 / (m2 * lambda);
+    for z in [0.0, rayleigh, 3.0 * rayleigh] {
+        let trace = free_space(
+            source(
+                SourceKind::Gaussian {
+                    waist_diameter: 2.0 * w0,
+                    m_squared: m2,
+                    angle_rings: 4,
+                },
+                4,
+            ),
+            z.max(1e-6),
+            200.0,
+        );
+        let result = &trace.detectors[0];
+        assert!((result.power - 1.0).abs() < 1e-12);
+        let width = 2.0 * result.rms_radius / 2f64.sqrt();
+        let expected = w0 * (1.0 + (z / rayleigh).powi(2)).sqrt();
+        assert!(
+            (width - expected).abs() < 1e-9 * expected,
+            "z = {z}: {width} vs {expected}"
+        );
+    }
+}
+
+#[test]
+fn fiber_stays_within_its_numerical_aperture() {
+    // Directions uniform in direction cosines within NA: the power within a half-angle α
+    // is (sin α / NA)², and none leaves beyond asin(NA).
+    let na = 0.22;
+    let trace = free_space(
+        source(
+            SourceKind::Fiber {
+                core_diameter: 0.05,
+                numerical_aperture: na,
+                angle_rings: 10,
+            },
+            2,
+        ),
+        1.0,
+        10.0,
+    );
+    let angular = &trace.detectors[0].angular;
+    let within = |degrees: f64| -> f64 {
+        let bins = (degrees / ANGULAR_BIN_DEGREES).round() as usize;
+        angular.iter().take(bins).sum()
+    };
+    for degrees in [5.0_f64, 10.0] {
+        // Rings carry whole annuli: the cumulative power can be off by one annulus,
+        // 2 s Δ with s = sin α / NA and Δ = 1 / (rings + 0.5).
+        let s = degrees.to_radians().sin() / na;
+        let expected = s * s;
+        let tolerance = 2.0 * s / 10.5;
+        assert!(
+            (within(degrees) - expected).abs() <= tolerance,
+            "{degrees}°: {} vs {expected}",
+            within(degrees)
+        );
+    }
+    let edge = na.asin().to_degrees();
+    assert!((within(15.0) - 1.0).abs() < 1e-12 && edge < 15.0);
+}
+
+#[test]
+fn led_is_lambertian() {
+    // A Lambertian emitter sends sin²α of its power within a half-angle α.
+    let trace = free_space(
+        source(
+            SourceKind::Led {
+                size: 1.0,
+                angle_rings: 24,
+            },
+            1,
+        ),
+        1e-3,
+        100.0,
+    );
+    let angular = &trace.detectors[0].angular;
+    let within = |degrees: f64| -> f64 {
+        let bins = (degrees / ANGULAR_BIN_DEGREES).round() as usize;
+        angular.iter().take(bins).sum()
+    };
+    for degrees in [30.0_f64, 45.0, 60.0] {
+        // As for the fiber: off by at most one annulus, 2 sin α / (rings + 0.5).
+        let s = degrees.to_radians().sin();
+        let expected = s * s;
+        let tolerance = 2.0 * s / 24.5;
+        assert!(
+            (within(degrees) - expected).abs() <= tolerance,
+            "{degrees}°: {} vs {expected}",
+            within(degrees)
+        );
+    }
+    assert!((trace.ledger.launched - 1.0).abs() < 1e-12);
+}
+
+#[test]
+fn spectrum_shares_the_power_between_its_lines() {
+    let mut beam = source(SourceKind::Collimated { diameter: 1.0 }, 2);
+    beam.spectrum = vec![(0.488, 1.0), (0.561, 3.0)];
+    let rays = Scene::launch(&beam);
+    let power_at = |w: f64| -> f64 {
+        rays.iter()
+            .filter(|r| (r.wavelength - w).abs() < 1e-12)
+            .map(|r| r.power)
+            .sum()
+    };
+    assert!((power_at(0.488) - 0.25).abs() < 1e-12 && (power_at(0.561) - 0.75).abs() < 1e-12);
+    assert_eq!(rays.len(), 2 * 19);
+}
+
+#[test]
+fn disk_samples_cover_the_disk_and_stay_inside_it() {
+    let samples = disk_samples(5);
+    let total: f64 = samples.iter().map(|s| s.2).sum();
+    assert!((total - 1.0).abs() < 1e-12);
+    assert!(samples.iter().all(|s| s.0.hypot(s.1) < 1.0));
 }

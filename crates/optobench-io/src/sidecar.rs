@@ -23,7 +23,8 @@
 //!
 //! [[source]]
 //! id = "fiber"
-//! kind = "point"                    # or "collimated" with diameter
+//! kind = "point"                    # or "collimated", "gaussian", "fiber", "led": the keys
+//!                                   # and `spectrum` as in layout files (scene_file)
 //! wavelength_um = 0.633
 //! power_w = 0.001
 //! half_angle_deg = 5.0
@@ -62,7 +63,7 @@ use std::path::{Path, PathBuf};
 use optobench_materials::Medium;
 use optobench_math::{Frame, Transform, Vec3, radians_from_degrees};
 use optobench_scene::layout::frame_along;
-use optobench_scene::{Detector, Scene, Solid, SolidFace, SolidRole, Source, SourceKind};
+use optobench_scene::{Detector, Scene, Solid, SolidFace, SolidRole};
 use optobench_surfaces::brep::FaceSurface;
 use optobench_trace::Coating;
 use toml::{Table, Value};
@@ -520,69 +521,10 @@ pub fn parse(text: &str, sidecar: &Path, lookup: &MaterialLookup) -> Result<Scen
 
     let position = ["position", "axis", "frame"];
     for item in items(&root, "source")? {
-        let kind = match item.text("kind")? {
-            "collimated" => {
-                check_keys(
-                    item.table,
-                    &with(
-                        &position,
-                        &[
-                            "id",
-                            "kind",
-                            "wavelength_um",
-                            "power_w",
-                            "diameter",
-                            "rings",
-                        ],
-                    ),
-                    &item.context,
-                )?;
-                SourceKind::Collimated {
-                    diameter: item.positive("diameter")?,
-                }
-            }
-            "point" => {
-                check_keys(
-                    item.table,
-                    &with(
-                        &position,
-                        &[
-                            "id",
-                            "kind",
-                            "wavelength_um",
-                            "power_w",
-                            "half_angle_deg",
-                            "rings",
-                        ],
-                    ),
-                    &item.context,
-                )?;
-                SourceKind::Point {
-                    half_angle: radians_from_degrees(item.positive("half_angle_deg")?),
-                }
-            }
-            other => {
-                return Err(error(format!(
-                    "{}: source kind `{other}` is not known; use \"collimated\" or \"point\"",
-                    item.context
-                )));
-            }
-        };
-        let rings = item.optional_number("rings", 6.0)?;
-        if rings < 0.0 || rings.fract() != 0.0 || rings > 200.0 {
-            return Err(error(format!(
-                "{}: `rings` must be a whole number from 0 to 200",
-                item.context
-            )));
-        }
-        scene.sources.push(Source {
-            id: item.text("id")?.to_owned(),
-            frame: placement_frame(&item, &bodies)?,
-            kind,
-            wavelength: item.positive("wavelength_um")?,
-            power: item.positive("power_w")?,
-            rings: rings as usize,
-        });
+        let frame = placement_frame(&item, &bodies)?;
+        scene
+            .sources
+            .push(crate::scene_file::source(&item, &position, frame)?);
     }
     for item in items(&root, "detector")? {
         check_keys(

@@ -94,6 +94,10 @@ fn literal(value: &toml::Value) -> String {
         toml::Value::Integer(i) => i.to_string(),
         toml::Value::Float(f) => format!("{f:?}"),
         toml::Value::Boolean(b) => b.to_string(),
+        toml::Value::Array(items) => format!(
+            "[{}]",
+            items.iter().map(literal).collect::<Vec<_>>().join(", ")
+        ),
         other => format!("{other:?}"),
     }
 }
@@ -172,6 +176,13 @@ pub fn sidecar(scene: &Scene, layout: &Table, step_name: &str) -> String {
                 "power_w",
                 "diameter",
                 "half_angle_deg",
+                "waist_diameter",
+                "m_squared",
+                "core_diameter",
+                "na",
+                "size",
+                "angle_rings",
+                "spectrum",
                 "rings",
             ] {
                 if let Some(v) = t.get(key) {

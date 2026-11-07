@@ -5,6 +5,12 @@ with the release that introduced them.
 
 ## Unreleased
 
+- M5b sources and detectors: Gaussian beams (1/e² waist diameter, M²; the ray bundle's
+  second-moment width follows w(z) = w₀√(1 + (z/z_R)²) exactly), fiber ends (core
+  diameter, NA) and Lambertian LEDs (square emitter), each with an optional `spectrum` of
+  weighted lines sharing the power; source kinds `gaussian`, `fiber`, `led` in layout and
+  sidecar files. Detectors report the power by angle from their normal in 5° bins
+  (`angular_power_w` in the trace report).
 - M5a power physics: ray splitting at partly reflecting faces down to a cutoff (default
   1e-6 of the source power, `[trace]` in layout and sidecar files), with the power
   ledger gaining "below cutoff"; coatings as thin-film stacks (characteristic matrices,

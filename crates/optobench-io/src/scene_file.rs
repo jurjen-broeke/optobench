@@ -15,13 +15,20 @@
 //!
 //! [[source]]
 //! id = "laser"
-//! kind = "collimated"               # or "point" with half_angle_deg
-//! wavelength_um = 0.633
+//! kind = "collimated"               # or "point" with half_angle_deg, or "gaussian",
+//!                                   # "fiber", "led" (below)
+//! wavelength_um = 0.633             # optional when spectrum is given
+//! spectrum = [[0.488, 1.0], [0.561, 3.0]]  # optional lines [µm, weight]: power shared by weight
 //! power_w = 0.001
 //! diameter = 2.0
 //! rings = 6                         # optional sampling, default 6
 //! offset = [0.0, 2.0]               # optional lateral offset in the source frame (mm)
 //! at = 0.0                          # planar; table: hole = [0, 0], height = 75, axis = [1, 0, 0]
+//!
+//! # Other kinds (angle_rings: optional angular sampling, default 3; led 4):
+//! #   gaussian: waist_diameter (1/e² diameter at the source, mm), m_squared (≥ 1, default 1)
+//! #   fiber:    core_diameter (mm), na (< 1): uniform over the core, within the NA
+//! #   led:      size (square side, mm): Lambertian over the hemisphere
 //!
 //! [[element]]
 //! id = "L1"
@@ -353,6 +360,149 @@ pub(crate) fn trace_options(root: &Table) -> Result<Option<f64>, FileError> {
     Ok(Some(cutoff))
 }
 
+/// A `[[source]]` entry, in either kind of file. `placement_keys` are the keys that
+/// place it (checked by the caller); `frame` is where it was placed.
+pub(crate) fn source(
+    item: &Item,
+    placement_keys: &[&'static str],
+    frame: Frame,
+) -> Result<Source, FileError> {
+    let kind = item.text("kind")?;
+    let (specific, default_rings): (&[&'static str], f64) = match kind {
+        "collimated" => (&["diameter"], 6.0),
+        "point" => (&["half_angle_deg"], 6.0),
+        "gaussian" => (&["waist_diameter", "m_squared", "angle_rings"], 3.0),
+        "fiber" => (&["core_diameter", "na", "angle_rings"], 3.0),
+        "led" => (&["size", "angle_rings"], 3.0),
+        other => {
+            return Err(error(format!(
+                "{}: source kind `{other}` is not known; use \"collimated\", \"point\", \"gaussian\", \"fiber\" or \"led\"",
+                item.context
+            )));
+        }
+    };
+    let common = [
+        "id",
+        "kind",
+        "wavelength_um",
+        "power_w",
+        "rings",
+        "spectrum",
+    ];
+    let allowed: Vec<&str> = common
+        .iter()
+        .chain(specific)
+        .chain(placement_keys)
+        .copied()
+        .collect();
+    check_keys(item.table, &allowed, &item.context)?;
+    let whole = |key: &str, default: f64| -> Result<usize, FileError> {
+        let value = item.optional_number(key, default)?;
+        if value < 0.0 || value.fract() != 0.0 || value > 200.0 {
+            return Err(error(format!(
+                "{}: `{key}` must be a whole number from 0 to 200",
+                item.context
+            )));
+        }
+        Ok(value as usize)
+    };
+    let source_kind = match kind {
+        "collimated" => SourceKind::Collimated {
+            diameter: item.positive("diameter")?,
+        },
+        "point" => SourceKind::Point {
+            half_angle: radians_from_degrees(item.positive("half_angle_deg")?),
+        },
+        "gaussian" => SourceKind::Gaussian {
+            waist_diameter: item.positive("waist_diameter")?,
+            m_squared: {
+                let m = item.optional_number("m_squared", 1.0)?;
+                if m < 1.0 {
+                    return Err(error(format!(
+                        "{}: `m_squared` is at least 1",
+                        item.context
+                    )));
+                }
+                m
+            },
+            angle_rings: whole("angle_rings", 3.0)?,
+        },
+        "fiber" => SourceKind::Fiber {
+            core_diameter: item.positive("core_diameter")?,
+            numerical_aperture: {
+                let na = item.positive("na")?;
+                if na >= 1.0 {
+                    return Err(error(format!("{}: `na` must be below 1", item.context)));
+                }
+                na
+            },
+            angle_rings: whole("angle_rings", 3.0)?,
+        },
+        _ => SourceKind::Led {
+            size: item.positive("size")?,
+            angle_rings: whole("angle_rings", 4.0)?,
+        },
+    };
+    let spectrum: Vec<(f64, f64)> = match item.table.get("spectrum") {
+        None => Vec::new(),
+        Some(value) => {
+            let lines = value.as_array().ok_or_else(|| {
+                error(format!(
+                    "{}: `spectrum` is a list of [wavelength_um, weight]",
+                    item.context
+                ))
+            })?;
+            lines
+                .iter()
+                .map(|line| {
+                    let pair: Vec<f64> = line
+                        .as_array()
+                        .map(|a| {
+                            a.iter()
+                                .filter_map(|v| {
+                                    v.as_float().or_else(|| v.as_integer().map(|i| i as f64))
+                                })
+                                .collect()
+                        })
+                        .unwrap_or_default();
+                    match pair[..] {
+                        [w, weight] if w > 0.0 && weight >= 0.0 => Ok((w, weight)),
+                        _ => Err(error(format!(
+                            "{}: each spectrum line is [wavelength_um, weight] with both positive",
+                            item.context
+                        ))),
+                    }
+                })
+                .collect::<Result<_, _>>()?
+        }
+    };
+    if !spectrum.is_empty() && spectrum.iter().map(|l| l.1).sum::<f64>() <= 0.0 {
+        return Err(error(format!(
+            "{}: the spectrum's weights add up to zero",
+            item.context
+        )));
+    }
+    let wavelength = match (item.table.get("wavelength_um"), spectrum.first()) {
+        (Some(_), _) => item.positive("wavelength_um")?,
+        (None, Some(&(w, _))) => w,
+        (None, None) => {
+            return Err(error(format!(
+                "{}: missing `wavelength_um` (or a `spectrum`)",
+                item.context
+            )));
+        }
+    };
+    Ok(Source {
+        id: item.text("id")?.to_owned(),
+        frame,
+        kind: source_kind,
+        wavelength,
+        power: item.positive("power_w")?,
+        rings: whole("rings", default_rings)?,
+        spectrum,
+    })
+}
+
 /// Checks the first two lines: the format tag and the kind.
 pub(crate) fn check_header(text: &str) -> Result<(), FileError> {
     let mut lines = text
@@ -488,57 +638,6 @@ pub fn parse(text: &str, lookup: &MaterialLookup) -> Result<Scene, FileError> {
     };
 
     for item in items(&root, "source")? {
-        let kind = item.text("kind")?;
-        let source_kind = match kind {
-            "collimated" => {
-                check_keys(
-                    item.table,
-                    &with(
-                        position,
-                        &[
-                            "id",
-                            "kind",
-                            "wavelength_um",
-                            "power_w",
-                            "diameter",
-                            "rings",
-                            "offset",
-                        ],
-                    ),
-                    &item.context,
-                )?;
-                SourceKind::Collimated {
-                    diameter: item.positive("diameter")?,
-                }
-            }
-            "point" => {
-                check_keys(
-                    item.table,
-                    &with(
-                        position,
-                        &[
-                            "id",
-                            "kind",
-                            "wavelength_um",
-                            "power_w",
-                            "half_angle_deg",
-                            "rings",
-                            "offset",
-                        ],
-                    ),
-                    &item.context,
-                )?;
-                SourceKind::Point {
-                    half_angle: radians_from_degrees(item.positive("half_angle_deg")?),
-                }
-            }
-            other => {
-                return Err(error(format!(
-                    "{}: source kind `{other}` is not known; use \"collimated\" or \"point\"",
-                    item.context
-                )));
-            }
-        };
         let mut frame = placement.frame(&item)?;
         if item.table.contains_key("offset") {
             let (dx, dy) = item.pair("offset")?;
@@ -547,21 +646,9 @@ pub fn parse(text: &str, lookup: &MaterialLookup) -> Result<Scene, FileError> {
             frame = Frame::new(origin, z, x)
                 .ok_or_else(|| error(format!("{}: degenerate frame", item.context)))?;
         }
-        let rings = item.optional_number("rings", 6.0)?;
-        if rings < 0.0 || rings.fract() != 0.0 || rings > 200.0 {
-            return Err(error(format!(
-                "{}: `rings` must be a whole number from 0 to 200",
-                item.context
-            )));
-        }
-        scene.sources.push(Source {
-            id: item.text("id")?.to_owned(),
-            frame,
-            kind: source_kind,
-            wavelength: item.positive("wavelength_um")?,
-            power: item.positive("power_w")?,
-            rings: rings as usize,
-        });
+        scene
+            .sources
+            .push(source(&item, &with(position, &["offset"]), frame)?);
     }
 
     for item in &elements {
@@ -835,6 +922,66 @@ mod tests {
         assert_eq!(finer.split_cutoff, Some(1e-9));
         let bad = read(&format!("{HEADER}[trace]\nsplit_cutoff = 2\n")).expect_err("rejected");
         assert!(bad.0.contains("between 0 and 1"));
+    }
+
+    #[test]
+    #[allow(clippy::float_cmp, reason = "values parsed exactly from the file text")]
+    fn gaussian_fiber_and_led_sources_with_spectra() {
+        let source = |body: &str| {
+            read(&format!(
+                "{HEADER}[[source]]\nid = \"s\"\npower_w = 0.002\nat = 0\n{body}"
+            ))
+            .map(|scene| scene.sources[0].clone())
+        };
+        let beam = source(
+            "kind = \"gaussian\"\nwavelength_um = 1.064\nwaist_diameter = 1.0\nm_squared = 1.3\n",
+        )
+        .expect("valid");
+        assert!(matches!(
+            beam.kind,
+            SourceKind::Gaussian { waist_diameter, m_squared, angle_rings: 3 }
+                if waist_diameter == 1.0 && m_squared == 1.3
+        ));
+        let fiber = source(
+            "kind = \"fiber\"\ncore_diameter = 0.05\nna = 0.22\nangle_rings = 6\nspectrum = [[0.488, 1], [0.561, 3.0]]\n",
+        )
+        .expect("valid");
+        assert!(matches!(
+            fiber.kind,
+            SourceKind::Fiber { numerical_aperture, angle_rings: 6, .. } if numerical_aperture == 0.22
+        ));
+        // Without wavelength_um, the first spectral line is the source's wavelength.
+        assert_eq!(fiber.spectrum, vec![(0.488, 1.0), (0.561, 3.0)]);
+        assert_eq!(fiber.wavelength, 0.488);
+        let led = source("kind = \"led\"\nwavelength_um = 0.625\nsize = 1.0\n").expect("valid");
+        assert!(matches!(led.kind, SourceKind::Led { size, angle_rings: 4 } if size == 1.0));
+        for (body, message) in [
+            (
+                "kind = \"gaussian\"\nwavelength_um = 1\nwaist_diameter = 1\nm_squared = 0.9\n",
+                "at least 1",
+            ),
+            (
+                "kind = \"fiber\"\nwavelength_um = 1\ncore_diameter = 0.05\nna = 1.2\n",
+                "below 1",
+            ),
+            ("kind = \"led\"\nsize = 1\n", "missing `wavelength_um`"),
+            (
+                "kind = \"led\"\nsize = 1\nspectrum = [[0.5, 0]]\n",
+                "add up to zero",
+            ),
+            (
+                "kind = \"led\"\nsize = 1\nspectrum = [[0.5]]\n",
+                "[wavelength_um, weight]",
+            ),
+            (
+                "kind = \"led\"\nwavelength_um = 1\nsize = 1\nna = 0.1\n",
+                "`na`",
+            ),
+            ("kind = \"laser\"\nwavelength_um = 1\n", "not known"),
+        ] {
+            let error = source(body).expect_err("rejected");
+            assert!(error.0.contains(message), "{body}: {}", error.0);
+        }
     }
 
     #[test]

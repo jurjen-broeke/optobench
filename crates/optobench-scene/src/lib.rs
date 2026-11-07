@@ -126,6 +126,38 @@ pub enum SourceKind {
         /// Cone half-angle (radians).
         half_angle: f64,
     },
+    /// A Gaussian beam with its waist at the frame origin, along local +z. Ray positions
+    /// and slopes are sampled with Gaussian weights and scaled so their second moments
+    /// are exactly the beam's: radius w₀ (1/e² of irradiance) and divergence
+    /// θ = M²λ/(πw₀). The bundle's second-moment width then follows the embedded-Gaussian
+    /// law W(z) = w₀ √(1 + (z/z_R)²), z_R = πw₀²/(M²λ) (A. E. Siegman, Lasers, ch. 17).
+    Gaussian {
+        /// Waist diameter 2w₀ (mm).
+        waist_diameter: f64,
+        /// Beam quality M² (1 for an ideal TEM₀₀ beam).
+        m_squared: f64,
+        /// Sampling of directions: rings of the slope grid.
+        angle_rings: usize,
+    },
+    /// A fiber end at the frame origin: positions uniform over the core, directions
+    /// uniform in direction cosines inside the numerical aperture.
+    Fiber {
+        /// Core diameter (mm).
+        core_diameter: f64,
+        /// Numerical aperture (sine of the half-angle of acceptance, in air).
+        numerical_aperture: f64,
+        /// Sampling of directions: rings of the direction-cosine grid.
+        angle_rings: usize,
+    },
+    /// A Lambertian emitter: a square of side `size` across local +z, radiance the same
+    /// in every direction of the forward hemisphere (directions uniform in direction
+    /// cosines, which is exactly Lambertian for rays of equal power).
+    Led {
+        /// Side of the square emitter (mm).
+        size: f64,
+        /// Sampling of directions: rings of the direction-cosine grid.
+        angle_rings: usize,
+    },
 }
 
 /// A light source.
@@ -137,12 +169,16 @@ pub struct Source {
     pub frame: Frame,
     /// What it emits.
     pub kind: SourceKind,
-    /// Vacuum wavelength (µm).
+    /// Vacuum wavelength (µm), used when `spectrum` is empty.
     pub wavelength: f64,
     /// Total power (W).
     pub power: f64,
-    /// Sampling: hexapolar rings (1 + 3·rings·(rings + 1) rays).
+    /// Sampling: hexapolar rings (1 + 3·rings·(rings + 1) rays); for extended sources,
+    /// the rings (or grid) of positions.
     pub rings: usize,
+    /// Spectral lines as (wavelength µm, relative weight): the power is shared between
+    /// them in proportion to the weights. Empty for a single `wavelength`.
+    pub spectrum: Vec<(f64, f64)>,
 }
 
 /// A mechanical proxy: absorbs whatever hits it.
@@ -275,6 +311,47 @@ pub struct Built {
     pub system: NonSequentialSystem,
     /// `owners[face.owner]` for every face.
     pub owners: Vec<Owner>,
+}
+
+/// Points in the unit disk with the area each stands for, normalised to sum to 1: the
+/// centre and `rings` rings of 6i points, ring i at radius i/(rings + ½) standing for the
+/// annulus out to (i + ½)/(rings + ½). Every point lies inside the disk.
+pub fn disk_samples(rings: usize) -> Vec<(f64, f64, f64)> {
+    let n = rings as f64 + 0.5;
+    let edge = |i: f64| ((i + 0.5) / n).min(1.0);
+    let mut out = vec![(0.0, 0.0, edge(0.0).powi(2))];
+    for ring in 1..=rings {
+        let r = ring as f64 / n;
+        let count = 6 * ring;
+        let area = edge(ring as f64).powi(2) - edge(ring as f64 - 1.0).powi(2);
+        for k in 0..count {
+            let a = core::f64::consts::TAU * k as f64 / count as f64;
+            out.push((r * a.cos(), r * a.sin(), area / count as f64));
+        }
+    }
+    out
+}
+
+/// Gaussian samples: points of a disk grid out to 2.5σ, weighted by exp(−r²/2σ²) times
+/// their area, and scaled so the weighted second moment per axis is exactly σ².
+fn gaussian_samples(rings: usize, sigma: f64) -> Vec<(f64, f64, f64)> {
+    let reach = 2.5;
+    let mut points: Vec<(f64, f64, f64)> = disk_samples(rings)
+        .into_iter()
+        .map(|(u, v, a)| {
+            let (x, y) = (u * reach, v * reach);
+            (x, y, a * (-(x * x + y * y) / 2.0).exp())
+        })
+        .collect();
+    let total: f64 = points.iter().map(|p| p.2).sum();
+    let moment: f64 = points.iter().map(|p| p.2 * p.0 * p.0).sum::<f64>() / total;
+    let scale = sigma / moment.sqrt();
+    for p in &mut points {
+        p.0 *= scale;
+        p.1 *= scale;
+        p.2 /= total;
+    }
+    points
 }
 
 /// Hexapolar points in the unit disk: centre plus `rings` rings of 6i points.
@@ -528,33 +605,130 @@ impl Scene {
         Ok(Built { system, owners })
     }
 
-    /// The rays a source launches, each with an equal share of its power.
+    /// The rays a source launches, sharing its power: for each spectral line, every
+    /// combination of a position sample and a direction sample.
     pub fn launch(source: &Source) -> Vec<Ray> {
-        let points = hexapolar(source.rings);
-        let share = source.power / points.len() as f64;
+        let lines: Vec<(f64, f64)> = if source.spectrum.is_empty() {
+            vec![(source.wavelength, 1.0)]
+        } else {
+            let total: f64 = source.spectrum.iter().map(|l| l.1).sum();
+            source
+                .spectrum
+                .iter()
+                .map(|&(w, p)| (w, p / total))
+                .collect()
+        };
         let frame = &source.frame;
-        points
-            .into_iter()
-            .filter_map(|(u, v)| {
-                let (position, direction) = match source.kind {
-                    SourceKind::Collimated { diameter } => {
-                        let r = diameter / 2.0;
-                        (Vec3::new(u * r, v * r, 0.0), Vec3::Z)
+        let mut rays = Vec::new();
+        for (wavelength, share) in lines {
+            // (position, direction, fraction of the line's power)
+            let bundle: Vec<(Vec3, Vec3, f64)> = match source.kind {
+                SourceKind::Collimated { diameter } => {
+                    let points = hexapolar(source.rings);
+                    let each = 1.0 / points.len() as f64;
+                    points
+                        .into_iter()
+                        .map(|(u, v)| {
+                            (
+                                Vec3::new(u * diameter / 2.0, v * diameter / 2.0, 0.0),
+                                Vec3::Z,
+                                each,
+                            )
+                        })
+                        .collect()
+                }
+                SourceKind::Point { half_angle } => {
+                    let points = hexapolar(source.rings);
+                    let each = 1.0 / points.len() as f64;
+                    let s = half_angle.sin();
+                    points
+                        .into_iter()
+                        .map(|(u, v)| {
+                            let (a, b) = (u * s, v * s);
+                            (
+                                Vec3::ZERO,
+                                Vec3::new(a, b, (1.0 - a * a - b * b).sqrt()),
+                                each,
+                            )
+                        })
+                        .collect()
+                }
+                SourceKind::Gaussian {
+                    waist_diameter,
+                    m_squared,
+                    angle_rings,
+                } => {
+                    let w0 = waist_diameter / 2.0;
+                    let theta = m_squared * wavelength * 1e-3 / (core::f64::consts::PI * w0);
+                    let positions = gaussian_samples(source.rings, w0 / 2.0);
+                    let slopes = gaussian_samples(angle_rings, theta / 2.0);
+                    positions
+                        .iter()
+                        .flat_map(|&(x, y, a)| {
+                            slopes.iter().map(move |&(sx, sy, b)| {
+                                (Vec3::new(x, y, 0.0), Vec3::new(sx, sy, 1.0), a * b)
+                            })
+                        })
+                        .collect()
+                }
+                SourceKind::Fiber {
+                    core_diameter,
+                    numerical_aperture,
+                    angle_rings,
+                } => {
+                    let positions = disk_samples(source.rings);
+                    let directions = disk_samples(angle_rings);
+                    let r = core_diameter / 2.0;
+                    positions
+                        .iter()
+                        .flat_map(|&(x, y, a)| {
+                            directions.iter().map(move |&(u, v, b)| {
+                                let (u, v) = (u * numerical_aperture, v * numerical_aperture);
+                                (
+                                    Vec3::new(x * r, y * r, 0.0),
+                                    Vec3::new(u, v, (1.0 - u * u - v * v).sqrt()),
+                                    a * b,
+                                )
+                            })
+                        })
+                        .collect()
+                }
+                SourceKind::Led { size, angle_rings } => {
+                    // A square grid of (2·rings + 1)² cell centres over the emitter.
+                    let n = 2 * source.rings + 1;
+                    let cell = size / n as f64;
+                    let directions = disk_samples(angle_rings);
+                    let mut out = Vec::new();
+                    for i in 0..n {
+                        for j in 0..n {
+                            let x = -size / 2.0 + cell * (i as f64 + 0.5);
+                            let y = -size / 2.0 + cell * (j as f64 + 0.5);
+                            for &(u, v, b) in &directions {
+                                out.push((
+                                    Vec3::new(x, y, 0.0),
+                                    Vec3::new(u, v, (1.0 - u * u - v * v).max(0.0).sqrt()),
+                                    b / (n * n) as f64,
+                                ));
+                            }
+                        }
                     }
-                    SourceKind::Point { half_angle } => {
-                        let s = half_angle.sin();
-                        let (a, b) = (u * s, v * s);
-                        (Vec3::ZERO, Vec3::new(a, b, (1.0 - a * a - b * b).sqrt()))
-                    }
-                };
-                Ray::new(
-                    frame.to_parent_point(position),
-                    frame.to_parent_vector(direction),
-                    source.wavelength,
-                    share,
-                )
-            })
-            .collect()
+                    out
+                }
+            };
+            rays.extend(
+                bundle
+                    .into_iter()
+                    .filter_map(|(position, direction, fraction)| {
+                        Ray::new(
+                            frame.to_parent_point(position),
+                            frame.to_parent_vector(direction),
+                            wavelength,
+                            source.power * share * fraction,
+                        )
+                    }),
+            );
+        }
+        rays
     }
 
     /// Builds the scene, traces every source and collects the results.
@@ -605,6 +779,9 @@ impl Scene {
         })
     }
 }
+
+/// Width of the bins of a detector's angular distribution (degrees).
+pub const ANGULAR_BIN_DEGREES: f64 = 5.0;
 
 /// Power-weighted centroid and RMS radius of detector hits.
 fn centroid_and_rms(hits: &[((f64, f64), f64)]) -> ((f64, f64), f64) {
@@ -755,6 +932,9 @@ pub struct DetectorResult {
     pub rms_radius: f64,
     /// Irradiance per pixel (W/m²), row by row from −y to +y, each row from −x to +x.
     pub irradiance: Vec<f64>,
+    /// Power arriving at angles from the detector's normal in bins of
+    /// [`ANGULAR_BIN_DEGREES`], from 0° (normal) to 90° (W).
+    pub angular: Vec<f64>,
 }
 
 impl DetectorResult {
@@ -773,6 +953,24 @@ impl DetectorResult {
             .collect();
         let direct_power: f64 = direct.iter().map(|h| h.1).sum();
         let (direct_centroid, direct_rms_radius) = centroid_and_rms(&direct);
+        let bins = (90.0 / ANGULAR_BIN_DEGREES).round() as usize;
+        let mut angular = vec![0.0; bins];
+        let normal = detector.frame.axes()[2];
+        for record in records
+            .iter()
+            .filter(|r| matches!(r.end, End::Detected { detector, .. } if detector == index))
+        {
+            let angle = record
+                .ray
+                .direction
+                .dot(normal)
+                .abs()
+                .min(1.0)
+                .acos()
+                .to_degrees();
+            let bin = ((angle / ANGULAR_BIN_DEGREES) as usize).min(bins - 1);
+            angular[bin] += record.ray.power;
+        }
         let weight = if power > 0.0 { power } else { 1.0 };
         let centroid = (
             hits.iter().map(|((x, _), w)| x * w).sum::<f64>() / weight,
@@ -801,6 +999,7 @@ impl DetectorResult {
             direct_power,
             direct_centroid,
             direct_rms_radius,
+            angular,
             rays: hits.len(),
             centroid,
             rms_radius,

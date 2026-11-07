@@ -65,6 +65,7 @@ fn step_lens_traces_like_the_same_lens_defined_inline() {
             wavelength: 0.55,
             power: 0.001,
             rings: 6,
+            spectrum: vec![],
         }],
         proxies: vec![],
         detectors: vec![Detector {

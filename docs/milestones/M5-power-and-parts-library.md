@@ -22,8 +22,8 @@ unchanged; tracing takes 10.7 s (see design.md, Improvements: performance).
 - [x] Footprints: where the beam lands on each optical element, and how much of the clear aperture it fills
 
 ## M5b Sources and detectors
-- [ ] Gaussian beam (waist, M²), fiber (core diameter, NA), Lambertian LED (emitter size), each with power and a spectrum
-- [ ] Detectors: angular distribution in addition to the irradiance map
+- [x] Gaussian beam (waist, M²), fiber (core diameter, NA), Lambertian LED (emitter size), each with power and a spectrum
+- [x] Detectors: angular distribution in addition to the irradiance map
 
 ## M5c Parts library
 - [ ] Part format (`kind = "part"`), library in the user data directory, import of parts and of R/T curves
