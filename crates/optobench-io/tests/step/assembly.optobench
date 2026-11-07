@@ -1,0 +1,21 @@
+format = "optobench/1"
+kind = "sidecar"
+
+# No element is tagged: the plate and both rods absorb. A beam aimed at rod:1 from above
+# is clipped by it; nothing reaches the detector below.
+
+[[source]]
+id = "beam"
+kind = "collimated"
+wavelength_um = 0.55
+power_w = 0.001
+diameter = 2.0
+position = [15, 15, 200]
+axis = [0, 0, -1]
+
+[[detector]]
+id = "floor"
+position = [15, 15, -50]
+axis = [0, 0, -1]
+size = [20, 20]
+pixels = [10, 10]

@@ -18,6 +18,7 @@ use std::sync::Arc;
 
 use optobench_materials::Medium;
 use optobench_math::{Frame, Vec3};
+use optobench_surfaces::brep::{BrepFace, FaceSurface};
 use optobench_surfaces::{Plane, Sphere, Surface};
 use optobench_trace::Coating;
 use optobench_trace::Ray;
@@ -187,6 +188,48 @@ pub struct Detector {
     pub pixels: (usize, usize),
 }
 
+/// What a solid from CAD (STEP) does.
+#[derive(Debug, Clone)]
+pub enum SolidRole {
+    /// Absorbs and records clipping on every face: mounts, posts, rods, and every body a
+    /// sidecar does not mention.
+    Absorber,
+    /// Refracts on its optical faces, with `material` inside. Its cylindrical and conical
+    /// faces (the ground edge and bevels) absorb as clipping.
+    Lens {
+        /// The glass.
+        material: Medium,
+        /// Coating on every optical face.
+        coating: Coating,
+    },
+    /// Reflects on the faces listed (indices into the solid's faces); the others absorb.
+    Mirror {
+        /// The reflecting faces.
+        reflecting: Vec<usize>,
+    },
+}
+
+/// One exact face of a solid, placed in the scene frame.
+#[derive(Debug, Clone)]
+pub struct SolidFace {
+    /// The face in its body's own frame.
+    pub geometry: Arc<BrepFace>,
+    /// Body frame to scene frame.
+    pub placement: optobench_math::Transform,
+}
+
+/// A solid from CAD.
+#[derive(Debug, Clone)]
+pub struct Solid {
+    /// The element id for a tagged body; for an untagged one, its assembly path and body
+    /// name (`er10:3/19229-001-1-solid1`).
+    pub id: String,
+    /// Its faces.
+    pub faces: Vec<SolidFace>,
+    /// What it does.
+    pub role: SolidRole,
+}
+
 /// A standalone scene.
 #[derive(Debug, Clone)]
 pub struct Scene {
@@ -200,6 +243,8 @@ pub struct Scene {
     pub proxies: Vec<Proxy>,
     /// Detectors.
     pub detectors: Vec<Detector>,
+    /// Solids from CAD (STEP), with their roles.
+    pub solids: Vec<Solid>,
 }
 
 /// Who a face belongs to.
@@ -211,6 +256,8 @@ pub enum Owner {
     Proxy(usize),
     /// `scene.detectors[i]`.
     Detector(usize),
+    /// `scene.solids[i]`.
+    Solid(usize),
 }
 
 /// The non-sequential system for a scene, with the owner of each face.
@@ -245,6 +292,7 @@ impl Scene {
             .chain(self.sources.iter().map(|s| s.id.as_str()))
             .chain(self.proxies.iter().map(|p| p.id.as_str()))
             .chain(self.detectors.iter().map(|d| d.id.as_str()))
+            .chain(self.solids.iter().map(|s| s.id.as_str()))
             .collect();
         ids.sort_unstable();
         if let Some(pair) = ids.windows(2).find(|w| w[0] == w[1]) {
@@ -431,6 +479,41 @@ impl Scene {
                 owner,
             });
         }
+        for (index, solid) in self.solids.iter().enumerate() {
+            let owner = owners.len();
+            owners.push(Owner::Solid(index));
+            let inside = match &solid.role {
+                SolidRole::Lens { material, .. } => system.add_medium(material.clone()),
+                _ => air,
+            };
+            for (face_index, face) in solid.faces.iter().enumerate() {
+                let edge = matches!(
+                    face.geometry.surface,
+                    FaceSurface::Cylinder { .. } | FaceSurface::Cone { .. }
+                );
+                let role = match &solid.role {
+                    SolidRole::Absorber => Role::Absorber,
+                    SolidRole::Lens { coating, .. } if !edge => Role::Refract {
+                        coating: *coating,
+                        clear_radius: None,
+                    },
+                    SolidRole::Lens { .. } => Role::Absorber,
+                    SolidRole::Mirror { reflecting } if reflecting.contains(&face_index) => {
+                        Role::Mirror { clear_radius: None }
+                    }
+                    SolidRole::Mirror { .. } => Role::Absorber,
+                };
+                system.faces.push(Face {
+                    shape: Shape::Brep(face.geometry.clone()),
+                    placement: face.placement,
+                    region: Region::Disk { radius: 0.0 },
+                    role,
+                    negative_medium: inside,
+                    positive_medium: air,
+                    owner,
+                });
+            }
+        }
         system.build_index();
         Ok(Built { system, owners })
     }
@@ -487,6 +570,7 @@ impl Scene {
                 Owner::Element(i) => &self.elements[i].id,
                 Owner::Proxy(i) => &self.proxies[i].id,
                 Owner::Detector(i) => &self.detectors[i].id,
+                Owner::Solid(i) => &self.solids[i].id,
             };
             match clipping.iter_mut().find(|c| c.owner == owner) {
                 Some(entry) => {

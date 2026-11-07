@@ -4,6 +4,7 @@
 use std::path::{Path, PathBuf};
 
 use optobench_io::scene_file;
+use optobench_io::sidecar;
 use optobench_io::store::{default_data_directory, material};
 use optobench_io::svg::{self, View};
 use optobench_scene::Owner;
@@ -26,7 +27,8 @@ fn failed(message: impl Into<String>) -> CommandError {
     CommandError::new(ErrorCode::Failed, message)
 }
 
-/// `trace`: parameters `path` (a `.optobench` layout), and optionally `data_directory`
+/// `trace`: parameters `path` (a `.optobench` layout, or a sidecar next to its STEP file),
+/// and optionally `data_directory`
 /// (for imported materials), `svg` (where to write the layout view), `view` (`top` or
 /// `side`) and `rays_drawn` (default 200).
 pub(crate) fn trace(parameters: &Parameters) -> Result<Value, CommandError> {
@@ -62,7 +64,11 @@ pub(crate) fn trace(parameters: &Parameters) -> Result<Value, CommandError> {
 
     let source = std::fs::read_to_string(path).map_err(|e| failed(format!("{path}: {e}")))?;
     let lookup = |name: &str| material(data.as_deref(), name);
-    let scene = scene_file::parse(&source, &lookup).map_err(|e| failed(format!("{path}: {e}")))?;
+    let scene = match sidecar::kind_of(&source).as_deref() {
+        Some("sidecar") => sidecar::parse(&source, Path::new(path), &lookup),
+        _ => scene_file::parse(&source, &lookup),
+    }
+    .map_err(|e| failed(format!("{path}: {e}")))?;
     let built = scene.build().map_err(|e| failed(format!("{path}: {e}")))?;
     let traced = scene.trace().map_err(|e| failed(format!("{path}: {e}")))?;
 
@@ -92,6 +98,7 @@ pub(crate) fn trace(parameters: &Parameters) -> Result<Value, CommandError> {
                     Owner::Element(_) => "element",
                     Owner::Proxy(_) => "proxy",
                     Owner::Detector(_) => "detector",
+                    Owner::Solid(_) => "body",
                 },
                 "power_w": c.power,
                 "rays": c.rays,
@@ -122,4 +129,31 @@ pub(crate) fn trace(parameters: &Parameters) -> Result<Value, CommandError> {
         result["svg"] = json!(output);
     }
     Ok(result)
+}
+
+/// `bodies`: every placed body of a STEP file, for writing a sidecar: assembly path,
+/// product, body name, number of faces and geometry fingerprint.
+pub(crate) fn bodies(parameters: &Parameters) -> Result<Value, CommandError> {
+    check_keys(parameters, &["path"])?;
+    let path = text(parameters, "path")?.ok_or_else(|| {
+        CommandError::new(ErrorCode::InvalidParameters, "missing parameter `path`")
+    })?;
+    let source = std::fs::read_to_string(path).map_err(|e| failed(format!("{path}: {e}")))?;
+    let model = optobench_io::step::read(&source).map_err(|e| failed(format!("{path}: {e}")))?;
+    let (bodies, skipped) = sidecar::placed_bodies(&model);
+    let list: Vec<Value> = bodies
+        .iter()
+        .map(|b| {
+            json!({
+                "occurrence": b.path,
+                "product": b.product,
+                "body": b.name,
+                "faces": b.faces.len(),
+                "fingerprint": b.fingerprint,
+            })
+        })
+        .collect();
+    Ok(
+        json!({ "path": path, "bodies": list, "skipped_faces": skipped, "unsupported": model.unsupported }),
+    )
 }

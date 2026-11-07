@@ -5,6 +5,13 @@ with the release that introduced them.
 
 ## Unreleased
 
+- M4c sidecar v1 (`optobench_io::sidecar`): lens and mirror elements on STEP bodies
+  matched by product, occurrence path or geometry fingerprint; sources and detectors in
+  the STEP frame or relative to a body; untagged bodies absorb. `trace` takes sidecars;
+  new command `bodies`. Non-sequential trace: coincident faces of touching solids
+  (cemented doublets) refract once, glass to glass. Scene model: `Solid` with absorber,
+  lens and mirror roles. Material import accepts the database's `PROPERTIES` block. SVG
+  view thins solid outlines.
 - M4b exact geometry: `optobench_surfaces::brep` (trimmed B-rep faces on analytic,
   B-spline, revolution and extrusion surfaces; closed-form, bracketed or Newton ray
   intersection with the residual of every hit; 3D trimming by the nearest boundary

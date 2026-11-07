@@ -114,6 +114,11 @@ const STANDARD: &[Command] = &[
         handler: trace::trace,
     },
     Command {
+        id: "bodies",
+        summary: "every placed body of a STEP file: path, product, name, fingerprint",
+        handler: trace::bodies,
+    },
+    Command {
         id: "import-material",
         summary: "import a downloaded refractiveindex.info material file, licence shown first",
         handler: materials::import_material,

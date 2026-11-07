@@ -62,9 +62,11 @@ Thorlabs files, LA1951-ML and the golden assembly (3341 faces, 116 placed bodies
 - Changed from the plan: no triangle mesh. Exact intersection over a face BVH gives the accuracy directly; a mesh is only needed for display (design.md updated).
 
 ## M4c Sidecar v1 and matching
-- [ ] `kind = "sidecar"`: elements, sources, detectors referring to bodies
-- [ ] Matching by product name, then assembly path, then geometry fingerprint; unmatched entries are errors
-- [ ] Optical faces from STEP surfaces with sidecar materials; untagged bodies absorb
+- [x] `kind = "sidecar"` (`optobench_io::sidecar`): lens and mirror elements, sources and detectors placed in the STEP frame or relative to a body; command `bodies` lists names and fingerprints
+- [x] Matching by product name (with occurrence path), then path, then geometry fingerprint; unmatched or ambiguous entries are errors
+- [x] Optical faces from STEP surfaces with sidecar materials (per body for doublets); a lens's cylindrical and conical faces absorb; untagged bodies absorb; touching bodies refract once at their shared face
+- [x] A STEP lens traces exactly like the same lens defined inline (positions within 1e-9 mm)
+- Golden Thorlabs relay (local): FiberPort beam (1 mm, 633 nm) through LA1951, AC254-030-A, PF10 and AC254-060-A, with glasses imported from the refractiveindex.info database (N-BK7; N-BAF10/N-SF6HT; BAF11/E-FD10, which reproduce the catalogue f = 60.0 mm and BFL 54.3 mm of the AC254-060-A). All rays reach the focus, RMS spot 3.5 µm, nothing clipped, 68% detected (bare faces), ledger balanced, 3 s.
 
 ## M4d Trace and round trip
 - [ ] `trace` for STEP + sidecar

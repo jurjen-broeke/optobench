@@ -233,3 +233,70 @@ fn facing_mirrors_reach_the_interaction_limit() {
     assert!((ledger.stopped - 1.0).abs() < 1e-15);
     assert!(balanced(&ledger));
 }
+
+#[test]
+fn touching_solids_refract_once_at_their_shared_face() {
+    // Two slabs as solids from exact faces: A (n = 1.5) from z = 0 to 5, B (n = 1.7) from
+    // z = 5 to 10, touching at z = 5. Each face has the body's glass behind it and air in
+    // front. A ray along z must cross z = 5 once, glass to glass, so the power follows the
+    // normal-incidence Fresnel transmissions air→1.5, 1.5→1.7, 1.7→air (Hecht, Optics,
+    // 5th ed., ch. 4), with no air gap at the shared face.
+    use optobench_math::Frame;
+    use optobench_surfaces::brep::{BrepFace, FaceSurface};
+
+    let square = |z: f64, up: bool| -> Face {
+        let corners = [(-10.0, -10.0), (10.0, -10.0), (10.0, 10.0), (-10.0, 10.0)];
+        let mut ring: Vec<Vec3> = corners.iter().map(|&(x, y)| Vec3::new(x, y, z)).collect();
+        if !up {
+            ring.reverse();
+        }
+        let frame = Frame::new(Vec3::new(0.0, 0.0, z), Vec3::Z, Vec3::X).expect("valid");
+        Face {
+            shape: Shape::Brep(Arc::new(BrepFace::new(
+                FaceSurface::Plane(frame),
+                !up,
+                vec![ring],
+            ))),
+            placement: Transform::IDENTITY,
+            region: Region::Disk { radius: 0.0 },
+            role: REFRACT,
+            negative_medium: 0, // set below
+            positive_medium: AIR,
+            owner: 0,
+        }
+    };
+    let mut system = NonSequentialSystem::new(1.0.into());
+    let a = system.add_medium(1.5.into());
+    let b = system.add_medium(1.7.into());
+    let with = |mut f: Face, inside: usize| {
+        f.negative_medium = inside;
+        f
+    };
+    system.faces = vec![
+        with(square(0.0, false), a),
+        with(square(5.0, true), a),
+        with(square(5.0, false), b),
+        with(square(10.0, true), b),
+        detector(20.0),
+    ];
+    system.build_index();
+    let (records, ledger) = system.trace_all([ray(Vec3::new(1.0, 2.0, -5.0), Vec3::Z)]);
+    let record = &records[0];
+    assert!(matches!(record.end, End::Detected { .. }));
+    assert_eq!(
+        record.points.len(),
+        5,
+        "start, z = 0, z = 5 once, z = 10, detector"
+    );
+    let t = |n1: f64, n2: f64| 1.0 - ((n1 - n2) / (n1 + n2)).powi(2);
+    let expected = t(1.0, 1.5) * t(1.5, 1.7) * t(1.7, 1.0);
+    assert!(
+        (record.ray.power - expected).abs() < 1e-14,
+        "{} vs {expected}",
+        record.ray.power
+    );
+    // Optical path: 5 mm of each glass plus the air before and after.
+    let path = 5.0 + 1.5 * 5.0 + 1.7 * 5.0 + 10.0;
+    assert!((record.ray.optical_path - path).abs() < 1e-9);
+    assert!(balanced(&ledger));
+}

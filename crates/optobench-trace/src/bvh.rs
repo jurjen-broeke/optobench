@@ -109,6 +109,39 @@ impl Bvh {
         index
     }
 
+    /// Indices of the boxes that contain `point`.
+    pub fn containing(&self, point: Vec3) -> Vec<usize> {
+        let mut out = Vec::new();
+        let mut stack = Vec::with_capacity(64);
+        if !self.nodes.is_empty() {
+            stack.push(0);
+        }
+        while let Some(node) = stack.pop() {
+            match &self.nodes[node] {
+                Node::Leaf {
+                    bounds,
+                    start,
+                    count,
+                } => {
+                    if bounds.contains(point) {
+                        out.extend(&self.order[*start..start + count]);
+                    }
+                }
+                Node::Inner {
+                    bounds,
+                    left,
+                    right,
+                } => {
+                    if bounds.contains(point) {
+                        stack.push(*left);
+                        stack.push(*right);
+                    }
+                }
+            }
+        }
+        out
+    }
+
     /// The nearest hit: `test(i)` returns the hit distance on box `i`'s object, if any.
     /// Returns the index and distance of the nearest one.
     pub fn nearest(

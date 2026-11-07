@@ -20,6 +20,8 @@
 //!     temperature: 293
 //! SPECS:
 //!     …                                     (kept as text, not interpreted)
+//! PROPERTIES:
+//!     nd: 1.5168 …                          (manufacturer data: kept as text, not interpreted)
 //! ```
 //!
 //! Formula numbers and their equations: `optobench_materials::FormulaKind`.
@@ -65,6 +67,9 @@ pub struct MaterialFile {
     pub conditions: Vec<(String, String)>,
     /// SPECS as raw text, not interpreted.
     pub specs: String,
+    /// PROPERTIES (manufacturer data such as nd, Vd, thermal dispersion) as raw text, not
+    /// interpreted yet.
+    pub properties: String,
 }
 
 /// Why a file could not be read or turned into a material.
@@ -103,7 +108,7 @@ impl core::fmt::Display for ReadError {
         match self {
             ReadError::UnknownKey { line, key } => write!(
                 f,
-                "line {line}: unknown key `{key}`; valid keys: REFERENCES, COMMENTS, NOTES, DATA, CONDITIONS, SPECS"
+                "line {line}: unknown key `{key}`; valid keys: REFERENCES, COMMENTS, NOTES, DATA, CONDITIONS, SPECS, PROPERTIES"
             ),
             ReadError::Malformed { line, expected } => {
                 write!(f, "line {line}: expected {expected}")
@@ -312,6 +317,7 @@ pub fn parse(text: &str) -> Result<MaterialFile, ReadError> {
             "REFERENCES" => file.references = dedent(&body),
             "COMMENTS" | "NOTES" => file.comments = dedent(&body),
             "SPECS" => file.specs = dedent(&body),
+            "PROPERTIES" => file.properties = dedent(&body),
             "CONDITIONS" => {
                 for &(n, l) in body.iter().filter(|(_, l)| !l.trim().is_empty()) {
                     let (k, v) = l.trim().split_once(':').ok_or(ReadError::Malformed {
@@ -513,6 +519,17 @@ DATA:
         let m = medium.material();
         assert!((m.refractive_index(0.6).expect("in range") - 1.5).abs() < 1e-15);
         assert!((m.extinction(0.6).expect("in range") - 2e-6).abs() < 1e-18);
+    }
+
+    #[test]
+    fn keeps_manufacturer_properties_as_text() {
+        // The shape of the PROPERTIES block in the database's vendor glass files.
+        let text = format!(
+            "{FORMULA}PROPERTIES:\n    thermal_dispersion:\n      - type: formula A\n        coefficients: 1.86e-06 1.31e-08\n    nd: 1.5168\n    Vd: 64.17\n"
+        );
+        let file = parse(&text).expect("valid");
+        assert!(file.properties.contains("nd: 1.5168") && file.properties.contains("formula A"));
+        assert_eq!(file.entries.len(), 1);
     }
 
     #[test]
