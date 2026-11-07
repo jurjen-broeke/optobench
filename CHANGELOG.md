@@ -5,6 +5,11 @@ with the release that introduced them.
 
 ## Unreleased
 
+- M3a non-sequential trace (`optobench_trace::nonsequential`): faces (surface profile or
+  cylinder, placed and bounded by a disk, annulus, rectangle or square with hole) between
+  two media; refracting (Fresnel loss, total internal reflection followed), mirror,
+  absorber and detector roles; clear-aperture clipping at element edges; nearest-hit
+  search; ray history and end state; power ledger over all rays.
 - M2c import: commands `import-material` (a refractiveindex.info YAML file the user
   downloaded; first call shows its notice and references, `accept_licence: true` stores
   it under `<data directory>/optobench/sources/refractiveindex.info/<sha256>/`, marked
