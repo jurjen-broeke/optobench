@@ -82,6 +82,8 @@
 //! at = 300.0
 //! size = [10, 10]
 //! pixels = [256, 256]
+//!
+//! # [resolved] ...                  # written by `embed`, always last: see `resolved`
 //! ```
 //!
 //! Parsing is strict (docs/design.md, Format tag and versions): the first two lines are
@@ -675,11 +677,29 @@ pub struct Lookups<'a> {
 
 /// A layout file, with materials, curves and library parts from `lookups`.
 pub fn parse_with(text: &str, lookups: &Lookups) -> Result<Scene, FileError> {
-    let (lookup, library) = (lookups.materials, lookups.library);
     check_header(text)?;
     let root: Table = text
         .parse()
         .map_err(|e: toml::de::Error| error(format!("not valid TOML: {e}")))?;
+    // Embedded values (`[resolved]`) first, then the user's own data.
+    let embedded = crate::resolved::read(&root)?;
+    let merged_library = embedded.library(lookups.library)?;
+    let merged_materials = |name: &str| {
+        embedded
+            .material(name)
+            .map_or_else(|| (lookups.materials)(name), Ok)
+    };
+    let merged_curves = |name: &str| {
+        embedded
+            .curve(name)
+            .map_or_else(|| (lookups.curves)(name), Ok)
+    };
+    let lookups = &Lookups {
+        materials: &merged_materials,
+        curves: &merged_curves,
+        library: &merged_library,
+    };
+    let (lookup, library) = (lookups.materials, lookups.library);
     let top = Item {
         table: &root,
         context: "top level".into(),
@@ -716,6 +736,7 @@ pub fn parse_with(text: &str, lookups: &Lookups) -> Result<Scene, FileError> {
             "proxy",
             "detector",
             "trace",
+            "resolved",
         ],
         "top level",
     )?;

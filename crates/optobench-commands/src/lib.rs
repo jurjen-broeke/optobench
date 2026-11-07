@@ -15,6 +15,7 @@
 
 #![forbid(unsafe_code)]
 
+mod embed;
 mod materials;
 mod parts;
 mod trace;
@@ -148,6 +149,11 @@ const STANDARD: &[Command] = &[
         id: "import-curve",
         summary: "import a measured R/T table (CSV) into the parts library",
         handler: parts::import_curve,
+    },
+    Command {
+        id: "embed",
+        summary: "embed the library parts, curves and materials a design uses, so it traces without them",
+        handler: embed::embed,
     },
 ];
 

@@ -57,6 +57,11 @@ pub enum CurveError {
 }
 
 impl CoatingCurve {
+    /// Its (wavelength µm, R, T) rows.
+    pub fn points(&self) -> &[(f64, f64, f64)] {
+        &self.points
+    }
+
     /// A curve from (wavelength µm, R, T) rows.
     pub fn new(points: Vec<(f64, f64, f64)>) -> Result<Self, CurveError> {
         if points.len() < 2 {

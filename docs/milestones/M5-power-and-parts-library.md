@@ -40,7 +40,7 @@ automatically traces exactly like the hand-written sidecar.
 - [x] c1: `library` on layout and sidecar elements
 - [x] c1: Automatic tagging of library parts on STEP import; radius check against the STEP geometry (> 0.05 mm reported)
 - [x] c2: Import of R/T curves (`import-curve`, `curves`); coatings (curves, thin-film stacks) in part, layout and sidecar files, surface by surface; a filter's curve counts once for the whole filter
-- [ ] c3: Embedded parameters with provenance on save, so a shared design traces without the library
+- [x] c3: Embedded parameters with provenance (`embed`, `[resolved]`), so a shared design traces without the library; values from sources that forbid redistribution only with consent. On the local golden Thorlabs relay the embedded design traces identically with no data directory. M5 is complete.
 
 ## Local test parts (corpus)
 Beyond the M4 cage parts: DMLP730B longpass dichroic, CP20D cage iris, CFW6 filter wheel,

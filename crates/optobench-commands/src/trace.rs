@@ -145,6 +145,7 @@ pub(crate) fn trace(parameters: &Parameters) -> Result<Value, CommandError> {
         "detectors": detectors,
         "clipping": clipping,
         "parts": crate::parts::matches_json(&parts),
+        "embedded": crate::embed::compare(&source, data.as_deref())?,
         "footprints": traced.footprints.iter().map(|f| json!({
             "id": f.id,
             "hits": f.hits,

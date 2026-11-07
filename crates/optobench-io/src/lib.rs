@@ -11,6 +11,7 @@ pub mod curves;
 pub mod library;
 pub mod placements;
 pub mod refractiveindex;
+pub mod resolved;
 pub mod scene_file;
 mod sha256;
 pub mod sidecar;

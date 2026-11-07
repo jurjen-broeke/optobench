@@ -28,7 +28,7 @@ optobench-commands = { path = "crates/optobench-commands" }       # L5
 # Third-party crates. Each must pass `cargo deny check` (deny.toml) and be compatible with
 # MIT OR Apache-2.0. Keep this list short; engine crates (L0-L4) should need almost none.
 serde_json = "1.0.154"                                            # MIT OR Apache-2.0
-toml = { version = "1.2.1", default-features = false, features = ["std", "parse", "serde"] }  # MIT OR Apache-2.0
+toml = { version = "1.2.1", default-features = false, features = ["std", "parse", "serde", "display"] }  # MIT OR Apache-2.0 (display: toml_writer, MIT OR Apache-2.0)
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

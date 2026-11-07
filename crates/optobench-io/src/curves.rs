@@ -318,8 +318,9 @@ fn read_lines(
                 .flatten()
                 .any(|v| v > 1.5)
         });
-    let scale = if percent { 0.01 } else { 1.0 };
-    let unit = if nanometres { 1e-3 } else { 1.0 };
+    // Dividing keeps round numbers round (700 nm is 0.7 µm, 70 % is 0.7).
+    let scale = if percent { 100.0 } else { 1.0 };
+    let unit = if nanometres { 1000.0 } else { 1.0 };
     let mut clipped_values = 0;
     let mut clip = |v: f64| {
         if !(0.0..=1.0).contains(&v) {
@@ -330,8 +331,8 @@ fn read_lines(
     let mut points: Vec<(f64, f64, f64)> = data
         .into_iter()
         .map(|(w, t, r)| {
-            let t = t.map(|t| clip(t * scale));
-            let r = r.map(|r| clip(r * scale));
+            let t = t.map(|t| clip(t / scale));
+            let r = r.map(|r| clip(r / scale));
             let (r, t) = match (r, t) {
                 (Some(r), Some(t)) => (r, t),
                 (None, Some(t)) if options.reflectance_zero => (0.0, t),
@@ -339,7 +340,7 @@ fn read_lines(
                 (Some(r), None) => (r, 1.0 - r),
                 (None, None) => (0.0, 0.0),
             };
-            (w * unit, r, t)
+            (w / unit, r, t)
         })
         .collect();
     points.sort_by(|a, b| a.0.total_cmp(&b.0));
@@ -582,6 +583,15 @@ pub fn load(root: &Path, name: &str) -> Result<CoatingCurve, String> {
     };
     let table = read_table(&text, &options).map_err(|e| format!("{}: {e}", path.display()))?;
     CoatingCurve::new(table.points).map_err(|e| format!("{}: {e:?}", path.display()))
+}
+
+/// The record of the curve stored under `name`: where it came from and how it was read.
+pub fn record(root: &Path, name: &str) -> Result<Value, String> {
+    check_name(name).map_err(|e| e.to_string())?;
+    let path = curves_directory(root).join(format!("{name}.json"));
+    let text =
+        fs::read_to_string(&path).map_err(|_| format!("no curve `{name}` in the library"))?;
+    serde_json::from_str(&text).map_err(|e| format!("{}: {e}", path.display()))
 }
 
 /// Every curve's record, sorted by name.

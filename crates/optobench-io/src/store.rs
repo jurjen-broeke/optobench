@@ -294,6 +294,17 @@ pub fn load(root: &Path, name: &str) -> Result<(Medium, Record), StoreError> {
     Ok((medium, record))
 }
 
+/// An imported material's file, unchanged, with its record (for embedding in a design).
+pub fn imported(root: &Path, name: &str) -> Result<(String, Record), StoreError> {
+    let record = find(root, name)?;
+    let path = record.directory.join(format!("{}.yml", record.name));
+    let bytes = fs::read(&path)?;
+    if sha256_hex(&bytes) != record.sha256 {
+        return Err(StoreError::ChecksumMismatch(path));
+    }
+    Ok((String::from_utf8_lossy(&bytes).into_owned(), record))
+}
+
 /// The bundled material names, as listed by the `materials` command.
 pub const BUNDLED: &[&str] = &[
     "fused-silica",

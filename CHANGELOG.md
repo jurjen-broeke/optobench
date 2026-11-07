@@ -5,6 +5,13 @@ with the release that introduced them.
 
 ## Unreleased
 
+- M5c3 embedded parameters: the `embed` command writes a `[resolved]` section at the end
+  of a layout or sidecar with the library parts, R/T curves and imported materials the
+  trace used, each with its file's SHA-256 (`optobench_io::resolved`). Readers use
+  embedded values first, so a shared design traces as saved without the library; `trace`
+  reports how each compares with the user's data (`embedded`). Values from sources marked
+  `redistribute = false` are listed, not embedded, unless `include_restricted`. Curve
+  units are converted by division, so round values stay round. M5 is complete.
 - `import-curve` imports a vendor's filter set from a ZIP archive of tables, one curve
   per table named after its file (`name` becomes an optional prefix), and reads filter
   spectra as text with a described format (`Data format: Wavelength (nm) <tab>

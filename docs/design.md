@@ -246,25 +246,29 @@ size = [10, 10]
 pixels = [256, 256]
 ```
 
-**Embedded parameters.** On save, sidecars and scenes gain a `[resolved]` table holding the values the trace actually used, so a second user can trace the design without the original library. A library reference that is present is checked against its checksum; a missing one falls back to the embedded values. Example (values illustrative):
+**Embedded parameters.** The `embed` command (run when a design is saved to be shared) gives sidecars and layouts a `[resolved]` section at the end, holding what the trace took from the user's own data: the library parts it used (named or tagged automatically), the R/T curves and the imported materials (the imported file unchanged, so the dispersion is exactly the one traced), each with the SHA-256 of the file it came from. A second user traces the design without the library. Embedded values are used whenever present, so the design traces as saved; `trace` compares each with the user's data (`same`, `differs`, `absent`), and `embed` again takes the user's current values. Example (values illustrative):
 
 ```toml
-[resolved."thorlabs/LA1xxx-A"]
-surfaces = [ { radius = 25.0, conic = 0.0 }, { radius = "inf" } ]
-thickness = [5.0]
-diameter = 25.4
-clear_aperture = 22.9
-glass = "N-BK7"
-provenance = { source = "optobench-library", version = "0.3.0", licence = "CC0-1.0", sha256 = "…" }
+[resolved.part."thorlabs/LA1951-ML"]
+sha256 = "…"                          # of the part file
+part = "LA1951-ML"                    # … the part file's own keys
+surfaces = [ { radius = 13.1 }, { radius = "inf" } ]
+glass = ["N-BK7"]
 
-[resolved.glass."N-BK7"]
-model = "sellmeier"
-coefficients = ["…"]                  # only what the trace used
-range_um = [0.3, 2.5]
-provenance = { source = "user glass catalogue", licence = "user-supplied", redistribute = false }
+[resolved.curve."mvf52a"]
+sha256 = "…"                          # of the imported file
+source = "Thorlabs MVF52A product page"
+redistribute = false
+points = [ [0.3, 0.988, 0.012], … ]   # wavelength µm, R, T
+
+[resolved.material."n-bk7"]
+sha256 = "…"
+source = "refractiveindex.info"
+redistribute = false
+data = """…"""                         # the imported file
 ```
 
-If a source is marked `redistribute = false`, the tool asks before embedding its values. When the user declines, only the reference is stored, and a second user must fetch that source themselves.
+If a source is marked `redistribute = false` (the default for imported materials and curves), `embed` lists it instead of embedding it and says the design is not self-contained; `include_restricted` embeds it with the user's consent. Otherwise a second user imports that source themselves (M5c3, as this section planned).
 
 ## File naming and versioning
 
