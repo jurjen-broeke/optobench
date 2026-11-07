@@ -205,7 +205,8 @@ fn collect_paths(root: &Path, dir: &Path, out: &mut Vec<String>) {
             continue;
         }
         if let Ok(rel) = path.strip_prefix(root) {
-            out.push(rel.to_string_lossy().into_owned());
+            // Always '/' so names match the manifest on Windows too.
+            out.push(rel.to_string_lossy().replace('\\', "/"));
         }
         if path.is_dir() {
             collect_paths(root, &path, out);
