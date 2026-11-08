@@ -1,0 +1,71 @@
+format = "optobench/1"
+kind = "sidecar"
+step = "periscope-misaligned.step"
+
+# The golden periscope (periscope.step, made by SolidCraft from periscope.json; M6): a
+# 4 mm beam along +x at z = 50 mm turned up by a 45° mirror, widened 2× by a Galilean
+# pair (plano-concave R 25 mm, then plano-convex R 50 mm, both n = 1.5, flat sides down),
+# and turned back along +x at z = 300 mm by a second 45° mirror onto a screen. L2 sits
+# where the output is best collimated (found with `optimize`). Every degree of freedom is
+# at 0: the assembly as exported. periscope-misaligned.step is the same with M1 tilted
+# 0.4° about y, M2 −0.3° about (1, 0, 1)/√2 and L2 2 mm higher.
+
+[[element]]
+id = "M1"
+kind = "mirror"
+body = { product = "mirror", occurrence = "mirror:1" }
+reflect = [0, 0, 1]
+dof = [ { name = "M1_y", kind = "tilt", axis = [0, 1, 0], range = [-2, 2] },
+        { name = "M1_d", kind = "tilt", axis = [0.7071067811865476, 0, 0.7071067811865476], range = [-2, 2] } ]
+
+[[element]]
+id = "L1"
+kind = "lens"
+body = { product = "negative-lens" }
+material = 1.5
+coating = "ideal"
+
+[[element]]
+id = "L2"
+kind = "lens"
+body = { product = "positive-lens" }
+material = 1.5
+coating = "ideal"
+dof = [ { name = "L2_z", kind = "slide", axis = [0, 0, 1], range = [-5, 5] } ]
+
+[[element]]
+id = "M2"
+kind = "mirror"
+body = { product = "mirror", occurrence = "mirror:2" }
+reflect = [0, 0, 1]
+dof = [ { name = "M2_y", kind = "tilt", axis = [0, 1, 0], range = [-2, 2] },
+        { name = "M2_d", kind = "tilt", axis = [0.7071067811865476, 0, 0.7071067811865476], range = [-2, 2] } ]
+
+[[source]]
+id = "beam"
+kind = "collimated"
+wavelength_um = 0.55
+power_w = 0.001
+diameter = 4.0
+rings = 8
+position = [-100, 0, 50]
+axis = [1, 0, 0]
+
+[[detector]]
+id = "screen"
+position = [150, 0, 300]
+axis = [1, 0, 0]
+size = [20, 20]
+pixels = [40, 40]
+
+[[merit]]
+kind = "centring"
+detector = "screen"
+
+[[merit]]
+kind = "pointing"
+detector = "screen"
+
+[[merit]]
+kind = "collimation"
+detector = "screen"

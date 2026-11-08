@@ -5,6 +5,14 @@ with the release that introduced them.
 
 ## Unreleased
 
+- M6c move report and re-export diff: `optimize` with `report` writes
+  `<design>.moves.json` and `.moves.md` (per DOF the current and suggested value; per
+  moved part the move from its STEP pose as translation, axis and angle, 3 × 4 matrix and
+  SolidCraft `occurrence.move` command; for layouts the DOF values to set). The new
+  command `check-moves` compares every body of a re-exported assembly with the report and
+  gives the merit as it is now. Golden periscope fixtures (`periscope*.step`: two 45°
+  mirrors and a 2× Galilean expander, aligned, misaligned and realigned by the report's
+  moves): the M6 exit criterion holds. `Scene::movement`, `Scene::dof_targets`.
 - M6b optimiser: damped least squares (Levenberg–Marquardt with bounds,
   `optobench_optimize::lm`) over a scene's free DOFs; merit terms focus, centring,
   pointing, collimation and power (`[[merit]]` in layout and sidecar files, or the

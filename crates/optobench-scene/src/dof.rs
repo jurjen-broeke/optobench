@@ -171,6 +171,40 @@ impl Scene {
         self.move_between(&zero, &values)
     }
 
+    /// How `target` moves (in the scene frame) when its DOFs go from the values `from` to
+    /// `to`: the chain of its DOFs at the new values after undoing the chain at the old
+    /// ones. Applied to the item's pose on the left (`t * pose`). A DOF missing from a map
+    /// counts as 0.
+    pub fn movement(
+        &self,
+        target: &Target,
+        from: &BTreeMap<String, f64>,
+        to: &BTreeMap<String, f64>,
+    ) -> Transform {
+        let chain = |values: &BTreeMap<String, f64>| {
+            self.dofs
+                .iter()
+                .filter(|d| &d.target == target)
+                .fold(Transform::IDENTITY, |t, d| {
+                    d.motion
+                        .transform(values.get(&d.name).copied().unwrap_or(0.0))
+                        * t
+                })
+        };
+        chain(to) * chain(from).inverse()
+    }
+
+    /// The items some DOF moves, each once, in the order their first DOF is listed.
+    pub fn dof_targets(&self) -> Vec<Target> {
+        let mut targets: Vec<Target> = Vec::new();
+        for dof in &self.dofs {
+            if !targets.contains(&dof.target) {
+                targets.push(dof.target.clone());
+            }
+        }
+        targets
+    }
+
     /// Moves each item from where `old` puts it to where `new` does: by the chain of its
     /// DOFs at the new values after undoing the chain at the old ones.
     fn move_between(
@@ -179,24 +213,10 @@ impl Scene {
         new: &BTreeMap<String, f64>,
     ) -> Result<Scene, SceneError> {
         let mut scene = self.clone();
-        let mut targets: Vec<&Target> = Vec::new();
-        for dof in &self.dofs {
-            if !targets.contains(&&dof.target) {
-                targets.push(&dof.target);
-            }
-        }
         let frame_moved =
             |frame: &Frame, t: &Transform| Frame::from_transform(*t * frame.transform());
-        for target in targets {
-            let chain = |values: &BTreeMap<String, f64>| {
-                self.dofs
-                    .iter()
-                    .filter(|d| &d.target == target)
-                    .fold(Transform::IDENTITY, |t, d| {
-                        d.motion.transform(values[&d.name]) * t
-                    })
-            };
-            let t = chain(new) * chain(old).inverse();
+        for target in &self.dof_targets() {
+            let t = self.movement(target, old, new);
             let missing = || {
                 invalid(format!(
                     "a degree of freedom moves {target:?}, which is not in the scene"
