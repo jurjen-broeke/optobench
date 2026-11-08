@@ -60,11 +60,15 @@ corpus/interface/DESIGN.md.
 - [x] Thorlabs beam-expander periscope: 191 000 triangles in 1.0 s; the window opens,
       traces and shows it in about 6 s
 
-Found on the way, for the engine (not changed here): on strongly curved faces (a torus
-patch 180° round its tube) `BrepFace::contains` accepts points outside the face, because
-the nearest boundary segment in 3D can lie across the surface. Closed bodies trace
-correctly (their faces cover the surface together), but a lone curved patch could give
-hits where there is no face. The tessellation no longer depends on it.
+Found on the way, for the engine: on strongly curved faces (a torus patch 180° round its
+tube) `BrepFace::contains` accepted points outside the face, because the nearest boundary
+segment in 3D can lie across the surface. Closed bodies traced correctly (their faces
+cover the surface together), but a lone curved patch could give hits where there is no
+face. Fixed after M8: where the nearest boundary point's normal is turned more than 90°
+from the point's (analytic surfaces), or the point is far from the boundary (free-form
+ones), the face's parameter plane decides, with the boundary regions of the tessellation
+and a 64 × 64 grid of cells for speed. The corpus traces are unchanged; trace time
+within 3 %.
 
 ## M8c Workspaces at work
 
