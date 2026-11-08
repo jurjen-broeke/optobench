@@ -66,8 +66,35 @@ interfaces (the tests use 0.05 mm).
 
 ## M9c Gaussian beams and the vectorial PSF
 
-- [ ] Gaussian beams by the complex q parameter through the paraxial elements; aperture
-      fill at the objective's pupil
+### M9c1 Objectives in CAD, Gaussian beams
+
+- [x] An objective in a sidecar, placed by `position`/`axis` or a `frame` on a body (its
+      pupil plane); `body` names its bodies (barrel and glass), which the ideal model
+      replaces in the trace; samples in sidecars likewise
+- [x] Ray records line up again: an objective records its face twice (arrival at the
+      pupil, departure from the front plane), and every point carries its optical path
+      (the index between two points is the difference over their distance); footprints
+      and `sweep` skip the departure (before, points after an objective were attributed
+      to the wrong faces)
+- [x] `gaussian` command: a Gaussian source's beam at every element and detector its
+      axis reaches: 1/e² radius, wavefront curvature, waist and distance to it per
+      transverse direction, the index there, and an objective's pupil fill
+      w / (f · NA). The paraxial ABCD of the traced system from the chief ray and four
+      neighbours (so any optics the trace knows), q' = (A q + B) / (C q + D) with real
+      slopes and the wavelength in the medium (Kogelnik and Li, Appl. Opt. 5, 1550
+      (1966)); M² as an embedded Gaussian (Siegman, Lasers, §17.6)
+- [x] Checks (commands `tests/gaussian.rs`): free space w(z) and R(z); an ideal lens
+      moving and shrinking the waist as the q law says; a 4f expander filling an
+      objective's pupil with the waist magnified f₂/f₁ (fill w / (f · NA)) and the
+      objective focusing it to λ f / (π w); a fold mirror changing nothing. A sidecar
+      objective replaces the CAD body it names (commands `tests/objective.rs`)
+
+The DL40X-PA air objective and the SM1-to-M25 adapter (corpus/basic_cage_parts.txt) are
+the real-world reference for objectives on a cage plate, once their STEP files and the
+objective's specifications are in the corpus.
+
+### M9c2 The vectorial PSF and the exit check
+
 - [ ] Richards–Wolf vectorial PSF fed by the traced pupil field, in the stratified-media
       form (Török et al., J. Opt. Soc. Am. A 12, 325 (1995); Gibson and Lanni 1991)
 - [ ] Correction collar as a DOF (the design cover-glass thickness it corrects for)

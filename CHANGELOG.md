@@ -5,6 +5,12 @@ with the release that introduced them.
 
 ## Unreleased
 
+- M9c1 objectives in CAD and Gaussian beams: sidecars place `objective` and `sample`
+  elements (an objective may name its CAD bodies, which the ideal model replaces); new
+  command `gaussian` gives a Gaussian source's radius, curvature and waist at every
+  element and detector, and an objective's pupil fill, from the traced system's ABCD and
+  the q law. Fixed: ray records after an objective attributed points to the wrong faces;
+  records now carry the optical path at every point.
 - M9b scanning and relays: layout element `ideal_lens` (a perfect thin lens); new command
   `sweep` traces over a DOF's values and reports per value the detectors and each
   source's chief ray element by element (pupil walk, scan slopes, landing point and

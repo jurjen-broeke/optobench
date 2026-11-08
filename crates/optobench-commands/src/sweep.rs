@@ -117,17 +117,23 @@ pub(crate) fn sweep(parameters: &Parameters) -> Result<Value, CommandError> {
                         && (r.launched.position - origin).length() < 1e-9
                         && (r.launched.direction - axis).length() < 1e-9
                 })?;
-                // Walk the path: the point after each face is where the ray met it (an
-                // objective adds the point where the ray leaves its front plane).
+                // Walk the path: `points[k + 1]` is where the ray met `faces[k]`.
                 let mut hits = Vec::new();
-                let mut j = 1;
-                for &face in &record.faces {
+                for (k, &face) in record.faces.iter().enumerate() {
+                    let j = k + 1;
                     let (Some(&at), Some(&before)) =
                         (record.points.get(j), record.points.get(j - 1))
                     else {
                         break;
                     };
                     let role = &built.system.faces[face].role;
+                    // An objective's second entry is where the ray leaves it.
+                    if k > 0
+                        && record.faces[k - 1] == face
+                        && matches!(role, Role::Objective { .. })
+                    {
+                        continue;
+                    }
                     if let Some(Owner::Element(e)) = built.owners.get(built.system.faces[face].owner) {
                         let element = &moved.elements[*e];
                         let local = element.frame.to_local_point(at);
@@ -143,7 +149,6 @@ pub(crate) fn sweep(parameters: &Parameters) -> Result<Value, CommandError> {
                             "slope": slope,
                         }));
                     }
-                    j += if matches!(role, Role::Objective { .. }) { 2 } else { 1 };
                 }
                 let landed = match record.end {
                     End::Detected { detector, .. } => {

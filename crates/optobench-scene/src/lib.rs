@@ -1036,11 +1036,20 @@ impl Scene {
         let mut hits: std::collections::BTreeMap<String, FootprintHits> = Default::default();
         // The beam itself: direct light only, not ghosts split off at reflecting faces.
         for record in records.iter().filter(|r| r.generation == 0) {
-            for ((point, face), power) in record.points[1..]
+            for (k, ((point, face), power)) in record.points[1..]
                 .iter()
                 .zip(&record.faces)
                 .zip(&record.powers)
+                .enumerate()
             {
+                // An objective's second entry is where the ray leaves its front plane,
+                // not a point on its pupil.
+                let departure = k > 0
+                    && record.faces[k - 1] == *face
+                    && matches!(built.system.faces[*face].role, Role::Objective { .. });
+                if departure {
+                    continue;
+                }
                 let owner = built.owners[built.system.faces[*face].owner];
                 let (key, element) = match owner {
                     Owner::Element(i) => (self.elements[i].id.clone(), Some(i)),

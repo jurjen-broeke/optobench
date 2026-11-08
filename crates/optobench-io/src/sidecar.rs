@@ -68,6 +68,16 @@
 //! # [resolved] ...                  # written by `embed`, always last: see `resolved`
 //! ```
 //!
+//! # Objectives and samples
+//!
+//! An ideal objective (`kind = "objective"`, keys as in layout files, see
+//! `scene_file`) is placed like a source or detector, by `position` and `axis` or by
+//! `frame = { body, offset, axis }` on a body: the frame's origin is its pupil plane and
+//! its axis points to the sample. `body` names the objective's own bodies (barrel and
+//! glass), which the ideal model then replaces in the trace. A `sample` is placed the
+//! same way and names no body. Their degrees of freedom move the element itself; axes
+//! in the assembly frame unless `frame = "local"`.
+//!
 //! # Matching
 //!
 //! A `body` names a placed body of the STEP assembly, in this order of preference
@@ -114,8 +124,9 @@ use optobench_trace::Coating;
 use toml::{Table, Value};
 
 use crate::scene_file::{
-    FileError, Item, Lookups, MaterialLookup, check_header, check_keys, dofs, error, items, medium,
-    resolve_coatings, with, with_element_coatings,
+    FileError, Item, Lookups, MaterialLookup, OBJECTIVE_KEYS, SAMPLE_KEYS, check_header,
+    check_keys, dofs, error, items, medium, objective_kind, resolve_coatings, sample_kind, with,
+    with_element_coatings,
 };
 use crate::sha256::sha256_hex;
 use crate::step::faces::{EDGE_TOLERANCE, PlacedFace, faces};
@@ -760,6 +771,56 @@ pub fn read(text: &str, sidecar: &Path, lookups: &Lookups) -> Result<Read, FileE
 
     for item in items(&root, "element")? {
         let id = item.text("id")?.to_owned();
+        // An ideal objective or a sample is placed like a source or detector; an
+        // objective may name its CAD body (barrel and glass), which the ideal model then
+        // replaces in the trace.
+        let kind = item.table.get("kind").and_then(Value::as_str);
+        if matches!(kind, Some("objective" | "sample")) {
+            let objective = kind == Some("objective");
+            let mut keys = with(
+                &["position", "axis", "frame"],
+                if objective {
+                    OBJECTIVE_KEYS
+                } else {
+                    SAMPLE_KEYS
+                },
+            );
+            if objective {
+                keys.push("body");
+            }
+            check_keys(item.table, &keys, &item.context)?;
+            if objective && item.table.contains_key("body") {
+                for i in matches(&bodies, &reference(&item, "body")?)? {
+                    if tagged[i] {
+                        return Err(error(format!(
+                            "{}: body `{}` of `{}` is already named by another element",
+                            item.context, bodies[i].name, bodies[i].path
+                        )));
+                    }
+                    tagged[i] = true;
+                    claimed[i] = true;
+                }
+            }
+            let frame = placement_frame(&item, &bodies)?;
+            let element_kind = if objective {
+                objective_kind(&item, lookup)?
+            } else {
+                sample_kind(&item, lookup)?
+            };
+            scene.dofs.extend(dofs(
+                &item,
+                &optobench_scene::dof::Target::Element(id.clone()),
+                &frame,
+                true,
+                frame.origin(),
+            )?);
+            scene.elements.push(optobench_scene::Element {
+                id,
+                frame,
+                kind: element_kind,
+            });
+            continue;
+        }
         let found = matches(&bodies, &reference(&item, "body")?)?;
         if let Some(value) = item.table.get("library") {
             check_keys(

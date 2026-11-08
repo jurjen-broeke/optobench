@@ -201,3 +201,55 @@ fn a_well_plate_bottom_in_place_of_the_cover_glass_moves_each_ray_as_the_slab_fo
         1e-9,
     );
 }
+
+#[test]
+fn an_objective_in_a_sidecar_replaces_the_cad_body_it_names() {
+    // The lens fixture's body stands in for an objective's barrel: the objective is
+    // placed by a frame on it (pupil 10 mm above the body's origin, looking down), and
+    // naming the body takes its faces out of the trace. A dry NA 0.3 objective focuses
+    // 3 mm past its front plane, which lies inside where the glass was.
+    let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("../optobench-io/tests/step");
+    let dir = scratch("sidecar");
+    std::fs::copy(fixtures.join("lens.step"), dir.join("lens.step")).expect("copied");
+    let sidecar = |name: &str, body: &str| {
+        let path = dir.join(format!("{name}.optobench"));
+        std::fs::write(
+            &path,
+            format!(
+                "format = \"optobench/1\"\nkind = \"sidecar\"\nstep = \"lens.step\"\n\n\
+                 [[element]]\nid = \"OBJ\"\nkind = \"objective\"\n{body}\
+                 frame = {{ body = {{ product = \"lens\" }}, offset = [0, 0, 10], axis = [0, 0, -1] }}\n\
+                 focal_length = 10.0\nna = 0.3\npupil_distance = 5.0\nworking_distance = 3.0\n\n\
+                 [[source]]\nid = \"beam\"\nkind = \"collimated\"\nwavelength_um = 0.55\npower_w = 1.0\n\
+                 diameter = 5.9\nrings = 6\nposition = [0, 0, 20]\naxis = [0, 0, -1]\n\n\
+                 [[detector]]\nid = \"focus\"\nposition = [0, 0, 1.95]\naxis = [0, 0, -1]\nsize = [1, 1]\npixels = [10, 10]\n"
+            ),
+        )
+        .expect("written");
+        path
+    };
+    let empty = scratch("empty");
+    let trace = |path: &Path| {
+        Registry::standard()
+            .run(
+                "trace",
+                &json!({ "path": path.to_string_lossy(), "data_directory": empty.to_string_lossy() }),
+            )
+            .unwrap_or_else(|e| panic!("{}", e.message))
+    };
+    // Not named: the body is a mount like any other, and the light ends on it (all but
+    // the axial ray, which starts on the glass's apex, where the front plane touches it).
+    let unnamed = trace(&sidecar("unnamed", ""));
+    let ledger = &unnamed["ledger"];
+    let clipped = ledger["clipped_w"].as_f64().expect("clipped");
+    assert!(
+        clipped > 0.99 * ledger["launched_w"].as_f64().expect("launched"),
+        "{unnamed}"
+    );
+    // Named: replaced by the ideal objective, every ray focuses.
+    let named = sidecar("named", "body = { product = \"lens\" }\n");
+    let report = trace(&named);
+    let launched = report["ledger"]["launched_w"].as_f64().expect("launched");
+    assert!((report["ledger"]["detected_w"].as_f64().expect("detected") - launched).abs() < 1e-12);
+    check_crossings(&focus(&named), |_| -0.05, 1e-9);
+}

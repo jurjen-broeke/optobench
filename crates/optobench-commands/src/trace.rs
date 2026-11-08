@@ -521,6 +521,61 @@ pub(crate) fn focus(parameters: &Parameters) -> Result<Value, CommandError> {
     }))
 }
 
+/// `gaussian`: a Gaussian source's beam at every element and detector its axis reaches
+/// (M9c): 1/e² radius, wavefront curvature, waist and distance to it per transverse
+/// direction, the index there, and an objective's pupil fill w / (f · NA). Parameters
+/// `path`; optionally `source` (an id; default the first Gaussian source), `dofs` and
+/// `data_directory`.
+pub(crate) fn gaussian(parameters: &Parameters) -> Result<Value, CommandError> {
+    check_keys(parameters, &["path", "source", "dofs", "data_directory"])?;
+    let path = text(parameters, "path")?.ok_or_else(|| {
+        CommandError::new(ErrorCode::InvalidParameters, "missing parameter `path`")
+    })?;
+    let (scene, _, _, _) = load(path, parameters)?;
+    let overrides = dof_values(parameters, &scene)?;
+    let scene = scene
+        .moved(&overrides)
+        .map_err(|e| failed(format!("{path}: {e}")))?;
+    let index = match text(parameters, "source")? {
+        Some(id) => scene
+            .sources
+            .iter()
+            .position(|s| s.id == id)
+            .ok_or_else(|| {
+                CommandError::new(ErrorCode::InvalidParameters, format!("no source `{id}`"))
+            })?,
+        None => scene
+            .sources
+            .iter()
+            .position(|s| matches!(s.kind, optobench_scene::SourceKind::Gaussian { .. }))
+            .ok_or_else(|| {
+                CommandError::new(
+                    ErrorCode::InvalidParameters,
+                    format!("{path}: the design has no Gaussian source"),
+                )
+            })?,
+    };
+    let beams =
+        optobench_analysis::gaussian(&scene, index).map_err(|e| failed(format!("{path}: {e}")))?;
+    let pair = |p: (f64, f64)| {
+        let finite = |x: f64| if x.is_finite() { json!(x) } else { Value::Null };
+        json!([finite(p.0), finite(p.1)])
+    };
+    Ok(json!({
+        "source": scene.sources[index].id,
+        "planes": beams.iter().map(|b| json!({
+            "id": b.id,
+            "kind": b.kind,
+            "radius_mm": pair(b.radius),
+            "curvature_mm": pair(b.curvature),
+            "waist_mm": pair(b.waist),
+            "to_waist_mm": pair(b.to_waist),
+            "index": b.index,
+            "fill": b.fill,
+        })).collect::<Vec<_>>(),
+    }))
+}
+
 /// A design file's entries as JSON for editors: its kind, layout, and each
 /// `[[element]]`, `[[source]]`, `[[detector]]`, `[[proxy]]` and `[[merit]]` with the keys
 /// as written (without the `[resolved]` section).
