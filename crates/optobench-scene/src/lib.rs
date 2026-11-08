@@ -5,7 +5,7 @@
 //! M3 provides standalone scenes: items placed by a [`layout`] (planar or table), built
 //! into a non-sequential system ([`Scene::build`]), traced from their sources
 //! ([`Scene::trace`]) with per-detector results and a clipping list. Degrees of freedom
-//! arrive in M6, the sample element in M8.
+//! arrive in M6, the sample element in M10.
 //!
 //! Every item has a frame whose local +z is the optical axis at that point; for a
 //! mirror it is the mirror's normal.

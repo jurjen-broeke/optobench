@@ -1,8 +1,8 @@
-<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 760 620' role='img' aria-label='Planar designs work from M3; the live bridge waits for gate G1' font-family='system-ui, -apple-system, Segoe UI, sans-serif' font-size='13'>
-<rect width='760' height='620' fill='#ffffff'/>
+<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 760 716' role='img' aria-label='Planar designs work from M3; the live bridge waits for gate G1' font-family='system-ui, -apple-system, Segoe UI, sans-serif' font-size='13'>
+<rect width='760' height='716' fill='#ffffff'/>
 <text x='24' y='34' font-size='15' font-weight='600' fill='#1f1f1f'>Planar designs work from M3; the live bridge waits for gate G1</text>
 <text x='24' y='54' font-size='11.5' fill='#5f5f5f'>Milestones by phase, not to scale; no dates set yet</text>
-<rect x='24' y='72' width='252' height='476' rx='8' fill='#f2f2f0' stroke='#9a9a9a'/>
+<rect x='24' y='72' width='252' height='564' rx='8' fill='#f2f2f0' stroke='#9a9a9a'/>
 <text x='40' y='96' font-weight='600' fill='#1f1f1f'>Phase A: iterative</text>
 <text x='40' y='116' font-size='11.5' fill='#5f5f5f'>Standalone layouts, then</text>
 <text x='40' y='132' font-size='11.5' fill='#5f5f5f'>STEP in, report out</text>
@@ -21,29 +21,33 @@
 <rect x='40' y='408' width='220' height='36' rx='8' fill='none' fill-opacity='1' stroke='#9a9a9a' stroke-width='1.25'/>
 <text x='52' y='430' fill='#1f1f1f'>M6 DOFs and move report</text>
 <rect x='40' y='452' width='220' height='36' rx='8' fill='none' fill-opacity='1' stroke='#9a9a9a' stroke-width='1.25'/>
-<text x='52' y='474' fill='#1f1f1f'>M7 Microscopy and immersion</text>
+<text x='52' y='474' fill='#1f1f1f'>M7 Performance</text>
 <rect x='40' y='496' width='220' height='36' rx='8' fill='none' fill-opacity='1' stroke='#9a9a9a' stroke-width='1.25'/>
-<text x='52' y='518' fill='#1f1f1f'>M8 Fluorescence and heating</text>
+<text x='52' y='518' fill='#1f1f1f'>M8 Interface</text>
+<rect x='40' y='540' width='220' height='36' rx='8' fill='none' fill-opacity='1' stroke='#9a9a9a' stroke-width='1.25'/>
+<text x='52' y='562' fill='#1f1f1f'>M9 Microscopy and immersion</text>
+<rect x='40' y='584' width='220' height='36' rx='8' fill='none' fill-opacity='1' stroke='#9a9a9a' stroke-width='1.25'/>
+<text x='52' y='606' fill='#1f1f1f'>M10 Fluorescence and heating</text>
 <polygon points='284,112 296,100 308,112 296,124' fill='#2f6fd6' fill-opacity='0.12' stroke='#2f6fd6' stroke-width='1.5'/>
 <text x='296' y='92' text-anchor='middle' font-size='11.5' font-weight='600' fill='#1f1f1f'>G1</text>
-<rect x='316' y='72' width='190' height='476' rx='8' fill='#f2f2f0' stroke='#9a9a9a'/>
+<rect x='316' y='72' width='190' height='564' rx='8' fill='#f2f2f0' stroke='#9a9a9a'/>
 <text x='332' y='96' font-weight='600' fill='#1f1f1f'>Phase B: live</text>
 <text x='332' y='116' font-size='11.5' fill='#5f5f5f'>Control channel adapter,</text>
 <text x='332' y='132' font-size='11.5' fill='#5f5f5f'>once commands settle</text>
 <rect x='332' y='144' width='158' height='36' rx='8' fill='none' fill-opacity='1' stroke='#9a9a9a' stroke-width='1.25'/>
-<text x='344' y='166' fill='#1f1f1f'>M9 Live read-only</text>
+<text x='344' y='166' fill='#1f1f1f'>M11 Live read-only</text>
 <rect x='332' y='188' width='158' height='36' rx='8' fill='none' fill-opacity='1' stroke='#9a9a9a' stroke-width='1.25'/>
-<text x='344' y='210' fill='#1f1f1f'>M10 Live write-back</text>
+<text x='344' y='210' fill='#1f1f1f'>M12 Live write-back</text>
 <polygon points='514,112 526,100 538,112 526,124' fill='#2f6fd6' fill-opacity='0.12' stroke='#2f6fd6' stroke-width='1.5'/>
 <text x='526' y='92' text-anchor='middle' font-size='11.5' font-weight='600' fill='#1f1f1f'>G2</text>
-<rect x='546' y='72' width='190' height='476' rx='8' fill='#f2f2f0' stroke='#9a9a9a'/>
+<rect x='546' y='72' width='190' height='564' rx='8' fill='#f2f2f0' stroke='#9a9a9a'/>
 <text x='562' y='96' font-weight='600' fill='#1f1f1f'>Phase C: scale</text>
 <text x='562' y='116' font-size='11.5' fill='#5f5f5f'>Hardening and speed,</text>
 <text x='562' y='132' font-size='11.5' fill='#5f5f5f'>when needed</text>
 <rect x='562' y='144' width='158' height='36' rx='8' fill='none' fill-opacity='1' stroke='#9a9a9a' stroke-width='1.25'/>
-<text x='574' y='166' fill='#1f1f1f'>M11 Tolerancing</text>
+<text x='574' y='166' fill='#1f1f1f'>M13 Tolerancing</text>
 <rect x='562' y='188' width='158' height='36' rx='8' fill='none' fill-opacity='1' stroke='#9a9a9a' stroke-width='1.25'/>
-<text x='574' y='210' fill='#1f1f1f'>M12 GPU, tissue MC</text>
-<text x='24' y='576' font-size='11.5' fill='#1f1f1f'>G1: Phase A loop proven on a real bench; SolidCraft assembly and parameter commands stable for two releases</text>
-<text x='24' y='596' font-size='11.5' fill='#1f1f1f'>G2: every write verified by read-back on the golden scenes and in the nightly contract tests</text>
+<text x='574' y='210' fill='#1f1f1f'>M14 GPU, tissue MC</text>
+<text x='24' y='664' font-size='11.5' fill='#1f1f1f'>G1: Phase A loop proven on a real bench; SolidCraft assembly and parameter commands stable for two releases</text>
+<text x='24' y='684' font-size='11.5' fill='#1f1f1f'>G2: every write verified by read-back on the golden scenes and in the nightly contract tests</text>
 </svg>

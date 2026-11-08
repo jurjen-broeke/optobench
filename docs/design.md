@@ -79,7 +79,7 @@ A design can start without SolidCraft. A scene file describes the optics directl
 - **Reports** give positions in layout coordinates (axis distance, grid hole, height).
 - **Upgrade path:** `optobench export-placements` writes the element poses and a matching sidecar, so the layout can be rebuilt in SolidCraft later and matched to its bodies.
 
-### Phase A: iterative (milestones M4–M7)
+### Phase A: iterative (milestones M4–M9)
 
 1. In SolidCraft, the user exports the assembly as STEP, one file per run.
 2. `optobench trace design.step --scene design.optobench` reads the geometry and sidecar, matches bodies to sidecar entries by STEP product name, then path, then geometry fingerprint, and traces.
@@ -89,12 +89,12 @@ A design can start without SolidCraft. A scene file describes the optics directl
 
 Phase A needs nothing from SolidCraft beyond STEP export, so it keeps working however much the command set changes.
 
-### Phase B: live (milestones M9–M10)
+### Phase B: live (milestones M11–M12)
 
 The `optobench-bridge` crate connects to a running SolidCraft through the authenticated loopback control channel and replaces steps 1, 4 and 5:
 
-- **Read (M9):** list occurrences, transforms, joints and parameters; get the geometry of tagged bodies; detect design changes and re-trace automatically. Writes nothing.
-- **Write (M10):** map each DOF to a *binding*, in this order of preference: a user parameter (`parameters.change`), a joint value (`joint.edit` offset or angle), and as a fallback a direct move (`occurrence.move`). Changes go out as one batch, the design rebuilds once, every value is read back, and the loop stops if any read-back differs from the request by more than a tolerance.
+- **Read (M11):** list occurrences, transforms, joints and parameters; get the geometry of tagged bodies; detect design changes and re-trace automatically. Writes nothing.
+- **Write (M12):** map each DOF to a *binding*, in this order of preference: a user parameter (`parameters.change`), a joint value (`joint.edit` offset or angle), and as a fallback a direct move (`occurrence.move`). Changes go out as one batch, the design rebuilds once, every value is read back, and the loop stops if any read-back differs from the request by more than a tolerance.
 - **Versioning:** the adapter is keyed to the SolidCraft release. At startup it checks the commands it needs against `describe_command` schemas and refuses to write if a contract has changed. A nightly contract test runs against the latest SolidCraft release.
 - **Safety:** items are always addressed by numeric id, never by name (names can repeat). Strict parameter checking is on. Each write session is one undoable step in SolidCraft, when SolidCraft offers grouping.
 
@@ -137,7 +137,7 @@ The optics end in a **sample element**: a stack of media the focused light enter
 
 **Power and heating**
 
-- **Absorbed power density** in each layer = µa(λ) × local fluence rate, from the traced beam. The ballistic and scattered parts use a diffusion approximation until the Monte Carlo model of M12 replaces it.
+- **Absorbed power density** in each layer = µa(λ) × local fluence rate, from the traced beam. The ballistic and scattered parts use a diffusion approximation until the Monte Carlo model of M14 replaces it.
 - **Temperature rise:** heat diffusion in the layer stack with water's thermal properties (conductivity, density, heat capacity), steady state and time-resolved for a scanned or parked beam. An optional perfusion term (Pennes bioheat) covers in-vivo tissue.
 - **Reports:** power at the sample surface and at the focal plane, peak and FOV-averaged temperature rise, and excitation rate versus depth. Thresholds the user sets give warnings for heating and saturation.
 - **Validation target:** published measurements of laser heating during multiphoton imaging (for example Podgorski & Ranganathan 2016) are reproduced from their stated conditions as a benchmark.
@@ -302,16 +302,16 @@ Every file optobench writes for people to keep has one extension, `.optobench`, 
 
 ## Milestones
 
-M3 is the first usable release: CAD-free planar and table layouts with clipping and spot analysis. M6 completes the iterative CAD loop, suggesting part moves within real mechanical DOFs. M8 adds the sample: fluorescence excitation, photon budget and heating in water. Live coupling (M9–M10) is a separate phase behind gate G1, so SolidCraft churn can't block the optics work.
+M3 is the first usable release: CAD-free planar and table layouts with clipping and spot analysis. M6 completes the iterative CAD loop, suggesting part moves within real mechanical DOFs. M10 adds the sample: fluorescence excitation, photon budget and heating in water. Live coupling (M11–M12) is a separate phase behind gate G1, so SolidCraft churn can't block the optics work.
 
-![Roadmap: 3 phases, 13 milestones, 2 gates](roadmap.svg)
+![Roadmap: 3 phases, 15 milestones, 2 gates](roadmap.svg)
 
-Phase C doesn't depend on Phase B: tolerancing can start straight after M8 if it's needed first.
+Phase C doesn't depend on Phase B: tolerancing can start straight after M10 if it's needed first.
 
 **Improvements not tied to a milestone** (added 2026-11-07):
 
 - *Layout view of CAD scenes.* The SVG view draws each optical element and each component occurrence as one outline, the convex hull of its faces in the view. Next: exact, concave silhouettes from the display mesh that comes with the UI, so brackets and cubes keep their real shape.
-- *Performance on large STEP assemblies.* The golden Thorlabs assembly (6400 faces) takes about 0.8 s to convert and traces about 6500 rays per second. Candidates: cache converted faces per STEP file and product, trace rays in parallel, seed B-spline intersection from a coarse mesh instead of a fixed 7 × 7 grid, and skip absorber faces that no ray can reach before an optical face.
+- *Performance on large STEP assemblies.* The golden Thorlabs assembly (6400 faces) takes about 0.8 s to convert and traces about 6500 rays per second; the Thorlabs beam-expander periscope (165 solids, 13 MB) takes 12 s per trace, so an optimisation takes about 25 minutes. Now milestone M7 (2026-11-08).
 
 | Milestone | Scope | Exit criteria |
 | --- | --- | --- |
@@ -322,12 +322,14 @@ Phase C doesn't depend on Phase B: tolerancing can start straight after M8 if it
 | M4 STEP scene import | STEP import, sidecar v1, body matching, BVH + exact-surface refinement, untagged = absorber, `export-placements` from standalone scenes | golden cage relay traced from STEP; intersection residual < 1e-9 mm; re-export keeps matches |
 | M5 Power and parts library | sources, detectors, thin-film coatings, splitting with cutoff, power ledger, footprints, user-managed parts library in the user data directory, radius check vs STEP, embedded parameters with provenance on save | power conserved to 1e-9; fetched part auto-tagged on import; a shared design traces identically on a machine without the library |
 | M6 DOFs and move report | DOF model (slide, tilt, coupled, locked), damped least-squares optimizer, merit functions (focus, centring, collimation, power), move report in CAD or layout coordinates, re-export diff | on a golden periscope, applying the report's moves by hand restores alignment in one iteration |
-| M7 Microscopy pack | ideal objective with immersion and cover-glass design, dry/immersion/dipping cases, index-mismatch trace, correction collar DOF, scan-mirror sweeps, pupil conjugation and telecentricity, Gaussian beams, stratified-media Richards–Wolf PSF | 4f scan/tube relay with galvo matches hand calculation; focal shift and PSF in water match published stratified-media results |
-| M8 Sample, fluorescence, heating | sample layer stack (µa, µs, g), fluorophore definitions, 1P and 2P excitation with saturation checks, pulse broadening from glass GDD, emission trace and photon budget, absorbed power, heat diffusion (steady and scanned), heating and saturation warnings | excitation rates match closed-form cases; temperature rise matches the analytic Gaussian-source solution and a published multiphoton heating benchmark |
-| M9 Live read-only | bridge crate: connect, schema check, read occurrences/transforms/joints/parameters, change detection, auto re-trace | re-trace within 2 s of a design change on a golden scene; refuses to run on schema mismatch |
-| M10 Live write-back | DOF bindings (parameter, joint, move), batched writes, single rebuild, read-back verification, abort on mismatch | nightly contract test green against the latest SolidCraft release for 4 weeks |
-| M11 Tolerancing | Monte Carlo over DOFs, mount and part tolerances; yield and sensitivity report | sensitivity ranking stable across seeds; runtime documented |
-| M12 GPU, tissue MC | wgpu compute for non-sequential batches; photon transport in scattering tissue (Henyey–Greenstein) replacing the diffusion approximation for fluence and heating | GPU equals CPU within statistical error; tissue fluence matches published slab benchmarks |
+| M7 Performance | converted-face cache per STEP file and product, parallel ray batches (rayon on desktop), B-spline intersection seeded from a coarse mesh, skipping absorbers no ray can reach before an optical face, fewer traces per optimiser iteration (forward differences, Jacobian reuse); benchmarks committed with their timings | the local Thorlabs beam-expander periscope optimised in under 2 minutes (25 today); trace results unchanged to 1e-12 |
+| M8 Interface | stand-alone desktop app in SolidCraft's style: ribbon generated from command metadata (label, icon, tab, panel, enabled/reason), browser, 3D view with display tessellation of the exact faces, properties, results; CAD, LAYOUT and SIMULATE workspaces (corpus/interface/DESIGN.md); moves in CAD deferred to SolidCraft | a layout built, traced, optimised and saved from the UI alone; the golden periscope's CAD workflow (tag, DOFs, optimise, move report) done in the UI |
+| M9 Microscopy pack | ideal objective with immersion and cover-glass design, dry/immersion/dipping cases, index-mismatch trace, correction collar DOF, scan-mirror sweeps, pupil conjugation and telecentricity, Gaussian beams, stratified-media Richards–Wolf PSF | 4f scan/tube relay with galvo matches hand calculation; focal shift and PSF in water match published stratified-media results |
+| M10 Sample, fluorescence, heating | sample layer stack (µa, µs, g), fluorophore definitions, 1P and 2P excitation with saturation checks, pulse broadening from glass GDD, emission trace and photon budget, absorbed power, heat diffusion (steady and scanned), heating and saturation warnings | excitation rates match closed-form cases; temperature rise matches the analytic Gaussian-source solution and a published multiphoton heating benchmark |
+| M11 Live read-only | bridge crate: connect, schema check, read occurrences/transforms/joints/parameters, change detection, auto re-trace | re-trace within 2 s of a design change on a golden scene; refuses to run on schema mismatch |
+| M12 Live write-back | DOF bindings (parameter, joint, move), batched writes, single rebuild, read-back verification, abort on mismatch | nightly contract test green against the latest SolidCraft release for 4 weeks |
+| M13 Tolerancing | Monte Carlo over DOFs, mount and part tolerances; yield and sensitivity report | sensitivity ranking stable across seeds; runtime documented |
+| M14 GPU, tissue MC | wgpu compute for non-sequential batches; photon transport in scattering tissue (Henyey–Greenstein) replacing the diffusion approximation for fluence and heating | GPU equals CPU within statistical error; tissue fluence matches published slab benchmarks |
 
 ## Tests and validation
 
@@ -352,7 +354,7 @@ Correctness is shown without commercial tools, so every reference value comes fr
 | Body matching across re-exports | sidecar entries lose their bodies | match by product name, then path, then geometry fingerprint; unmatched entries are an error, not a silent skip |
 | Objective prescriptions unavailable | PSF and aberrations at focus approximate | ideal objective plus user-supplied pupil aberrations (Zernike) |
 | Third-party data licences | a licence conflict in what we ship | external databases are downloaded by the user, never bundled; bundled data limited to clearly open-licensed sets, each in ATTRIBUTION.md and a CI-checked asset manifest; shared designs embed only the extracted parameters they need, with provenance, and warn on sources that forbid redistribution |
-| Performance in non-sequential scenes | slow iteration | BVH, struct-of-arrays batches, rayon on desktop; GPU compute in M12 |
+| Performance in non-sequential scenes | slow iteration | BVH, struct-of-arrays batches, rayon on desktop; GPU compute in M14 |
 
 **Open questions**
 
@@ -362,6 +364,7 @@ Correctness is shown without commercial tools, so every reference value comes fr
 
 **Decided**
 
+- Two milestones follow M6: M7 Performance, then M8 Interface, a stand-alone desktop app in SolidCraft's style (ribbon, browser, workspaces; corpus/interface/DESIGN.md) built on the same UI toolkit as SolidCraft so it can later become a SolidCraft workspace; the microscopy pack and later milestones move up by two (2026-11-08).
 - The parts library lives in the user's data directory and is managed and transferred by the user; the project hosts no library (2026-11-07).
 - STEP is read by optobench's own reader, not SolidCraft's crates, so changes inside SolidCraft cannot break import; only the STEP files it writes matter (2026-11-07).
 - Data from outside sources enters by importing a file the user has downloaded, not by a built-in network download: no captchas, logins or terms pages to get past, and no network code or TLS dependency in the tool (2026-11-07).

@@ -5,6 +5,11 @@ with the release that introduced them.
 
 ## Unreleased
 
+- Roadmap: two milestones after M6, M7 Performance (converted-face cache, parallel rays,
+  faster B-spline seeding, fewer traces per optimiser step; exit: the Thorlabs
+  beam-expander periscope optimised in under 2 minutes) and M8 Interface (a stand-alone
+  desktop app in SolidCraft's style with CAD, LAYOUT and SIMULATE workspaces). The
+  microscopy pack and later milestones are now M9–M14; roadmap figure redrawn.
 - M6c move report and re-export diff: `optimize` with `report` writes
   `<design>.moves.json` and `.moves.md` (per DOF the current and suggested value; per
   moved part the move from its STEP pose as translation, axis and angle, 3 × 4 matrix and
