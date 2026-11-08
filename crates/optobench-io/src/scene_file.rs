@@ -93,6 +93,10 @@
 //! size = [10, 10]
 //! pixels = [256, 256]
 //!
+//! [[merit]]                         # what `optimize` aligns for: see `merit`
+//! kind = "focus"                    # or "centring", "pointing", "collimation", "power"
+//! detector = "screen"
+//!
 //! # [resolved] ...                  # written by `embed`, always last: see `resolved`
 //! ```
 //!
@@ -926,6 +930,7 @@ pub fn parse_with(text: &str, lookups: &Lookups) -> Result<Scene, FileError> {
             "detector",
             "trace",
             "resolved",
+            "merit",
         ],
         "top level",
     )?;
@@ -1310,7 +1315,7 @@ pub fn parse_with(text: &str, lookups: &Lookups) -> Result<Scene, FileError> {
             .extend(dofs(&item, &target, &frame, false, frame.origin())?);
     }
     check_dofs(&scene)?;
-    Ok(scene)
+    scene.placed().map_err(|e| error(e.to_string()))
 }
 
 #[cfg(test)]

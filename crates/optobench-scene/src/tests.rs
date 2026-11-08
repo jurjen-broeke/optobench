@@ -399,3 +399,56 @@ fn disk_samples_cover_the_disk_and_stay_inside_it() {
     assert!((total - 1.0).abs() < 1e-12);
     assert!(samples.iter().all(|s| s.0.hypot(s.1) < 1.0));
 }
+
+#[test]
+fn poses_follow_dof_values_however_they_are_reached() {
+    use crate::dof::{Dof, Motion, Target};
+    use std::collections::BTreeMap;
+    let frame = frame_along(Vec3::new(0.0, 0.0, 10.0), Vec3::Z).expect("valid");
+    let dof = |name: &str, motion: Motion, value: f64| Dof {
+        name: name.into(),
+        target: Target::Element("L".into()),
+        motion,
+        range: None,
+        locked: false,
+        follows: None,
+        value,
+    };
+    let tilt = Motion::Tilt {
+        axis: Vec3::X,
+        pivot: Vec3::new(0.0, 0.0, 10.0),
+    };
+    // As read from a file: nominal pose, values given (slide 1 mm, tilt 0.01 rad).
+    let read = Scene {
+        elements: vec![singlet("L", frame, 30.0, f64::INFINITY, 4.0)],
+        dofs: vec![
+            dof("z", Motion::Slide { axis: Vec3::Z }, 1.0),
+            dof("tip", tilt, 0.01),
+        ],
+        ..empty()
+    };
+    let placed = read.placed().expect("placed");
+    let origin = |s: &Scene| s.elements[0].frame.origin();
+    let axis = |s: &Scene| s.elements[0].frame.axes()[2];
+    // The slide, then the tilt about the fixed pivot: the origin goes to 11 mm along z,
+    // then turns 0.01 rad about x through (0, 0, 10).
+    let expected = Vec3::new(0.0, -(0.01_f64).sin(), 10.0 + (0.01_f64).cos());
+    assert!(
+        (origin(&placed) - expected).length() < 1e-12,
+        "{:?}",
+        origin(&placed)
+    );
+    // Moving twice ends where moving once does; moving back returns to the nominal pose.
+    let values = |z: f64, tip: f64| BTreeMap::from([("z".to_owned(), z), ("tip".to_owned(), tip)]);
+    let twice = placed
+        .moved(&values(3.0, -0.02))
+        .and_then(|s| s.moved(&values(-2.0, 0.005)))
+        .expect("moves");
+    let once = placed.moved(&values(-2.0, 0.005)).expect("moves");
+    assert!((origin(&twice) - origin(&once)).length() < 1e-12);
+    assert!((axis(&twice) - axis(&once)).length() < 1e-12);
+    let back = once.moved(&values(0.0, 0.0)).expect("moves");
+    assert!((origin(&back) - frame.origin()).length() < 1e-12);
+    assert!((axis(&back) - frame.axes()[2]).length() < 1e-12);
+    assert_eq!(back.dofs[0].value, 0.0);
+}

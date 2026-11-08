@@ -25,11 +25,19 @@ offsets. `trace` takes `dofs = { name: value }` and reports every DOF's value.
       SolidCraft re-export moved by 1 mm
 
 ## M6b Optimiser and merit functions
-- [ ] Damped least squares (Levenberg–Marquardt) over the free DOFs, within their ranges
-- [ ] Merit terms: focus (rms spot), centring (centroid on target), collimation, pointing,
-      power; weights and targets in the file or the command
-- [ ] `optimize` command; tests on analytic cases (refocus to the back focal length, steer a
-      periscope back onto a target)
+
+Residuals are in mm (focus, centring), mrad (pointing, collimation) or a fraction
+(power), so weights stay near 1 for ordinary benches. A scene's poses always match its
+DOF values (readers place items at the file's values; `moved` moves by the change). On
+the local iris cage, the LA1951-ML put 2 mm out along the rods is brought back to best
+collimation, 0.074 mm from the paraxial position (the spherical aberration of its
+convex-to-focus orientation), in 9 iterations and 14 traces.
+- [x] Damped least squares (Levenberg–Marquardt, Marquardt scaling, central differences)
+      over the free DOFs, within their ranges (`optobench_optimize::lm`)
+- [x] Merit terms: focus (rms spot), centring (centroid on target), pointing (mean slope),
+      collimation (rms slope), power; `[[merit]]` in the file or `merit` in the command
+- [x] `optimize` command; tests: refocus behind a Descartes (aberration-free) lens, steer a
+      periscope back onto its target, stop at a range limit
 
 ## M6c Move report and re-export diff
 - [ ] Move report: per element and DOF the current value, the suggested one and the change,

@@ -5,7 +5,9 @@
 //! scene frame at the nominal pose. A DOF may *follow* another (a coupled DOF: its value
 //! is the other's times a ratio) or be *locked* (kept at its value, never optimised).
 //! Poses are always the nominal pose plus the DOF offsets, never free transforms; an item
-//! with several DOFs takes them in the order they are listed.
+//! with several DOFs takes them in the order they are listed. A scene's poses always
+//! match its DOFs' values: readers place items with [`Scene::placed`], and
+//! [`Scene::moved`] moves them by the change in value.
 
 use std::collections::BTreeMap;
 
@@ -147,22 +149,60 @@ impl Scene {
         Ok(values)
     }
 
-    /// The scene with every item at its nominal pose plus its DOF offsets (see
-    /// [`Scene::dof_values`]).
+    /// The scene with its DOFs at new values: `overrides` (by name) in place of the
+    /// current ones, coupled DOFs following (see [`Scene::dof_values`]). Items move by the
+    /// difference, so the poses keep matching the DOF values.
     pub fn moved(&self, overrides: &BTreeMap<String, f64>) -> Result<Scene, SceneError> {
-        let values = self.dof_values(overrides)?;
+        let old: BTreeMap<String, f64> = self
+            .dofs
+            .iter()
+            .map(|d| (d.name.clone(), d.value))
+            .collect();
+        let new = self.dof_values(overrides)?;
+        self.move_between(&old, &new)
+    }
+
+    /// The scene read from a file: poses nominal, DOF values given. Moves every item from
+    /// its nominal pose to its DOF values, so the poses match them (readers call this
+    /// once).
+    pub fn placed(&self) -> Result<Scene, SceneError> {
+        let zero: BTreeMap<String, f64> = self.dofs.iter().map(|d| (d.name.clone(), 0.0)).collect();
+        let values = self.dof_values(&BTreeMap::new())?;
+        self.move_between(&zero, &values)
+    }
+
+    /// Moves each item from where `old` puts it to where `new` does: by the chain of its
+    /// DOFs at the new values after undoing the chain at the old ones.
+    fn move_between(
+        &self,
+        old: &BTreeMap<String, f64>,
+        new: &BTreeMap<String, f64>,
+    ) -> Result<Scene, SceneError> {
         let mut scene = self.clone();
+        let mut targets: Vec<&Target> = Vec::new();
+        for dof in &self.dofs {
+            if !targets.contains(&&dof.target) {
+                targets.push(&dof.target);
+            }
+        }
         let frame_moved =
             |frame: &Frame, t: &Transform| Frame::from_transform(*t * frame.transform());
-        for dof in &self.dofs {
-            let t = dof.motion.transform(values[&dof.name]);
+        for target in targets {
+            let chain = |values: &BTreeMap<String, f64>| {
+                self.dofs
+                    .iter()
+                    .filter(|d| &d.target == target)
+                    .fold(Transform::IDENTITY, |t, d| {
+                        d.motion.transform(values[&d.name]) * t
+                    })
+            };
+            let t = chain(new) * chain(old).inverse();
             let missing = || {
                 invalid(format!(
-                    "`{}` moves {:?}, which is not in the scene",
-                    dof.name, dof.target
+                    "a degree of freedom moves {target:?}, which is not in the scene"
                 ))
             };
-            match &dof.target {
+            match target {
                 Target::Element(id) => {
                     let e = scene
                         .elements
@@ -201,9 +241,8 @@ impl Scene {
                 }
             }
         }
-        // The DOFs now say where the items are.
         for dof in &mut scene.dofs {
-            dof.value = values[&dof.name];
+            dof.value = new[&dof.name];
         }
         Ok(scene)
     }
