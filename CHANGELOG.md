@@ -5,6 +5,12 @@ with the release that introduced them.
 
 ## Unreleased
 
+- M8c3 icons and exit test: optobench's own icon set in SolidCraft's icon language
+  (40 icons, drawn with egui's painter; an optics `beam` role), on every ribbon button and
+  workspace tile; DOF buttons name their frame (a layout item's own axes, a sidecar's
+  scene axes); the M8 exit test drives the window with `egui_kittest`: a layout built,
+  traced, optimised and saved, and the golden periscope tagged, given DOFs, optimised with
+  its move report and realigned, from the window alone. M8 Interface is complete.
 - M8c2 editors: the interface edits designs through `edit`: every key of the selected
   entry, its degrees of freedom, New and Undo, adding lenses, mirrors, sources and
   detectors to a layout, the Simulate stages' editors and a runs strip, tagging CAD bodies

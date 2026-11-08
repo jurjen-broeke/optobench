@@ -285,21 +285,25 @@ fn apply(doc: &mut DocumentMut, op: &Json) -> Result<(), EditError> {
             Ok(())
         }
         "add_dof" => {
-            let fields = op["dof_entry"]
-                .as_object()
-                .ok_or_else(|| error("`dof_entry` must be an object"))?;
+            // Pairs keep the order given; an object is written name, kind first.
+            let fields = pairs(&op["dof_entry"]).map_err(|_| {
+                error("`dof_entry` must be an object or a list of [key, value] pairs")
+            })?;
             let name = fields
-                .get("name")
-                .and_then(Json::as_str)
-                .ok_or_else(|| error("a new degree of freedom needs a `name`"))?;
-            if dof(doc, name).is_ok() {
+                .iter()
+                .find(|(k, _)| k == "name")
+                .and_then(|(_, v)| v.as_str())
+                .ok_or_else(|| error("a new degree of freedom needs a `name`"))?
+                .to_owned();
+            if dof(doc, &name).is_ok() {
                 return Err(error(format!(
                     "a degree of freedom `{name}` already exists"
                 )));
             }
-            let Value::InlineTable(new) = value(&op["dof_entry"])? else {
-                return Err(error("`dof_entry` must be an object"));
-            };
+            let mut new = InlineTable::new();
+            for (k, v) in &fields {
+                new.insert(k, value(v)?);
+            }
             let table = entry(doc, op)?;
             match table.get_mut("dof").and_then(Item::as_array_mut) {
                 Some(list) => list.push(new),

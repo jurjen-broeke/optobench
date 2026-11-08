@@ -23,6 +23,8 @@ pub struct Extras {
     /// The normal of the face last clicked (scene frame), for tagging a mirror by its
     /// reflecting face.
     pub picked_normal: Option<V3>,
+    /// Where the view was last drawn.
+    pub rect: Option<Rect>,
 }
 
 impl Extras {
@@ -142,6 +144,7 @@ pub fn show(
 ) -> Vec<Request> {
     let (response, painter) = ui.allocate_painter(ui.available_size(), Sense::click_and_drag());
     let rect = response.rect;
+    extras.rect = Some(rect);
     background(&painter, rect);
     let mut requests = Vec::new();
     let centre = (rect.center().x as f64, rect.center().y as f64);
@@ -203,8 +206,9 @@ pub fn show(
             .collect()
     };
 
-    if let (true, Some(scene), Some(doc)) = (shaded, scene, doc) {
-        // Hover and pick on the triangles.
+    // Hover and pick on the triangles, whenever the scene has them.
+    let meshes = scene.is_some_and(|s| s.items.iter().any(|i| i.mesh.is_some()));
+    if let (true, Some(scene)) = (meshes, scene) {
         let pick = |p: Pos2| {
             let (o, d) = camera.ray((p.x as f64, p.y as f64), centre, high);
             pick_mesh(scene, hidden, plane, o, d)
@@ -215,6 +219,8 @@ pub fn show(
             extras.picked_normal = picked.map(|p| p.1.normal);
             requests.push(Request::Select(picked.map(|p| p.0)));
         }
+    }
+    if let (true, Some(scene), Some(doc)) = (shaded, scene, doc) {
         let segments: Vec<(V3, V3, Color32)> = if show_rays {
             ray_paths(doc)
                 .into_iter()
@@ -257,7 +263,9 @@ pub fn show(
             );
         }
     } else {
-        extras.hovered = None;
+        if !meshes {
+            extras.hovered = None;
+        }
         if let Some(scene) = scene {
             // Absorbers first, so optical items draw on top.
             let mut order: Vec<usize> = (0..scene.items.len()).collect();
@@ -294,8 +302,8 @@ pub fn show(
                 }
             }
         }
-        // Click: select the nearest item within 6 px.
-        if response.clicked() {
+        // Click without triangles: select the nearest outline within 6 px.
+        if response.clicked() && !meshes {
             let picked = response.interact_pointer_pos().and_then(|p| {
                 let scene = scene?;
                 let mut best: Option<(usize, f32)> = None;

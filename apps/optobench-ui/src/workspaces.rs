@@ -81,6 +81,30 @@ impl Action {
         }
     }
 
+    /// Its icon (`icons`).
+    pub fn icon(self) -> &'static str {
+        match self {
+            Action::Open => "open",
+            Action::Reload => "reload",
+            Action::Fit => "fit",
+            Action::Top => "top",
+            Action::Front => "front",
+            Action::Right => "right",
+            Action::Isometric => "isometric",
+            Action::Rays => "rays",
+            Action::New => "new",
+            Action::Undo => "undo",
+            Action::Remove => "remove",
+            Action::AddLens => "add-lens",
+            Action::AddMirror => "add-mirror",
+            Action::AddSource => "add-source",
+            Action::AddDetector => "add-detector",
+            Action::TagLens => "tag-lens",
+            Action::TagMirror => "tag-mirror",
+            Action::Apply => "apply",
+        }
+    }
+
     /// What it does, for its tooltip.
     pub fn summary(self) -> &'static str {
         match self {
@@ -403,6 +427,41 @@ mod tests {
             );
         }
         assert!(commands().contains(&"trace"));
+    }
+
+    #[test]
+    fn every_control_and_workspace_has_a_drawn_icon() {
+        use crate::icons::ALL;
+        let registry = optobench_commands::Registry::standard();
+        for command in registry.commands() {
+            assert!(
+                ALL.contains(&command.icon),
+                "command {}: icon {}",
+                command.id,
+                command.icon
+            );
+        }
+        for w in &WORKSPACES {
+            let items: Vec<Item> = match w.layout {
+                Layout::Ribbon(tabs) => tabs
+                    .iter()
+                    .flat_map(|t| t.sections)
+                    .flat_map(|s| s.items)
+                    .copied()
+                    .collect(),
+                Layout::Stages { tools, .. } => tools.to_vec(),
+            };
+            for item in items {
+                if let Control::Action(a) = item.control {
+                    assert!(ALL.contains(&a.icon()), "{:?}", a);
+                }
+            }
+            assert!(
+                ALL.contains(&format!("workspace-{}", w.id).as_str()),
+                "{}",
+                w.id
+            );
+        }
     }
 
     #[test]

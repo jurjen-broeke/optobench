@@ -623,7 +623,7 @@ impl Document {
                 self.messages.push(Message {
                     error: false,
                     text: format!(
-                        "Optimised: merit {:.3e} → {:.3e}; Apply writes the values",
+                        "Optimised: merit {:.3e} to {:.3e}; Apply writes the values",
                         cost("start"),
                         cost("end")
                     ),
