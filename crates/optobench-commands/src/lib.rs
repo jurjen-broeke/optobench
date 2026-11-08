@@ -237,6 +237,14 @@ const STANDARD: &[Command] = &[
         handler: trace::focus,
     },
     Command {
+        id: "gaussian",
+        label: "Gaussian Beam",
+        icon: "gaussian",
+        effect: Effect::Read,
+        summary: "a Gaussian source's beam radius, curvature and waist at every element and detector, and an objective's pupil fill",
+        handler: trace::gaussian,
+    },
+    Command {
         id: "sweep",
         label: "Sweep",
         icon: "sweep",

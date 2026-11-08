@@ -524,6 +524,20 @@ pub fn draw(painter: &Painter, rect: Rect, id: &str, enabled: bool) {
             }
             c.dot(pos2(32.0, 32.0), 5.5, r.beam);
         }
+        "gaussian" => {
+            // A beam narrowing to its waist and widening again: two hyperbolas.
+            let (upper, lower): (Vec<_>, Vec<_>) = (0..=24)
+                .map(|k| {
+                    let x = 6.0 + 52.0 * k as f32 / 24.0;
+                    let z = (x - 32.0) / 14.0;
+                    let w = 5.0 * (1.0 + z * z).sqrt();
+                    (pos2(x, 32.0 - w), pos2(x, 32.0 + w))
+                })
+                .unzip();
+            c.line(&upper, ACTION, r.beam);
+            c.line(&lower, ACTION, r.beam);
+            c.line(&[pos2(32.0, 20.0), pos2(32.0, 44.0)], 2.0, r.guide);
+        }
         "sweep" => {
             // A mirror turning, and the fan of beams it sends.
             let hit = pos2(20.0, 44.0);
@@ -751,6 +765,7 @@ pub const ALL: &[&str] = &[
     "trace",
     "optimise",
     "focus",
+    "gaussian",
     "sweep",
     "check-moves",
     "bodies",

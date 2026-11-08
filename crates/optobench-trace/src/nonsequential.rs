@@ -344,8 +344,12 @@ pub struct RayRecord {
     /// The ray at the end: position of the last hit (or the start, if it escaped at
     /// once), last direction and remaining power.
     pub ray: Ray,
-    /// Start point and every hit point, in order (scene frame).
+    /// Start point and every hit point, in order (scene frame). An ideal objective
+    /// counts twice: where the ray reaches its pupil, and where it leaves its front plane.
     pub points: Vec<Vec3>,
+    /// The optical path (mm) at each of `points`: the index of the medium between two
+    /// points is the difference over their distance.
+    pub optical_paths: Vec<f64>,
     /// How it ended.
     pub end: End,
     /// Power reflected out of the path and not followed, because splitting is off (W).
@@ -359,7 +363,7 @@ pub struct RayRecord {
     pub absorbed_power: f64,
     /// For a detected ray: the hit in the detector face's local frame (x, y).
     pub detector_point: Option<(f64, f64)>,
-    /// The face of each hit, in the order of `points[1..]`.
+    /// The face of each hit, in the order of `points[1..]` (an objective's face twice).
     pub faces: Vec<usize>,
     /// The power arriving at each hit (W), in the order of `points[1..]`.
     pub powers: Vec<f64>,
@@ -560,6 +564,7 @@ impl NonSequentialSystem {
             launched,
             ray: launched,
             points: vec![launched.position],
+            optical_paths: vec![launched.optical_path],
             end: End::Escaped,
             reflected_power: 0.0,
             below_cutoff_power: 0.0,
@@ -605,6 +610,7 @@ impl NonSequentialSystem {
             record.points.push(ray.position);
             record.faces.push(face_index);
             record.powers.push(ray.power);
+            record.optical_paths.push(ray.optical_path);
 
             let r = hit.point.x.hypot(hit.point.y);
             let outside_clear = |clear: Option<f64>| clear.is_some_and(|c| r > c);
@@ -669,7 +675,11 @@ impl NonSequentialSystem {
                             ray.position = face.placement.apply_point(position);
                             ray.direction = face.placement.apply_vector(direction);
                             ray.optical_path += optical_path;
+                            // Where it leaves: a second entry for the objective's face.
                             record.points.push(ray.position);
+                            record.faces.push(face_index);
+                            record.powers.push(ray.power);
+                            record.optical_paths.push(ray.optical_path);
                             medium = *exit_medium;
                             // It leaves from another place: nothing to skip there.
                             skip.clear();
