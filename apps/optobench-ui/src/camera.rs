@@ -1,5 +1,6 @@
-//! The 3D view's camera: orthographic, orbiting a target in the scene frame (Z up), with
-//! SolidCraft's standard views. Pure geometry, so it is tested without a window.
+//! The 3D view's camera: orthographic or perspective, orbiting a target in the scene
+//! frame (Z up), with SolidCraft's standard views. Pure geometry, so it is tested without
+//! a window.
 
 /// A point or direction in the scene (mm).
 pub type V3 = [f64; 3];
@@ -20,9 +21,9 @@ fn sub(a: V3, b: V3) -> V3 {
     [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
 }
 
-/// An orthographic camera looking at `target` from the direction given by yaw (about z,
-/// from +x) and pitch (above the x–y plane); `height` is the scene height the view shows
-/// (mm).
+/// A camera looking at `target` from the direction given by yaw (about z, from +x) and
+/// pitch (above the x–y plane); `height` is the scene height the view shows at the
+/// target (mm). In perspective the eye is as far away as a 30° field of view needs.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Camera {
     /// Turn about z (radians).
@@ -33,7 +34,12 @@ pub struct Camera {
     pub target: V3,
     /// The scene height shown (mm).
     pub height: f64,
+    /// Perspective (else orthographic).
+    pub perspective: bool,
 }
+
+/// The perspective field of view, top to bottom (radians).
+pub const FIELD_OF_VIEW: f64 = 30.0 * core::f64::consts::PI / 180.0;
 
 impl Default for Camera {
     fn default() -> Self {
@@ -42,6 +48,7 @@ impl Default for Camera {
             pitch: 0.0,
             target: [0.0; 3],
             height: 200.0,
+            perspective: false,
         };
         c.isometric();
         c
@@ -67,12 +74,92 @@ impl Camera {
         (dot(d, right), dot(d, up), dot(d, back))
     }
 
+    /// The eye's distance from the target in perspective (mm).
+    pub fn distance(&self) -> f64 {
+        0.5 * self.height / (0.5 * FIELD_OF_VIEW).tan()
+    }
+
+    /// Pixels per mm for a point at view depth `z` (towards the viewer, from the
+    /// target), or `None` behind the eye.
+    fn scale_at(&self, z: f64, pixels_high: f64) -> Option<f64> {
+        if self.perspective {
+            let d = self.distance();
+            (d - z > 1e-9 * d).then(|| pixels_high / self.height * d / (d - z))
+        } else {
+            Some(pixels_high / self.height)
+        }
+    }
+
     /// A scene point on a screen rectangle (`centre`, height in pixels): pixel x to the
-    /// right, y down.
+    /// right, y down. A point behind the eye goes far off the screen.
     pub fn to_screen(self, p: V3, centre: (f64, f64), pixels_high: f64) -> (f64, f64) {
-        let (x, y, _) = self.view(p);
-        let scale = pixels_high / self.height;
+        let (x, y, z) = self.view(p);
+        let scale = self.scale_at(z, pixels_high).unwrap_or(1e9);
         (centre.0 + x * scale, centre.1 - y * scale)
+    }
+
+    /// The line of sight through a pixel: origin and unit direction, into the scene.
+    pub fn ray(&self, pixel: (f64, f64), centre: (f64, f64), pixels_high: f64) -> (V3, V3) {
+        let (back, right, up) = self.basis();
+        let mm = self.height / pixels_high;
+        let (x, y) = ((pixel.0 - centre.0) * mm, (centre.1 - pixel.1) * mm);
+        let on_plane = [0, 1, 2].map(|i| self.target[i] + right[i] * x + up[i] * y);
+        if self.perspective {
+            let d = self.distance();
+            let eye = [0, 1, 2].map(|i| self.target[i] + back[i] * d);
+            let dir = sub(on_plane, eye);
+            let length = dot(dir, dir).sqrt();
+            (eye, dir.map(|c| c / length))
+        } else {
+            (on_plane, back.map(|c| -c))
+        }
+    }
+
+    /// The view–projection matrix (column-major, clip depth 0 to 1) for a view `aspect`
+    /// (width / height) wide, with depth room for a scene of `radius` (mm) around the
+    /// target.
+    pub fn matrix(&self, aspect: f64, radius: f64) -> [[f32; 4]; 4] {
+        let (back, right, up) = self.basis();
+        let radius = radius.max(1e-3);
+        // View: (right, up, back) from the target; then projection.
+        let view = |row: V3, offset: f64| [row[0], row[1], row[2], -dot(row, self.target) + offset];
+        let mut rows: [[f64; 4]; 4];
+        if self.perspective {
+            let d = self.distance();
+            let far = d + 2.0 * radius;
+            let near = (d - 2.0 * radius).max(far * 1e-4);
+            let f = 1.0 / (0.5 * FIELD_OF_VIEW).tan();
+            // Eye space: z_e = back·(p − target) − d (negative in front of the eye).
+            let ze = view(back, -d);
+            let a = far / (near - far);
+            let b = near * far / (near - far);
+            rows = [
+                view(right, 0.0).map(|c| c * f / aspect),
+                view(up, 0.0).map(|c| c * f),
+                ze.map(|c| c * a),
+                ze.map(|c| -c),
+            ];
+            rows[2][3] += b;
+        } else {
+            let half = 0.5 * self.height;
+            // Depth: from 2·radius in front of the target (0) to 2·radius behind (1).
+            let z = view(back, 0.0);
+            rows = [
+                view(right, 0.0).map(|c| c / (half * aspect)),
+                view(up, 0.0).map(|c| c / half),
+                z.map(|c| -c / (4.0 * radius)),
+                [0.0, 0.0, 0.0, 1.0],
+            ];
+            rows[2][3] += 0.5;
+        }
+        // Column-major for the shader.
+        let mut m = [[0.0_f32; 4]; 4];
+        for (r, row) in rows.iter().enumerate() {
+            for (c, value) in row.iter().enumerate() {
+                m[c][r] = *value as f32;
+            }
+        }
+        m
     }
 
     /// Turns the view: dragging right turns the scene with the pointer.
@@ -203,5 +290,56 @@ mod tests {
         let t = c.target;
         c.pan(100.0, 0.0, 100.0);
         assert!((c.target[0] - (t[0] - c.height)).abs() < 1e-9);
+    }
+
+    /// A scene point through the matrix, to pixels and depth.
+    fn through(c: &Camera, p: V3, centre: (f64, f64), high: f64, aspect: f64) -> (f64, f64, f64) {
+        let m = c.matrix(aspect, 100.0);
+        let v = [p[0], p[1], p[2], 1.0];
+        let row = |r: usize| (0..4).map(|k| m[k][r] as f64 * v[k]).sum::<f64>();
+        let (x, y, z, w) = (row(0), row(1), row(2), row(3));
+        (
+            centre.0 + x / w * 0.5 * high * aspect,
+            centre.1 - y / w * 0.5 * high,
+            z / w,
+        )
+    }
+
+    #[test]
+    fn the_matrix_agrees_with_the_screen_mapping_and_rays() {
+        let centre = (300.0, 200.0);
+        let (high, aspect) = (400.0, 1.5);
+        for perspective in [false, true] {
+            let c = Camera {
+                perspective,
+                target: [10.0, -5.0, 3.0],
+                height: 120.0,
+                ..Camera::default()
+            };
+            let near_point = [30.0, 0.0, 20.0];
+            let far_point = [-20.0, 10.0, -30.0];
+            for p in [near_point, far_point, c.target] {
+                let (x, y, depth) = through(&c, p, centre, high, aspect);
+                let (sx, sy) = c.to_screen(p, centre, high);
+                assert!(
+                    (x - sx).abs() < 1e-3 && (y - sy).abs() < 1e-3,
+                    "{perspective}"
+                );
+                assert!((0.0..=1.0).contains(&depth), "{perspective}: depth {depth}");
+                // The ray through that pixel passes through the point.
+                let (o, d) = c.ray((sx, sy), centre, high);
+                let to = sub(p, o);
+                let along = dot(to, d);
+                let miss = sub(to, d.map(|k| k * along));
+                assert!(dot(miss, miss).sqrt() < 1e-6, "{perspective}");
+            }
+            // Nearer the viewer, smaller depth.
+            let (back, _, _) = c.basis();
+            let nearer = [0, 1, 2].map(|i| c.target[i] + back[i] * 10.0);
+            assert!(
+                through(&c, nearer, centre, high, aspect).2
+                    < through(&c, c.target, centre, high, aspect).2
+            );
+        }
     }
 }

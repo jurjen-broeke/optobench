@@ -22,6 +22,128 @@ pub struct Item {
     pub role: String,
     /// Polylines in the scene frame (mm).
     pub lines: Vec<Vec<V3>>,
+    /// Triangles for the shaded view, if `view` gave them.
+    pub mesh: Option<Mesh>,
+}
+
+/// An item's triangles, ready for the GPU.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct Mesh {
+    /// Vertex positions (mm, scene frame).
+    pub positions: Vec<[f32; 3]>,
+    /// Unit vertex normals.
+    pub normals: Vec<[f32; 3]>,
+    /// Three vertex indices per triangle.
+    pub triangles: Vec<u32>,
+    /// The bounding box (low, high).
+    pub bounds: ([f32; 3], [f32; 3]),
+}
+
+impl Mesh {
+    fn from_json(value: &Value) -> Option<Self> {
+        let floats = |key: &str| -> Option<Vec<[f32; 3]>> {
+            let list = value[key].as_array()?;
+            Some(
+                list.chunks_exact(3)
+                    .map(|c| c.iter().map(|x| x.as_f64().unwrap_or(0.0) as f32))
+                    .map(|mut c| {
+                        [
+                            c.next().unwrap_or(0.0),
+                            c.next().unwrap_or(0.0),
+                            c.next().unwrap_or(0.0),
+                        ]
+                    })
+                    .collect(),
+            )
+        };
+        let positions = floats("positions")?;
+        let normals = floats("normals")?;
+        let count = positions.len() as u64;
+        let triangles: Vec<u32> = value["triangles"]
+            .as_array()?
+            .iter()
+            .map(|i| i.as_u64().filter(|i| *i < count).map(|i| i as u32))
+            .collect::<Option<_>>()?;
+        if normals.len() != positions.len() || triangles.len() % 3 != 0 {
+            return None;
+        }
+        let mut low = [f32::INFINITY; 3];
+        let mut high = [f32::NEG_INFINITY; 3];
+        for p in &positions {
+            for k in 0..3 {
+                low[k] = low[k].min(p[k]);
+                high[k] = high[k].max(p[k]);
+            }
+        }
+        Some(Self {
+            positions,
+            normals,
+            triangles,
+            bounds: (low, high),
+        })
+    }
+
+    /// The nearest hit of a ray (origin, unit direction) on a triangle at a point `keep`
+    /// accepts, as the distance along it (Möller–Trumbore).
+    pub fn hit(&self, origin: V3, direction: V3, keep: &dyn Fn(V3) -> bool) -> Option<f64> {
+        let (low, high) = self.bounds;
+        // Slab test on the box first.
+        let (mut t0, mut t1) = (f64::NEG_INFINITY, f64::INFINITY);
+        for k in 0..3 {
+            let (lo, hi) = (low[k] as f64, high[k] as f64);
+            if direction[k].abs() < 1e-300 {
+                if origin[k] < lo || origin[k] > hi {
+                    return None;
+                }
+                continue;
+            }
+            let (a, b) = (
+                (lo - origin[k]) / direction[k],
+                (hi - origin[k]) / direction[k],
+            );
+            t0 = t0.max(a.min(b));
+            t1 = t1.min(a.max(b));
+        }
+        if t0 > t1 + 1e-9 {
+            return None;
+        }
+        let at = |i: u32| self.positions[i as usize].map(f64::from);
+        let sub = |a: V3, b: V3| [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+        let cross = |a: V3, b: V3| {
+            [
+                a[1] * b[2] - a[2] * b[1],
+                a[2] * b[0] - a[0] * b[2],
+                a[0] * b[1] - a[1] * b[0],
+            ]
+        };
+        let dot = |a: V3, b: V3| a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+        let mut best: Option<f64> = None;
+        for t in self.triangles.chunks_exact(3) {
+            let (a, b, c) = (at(t[0]), at(t[1]), at(t[2]));
+            let (e1, e2) = (sub(b, a), sub(c, a));
+            let p = cross(direction, e2);
+            let det = dot(e1, p);
+            if det.abs() < 1e-14 {
+                continue;
+            }
+            let s = sub(origin, a);
+            let u = dot(s, p) / det;
+            if !(0.0..=1.0).contains(&u) {
+                continue;
+            }
+            let q = cross(s, e1);
+            let v = dot(direction, q) / det;
+            if v < 0.0 || u + v > 1.0 {
+                continue;
+            }
+            let distance = dot(e2, q) / det;
+            let point = [0, 1, 2].map(|k| origin[k] + direction[k] * distance);
+            if distance > 0.0 && best.is_none_or(|b| distance < b) && keep(point) {
+                best = Some(distance);
+            }
+        }
+        best
+    }
 }
 
 /// A source, drawn as an arrow.
@@ -106,6 +228,7 @@ impl Scene {
                             .collect()
                     })
                     .unwrap_or_default(),
+                mesh: item.get("mesh").and_then(Mesh::from_json),
             })
             .collect();
         let sources = value["sources"]
@@ -184,6 +307,9 @@ pub struct Finished {
     pub command: String,
     /// Its result, or the error message.
     pub result: Result<Value, String>,
+    /// For `view`, the scene read from the result (on the background thread: meshes are
+    /// large).
+    pub scene: Option<Result<Scene, String>>,
 }
 
 /// A message for the results strip.
@@ -203,6 +329,10 @@ pub struct Document {
     pub data_directory: Option<PathBuf>,
     /// The scene as drawn.
     pub scene: Option<Scene>,
+    /// Counts the scenes taken in, so views know when to upload a new one.
+    pub scene_version: u64,
+    /// Counts the traces taken in.
+    pub trace_version: u64,
     /// The last trace.
     pub trace: Option<Trace>,
     /// The last result of any other command (shown in the results strip).
@@ -230,6 +360,8 @@ impl Document {
             path,
             data_directory,
             scene: None,
+            scene_version: 0,
+            trace_version: 0,
             trace: None,
             output: None,
             running: Vec::new(),
@@ -275,7 +407,7 @@ impl Document {
     fn design_parameters(&self, command: &str) -> Result<Value, String> {
         let path = json!(self.path.to_string_lossy());
         match command {
-            "view" => Ok(json!({ "path": path, "max_points": 24 })),
+            "view" => Ok(json!({ "path": path, "max_points": 24, "mesh": true })),
             "trace" => Ok(json!({ "path": path, "ray_paths": RAYS_DRAWN })),
             "optimize" => Ok(json!({ "path": path, "report": true })),
             "bodies" | "embed" | "export-placements" => {
@@ -333,9 +465,14 @@ impl Document {
             let result = optobench_commands::Registry::standard()
                 .run(&name, &parameters)
                 .map_err(|e| e.message);
+            let scene = match (&result, name.as_str()) {
+                (Ok(value), "view") => Some(Scene::from_json(value)),
+                _ => None,
+            };
             let _ = sender.send(Finished {
                 command: name,
                 result,
+                scene,
             });
             repaint();
         });
@@ -358,8 +495,11 @@ impl Document {
                 error: true,
                 text: format!("{}: {message}", done.command),
             }),
-            ("view", Ok(value)) => match Scene::from_json(&value) {
-                Ok(scene) => self.scene = Some(scene),
+            ("view", Ok(value)) => match done.scene.unwrap_or_else(|| Scene::from_json(&value)) {
+                Ok(scene) => {
+                    self.scene = Some(scene);
+                    self.scene_version += 1;
+                }
                 Err(e) => self.messages.push(Message {
                     error: true,
                     text: e,
@@ -384,6 +524,7 @@ impl Document {
                     scene.dofs = value["dofs"].as_array().cloned().unwrap_or_default();
                 }
                 self.trace = Some(Trace::from_json(value));
+                self.trace_version += 1;
             }
             (command, Ok(value)) => {
                 self.messages.push(Message {
@@ -426,9 +567,33 @@ mod tests {
         let empty = std::env::temp_dir().join("optobench-ui-empty");
         let view = run(
             "view",
-            json!({ "path": path.to_string_lossy(), "data_directory": empty.to_string_lossy() }),
+            json!({ "path": path.to_string_lossy(), "data_directory": empty.to_string_lossy(), "mesh": true }),
         );
         let scene = Scene::from_json(&view).expect("a scene");
+        // Every item has triangles, and a line through the middle of a lens meets it.
+        assert!(
+            scene
+                .items
+                .iter()
+                .all(|i| i.mesh.as_ref().is_some_and(|m| !m.triangles.is_empty()))
+        );
+        let lens = scene
+            .items
+            .iter()
+            .find(|i| i.id == "L2")
+            .and_then(|i| i.mesh.as_ref())
+            .expect("L2");
+        let (lo, hi) = lens.bounds;
+        let centre = [0, 1, 2].map(|k| 0.5 * (lo[k] + hi[k]) as f64);
+        let above = [centre[0], centre[1], hi[2] as f64 + 100.0];
+        let hit = lens
+            .hit(above, [0.0, 0.0, -1.0], &|_| true)
+            .expect("meets L2");
+        assert!(
+            hit > 100.0 - 1e-6 && hit < 100.0 + (hi[2] - lo[2]) as f64 + 1e-6,
+            "{hit}"
+        );
+        assert!(lens.hit(above, [0.0, 0.0, 1.0], &|_| true).is_none());
         let roles: Vec<(&str, &str)> = scene
             .items
             .iter()
@@ -467,6 +632,8 @@ mod tests {
             path: fixtures().join("periscope.optobench"),
             data_directory: Some(PathBuf::from("/data")),
             scene: None,
+            scene_version: 0,
+            trace_version: 0,
             trace: None,
             output: None,
             running: Vec::new(),

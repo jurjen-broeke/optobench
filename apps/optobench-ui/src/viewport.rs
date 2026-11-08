@@ -1,13 +1,68 @@
-//! The 3D view: the scene's wireframe and the traced rays, drawn with egui's painter
-//! (the shaded wgpu view comes in M8b). Left drag orbits, right or middle drag pans, the
-//! wheel zooms about the pointer, a click selects; a view gizmo at the top right and a
-//! floating view toolbar at the bottom, as in SolidCraft.
+//! The 3D view: the scene shaded on wgpu with its edges and the traced rays (`render`), or,
+//! without wgpu or meshes, as a wireframe drawn with egui's painter. Left drag orbits,
+//! right or middle drag pans, the wheel zooms about the pointer, a click selects what is
+//! under it; a view gizmo at the top right and a floating view toolbar at the bottom
+//! (fit, standard views, perspective, section), as in SolidCraft.
 
 use egui::{Color32, Pos2, Rect, Sense, Shape, Stroke, StrokeKind, Vec2};
 
 use crate::camera::{Camera, V3};
 use crate::document::{Document, Scene};
+use crate::render::{self, Renderer};
 use crate::theme::{Accent, DARK};
+
+/// The view's own state besides the camera.
+#[derive(Default)]
+pub struct Extras {
+    /// The shaded renderer, when eframe runs on wgpu.
+    pub renderer: Option<Renderer>,
+    /// The item under the pointer.
+    pub hovered: Option<usize>,
+    /// The section: the axis (0 x, 1 y, 2 z) whose plane cuts the scene, and where.
+    pub section: Option<(usize, f64)>,
+}
+
+impl Extras {
+    /// The section plane as (unit normal, offset): parts with p·n > offset, on the
+    /// viewer's side of the plane, are cut away, so the cut faces the viewer.
+    pub fn plane(&self, camera: &Camera) -> Option<(V3, f64)> {
+        let (back, _, _) = camera.basis();
+        self.section.map(|(axis, at)| {
+            let towards_viewer = if back[axis] >= 0.0 { 1.0 } else { -1.0 };
+            let mut n = [0.0; 3];
+            n[axis] = towards_viewer;
+            (n, at * towards_viewer)
+        })
+    }
+}
+
+/// The item a line of sight meets first (shaded scenes), skipping hidden items and parts
+/// cut away by the section.
+pub fn pick_mesh(
+    scene: &Scene,
+    hidden: &[bool],
+    plane: Option<(V3, f64)>,
+    origin: V3,
+    direction: V3,
+) -> Option<usize> {
+    let keep = |p: V3| plane.is_none_or(|(n, at)| n[0] * p[0] + n[1] * p[1] + n[2] * p[2] <= at);
+    let mut best: Option<(usize, f64)> = None;
+    for (i, item) in scene.items.iter().enumerate() {
+        if hidden.get(i).copied().unwrap_or(false) {
+            continue;
+        }
+        if let Some(d) = item
+            .mesh
+            .as_ref()
+            .and_then(|m| m.hit(origin, direction, &keep))
+        {
+            if best.is_none_or(|b| d < b.1) {
+                best = Some((i, d));
+            }
+        }
+    }
+    best.map(|b| b.0)
+}
 
 /// What the view asks the app to do.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -71,9 +126,11 @@ fn segment_distance(p: Pos2, a: Pos2, b: Pos2) -> f32 {
 }
 
 /// Draws the view in `ui`'s remaining space and handles the pointer.
+#[allow(clippy::too_many_arguments)]
 pub fn show(
     ui: &mut egui::Ui,
     camera: &mut Camera,
+    extras: &mut Extras,
     doc: Option<&Document>,
     selected: Option<usize>,
     hidden: &[bool],
@@ -115,33 +172,151 @@ pub fn show(
         Pos2::new(x as f32, y as f32)
     };
     let painter = painter.with_clip_rect(rect);
-
     let scene: Option<&Scene> = doc.and_then(|d| d.scene.as_ref());
-    if let Some(scene) = scene {
-        // Absorbers first, so optical items draw on top.
-        let mut order: Vec<usize> = (0..scene.items.len()).collect();
-        order.sort_by_key(|&i| scene.items[i].role != "absorber");
-        for i in order {
-            if hidden.get(i).copied().unwrap_or(false) {
-                continue;
+    let shaded = scene.is_some_and(|s| s.items.iter().any(|i| i.mesh.is_some()))
+        && extras.renderer.is_some();
+    let plane = extras.plane(camera);
+
+    // The scene's extent, for rays that leave it.
+    let reach = scene.and_then(|s| s.bounds).map_or(100.0, |(lo, hi)| {
+        ((hi[0] - lo[0]).powi(2) + (hi[1] - lo[1]).powi(2) + (hi[2] - lo[2]).powi(2)).sqrt()
+    });
+    let ray_paths = |doc: &Document| -> Vec<(Vec<V3>, Color32)> {
+        let Some(trace) = &doc.trace else {
+            return Vec::new();
+        };
+        trace
+            .rays
+            .iter()
+            .map(|ray| {
+                let mut points = ray.points.clone();
+                if ray.end == "escaped" {
+                    if let Some(&last) = ray.points.last() {
+                        points.push([0, 1, 2].map(|k| last[k] + ray.direction[k] * 0.3 * reach));
+                    }
+                }
+                (points, ray_colour(&ray.end, ray.generation))
+            })
+            .collect()
+    };
+
+    if let (true, Some(scene), Some(doc)) = (shaded, scene, doc) {
+        // Hover and pick on the triangles.
+        let pick = |p: Pos2| {
+            let (o, d) = camera.ray((p.x as f64, p.y as f64), centre, high);
+            pick_mesh(scene, hidden, plane, o, d)
+        };
+        extras.hovered = response.hover_pos().and_then(pick);
+        if response.clicked() {
+            requests.push(Request::Select(
+                response.interact_pointer_pos().and_then(pick),
+            ));
+        }
+        let segments: Vec<(V3, V3, Color32)> = if show_rays {
+            ray_paths(doc)
+                .into_iter()
+                .flat_map(|(points, colour)| {
+                    points
+                        .windows(2)
+                        .map(|w| (w[0], w[1], colour))
+                        .collect::<Vec<_>>()
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
+        let pixels = ui.ctx().pixels_per_point();
+        let size = (
+            (rect.width() * pixels).round() as u32,
+            (rect.height() * pixels).round() as u32,
+        );
+        if let Some(renderer) = extras.renderer.as_mut() {
+            let texture = renderer.draw(
+                scene,
+                doc.scene_version,
+                &render::Frame {
+                    camera,
+                    hidden,
+                    selected,
+                    hovered: extras.hovered,
+                    section: plane,
+                    accent: accent.fill,
+                    rays: &segments,
+                    rays_version: doc.trace_version * 2 + u64::from(show_rays),
+                },
+                size,
+            );
+            painter.image(
+                texture,
+                rect,
+                Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)),
+                Color32::WHITE,
+            );
+        }
+    } else {
+        extras.hovered = None;
+        if let Some(scene) = scene {
+            // Absorbers first, so optical items draw on top.
+            let mut order: Vec<usize> = (0..scene.items.len()).collect();
+            order.sort_by_key(|&i| scene.items[i].role != "absorber");
+            for i in order {
+                if hidden.get(i).copied().unwrap_or(false) {
+                    continue;
+                }
+                let item = &scene.items[i];
+                let (colour, width) = if Some(i) == selected {
+                    (accent.ink, 2.0)
+                } else if item.role == "absorber" {
+                    (role_colour(&item.role).gamma_multiply(0.7), 0.8)
+                } else {
+                    (role_colour(&item.role), 1.3)
+                };
+                for line in &item.lines {
+                    if line.len() > 1 {
+                        painter.add(Shape::line(
+                            line.iter().map(|&p| screen(p)).collect(),
+                            Stroke::new(width, colour),
+                        ));
+                    }
+                }
             }
-            let item = &scene.items[i];
-            let (colour, width) = if Some(i) == selected {
-                (accent.ink, 2.0)
-            } else if item.role == "absorber" {
-                (role_colour(&item.role).gamma_multiply(0.7), 0.8)
-            } else {
-                (role_colour(&item.role), 1.3)
-            };
-            for line in &item.lines {
-                if line.len() > 1 {
+        }
+        if let (true, Some(doc)) = (show_rays, doc) {
+            for (points, colour) in ray_paths(doc) {
+                if points.len() > 1 {
                     painter.add(Shape::line(
-                        line.iter().map(|&p| screen(p)).collect(),
-                        Stroke::new(width, colour),
+                        points.iter().map(|&p| screen(p)).collect(),
+                        Stroke::new(0.8, colour),
                     ));
                 }
             }
         }
+        // Click: select the nearest item within 6 px.
+        if response.clicked() {
+            let picked = response.interact_pointer_pos().and_then(|p| {
+                let scene = scene?;
+                let mut best: Option<(usize, f32)> = None;
+                for (i, item) in scene.items.iter().enumerate() {
+                    if hidden.get(i).copied().unwrap_or(false) {
+                        continue;
+                    }
+                    for line in &item.lines {
+                        for w in line.windows(2) {
+                            let d = segment_distance(p, screen(w[0]), screen(w[1]));
+                            if d < 6.0 && best.is_none_or(|b| d < b.1) {
+                                best = Some((i, d));
+                            }
+                        }
+                    }
+                }
+                best.map(|b| b.0)
+            });
+            requests.push(Request::Select(picked));
+        }
+    }
+
+    // Sources on top: where the light starts and where it goes.
+    if let Some(scene) = scene {
         for source in &scene.sources {
             let a = screen(source.origin);
             let tip = [0, 1, 2].map(|k| source.origin[k] + source.axis[k] * camera.height * 0.06);
@@ -153,52 +328,9 @@ pub fn show(
             painter.circle_filled(a, 3.5, Color32::from_rgb(255, 92, 72));
         }
     }
-    if show_rays {
-        if let Some(trace) = doc.and_then(|d| d.trace.as_ref()) {
-            for ray in &trace.rays {
-                let mut points: Vec<Pos2> = ray.points.iter().map(|&p| screen(p)).collect();
-                if ray.end == "escaped" {
-                    if let Some(&last) = ray.points.last() {
-                        let far =
-                            [0, 1, 2].map(|k| last[k] + ray.direction[k] * camera.height * 0.3);
-                        points.push(screen(far));
-                    }
-                }
-                if points.len() > 1 {
-                    painter.add(Shape::line(
-                        points,
-                        Stroke::new(0.8, ray_colour(&ray.end, ray.generation)),
-                    ));
-                }
-            }
-        }
-    }
-
-    // Click: select the nearest item within 6 px.
-    if response.clicked() {
-        let picked = response.interact_pointer_pos().and_then(|p| {
-            let scene = scene?;
-            let mut best: Option<(usize, f32)> = None;
-            for (i, item) in scene.items.iter().enumerate() {
-                if hidden.get(i).copied().unwrap_or(false) {
-                    continue;
-                }
-                for line in &item.lines {
-                    for w in line.windows(2) {
-                        let d = segment_distance(p, screen(w[0]), screen(w[1]));
-                        if d < 6.0 && best.is_none_or(|b| d < b.1) {
-                            best = Some((i, d));
-                        }
-                    }
-                }
-            }
-            best.map(|b| b.0)
-        });
-        requests.push(Request::Select(picked));
-    }
 
     gizmo(&painter, rect, camera);
-    if toolbar(ui, rect, camera, doc) {
+    if toolbar(ui, rect, camera, extras, scene, doc.is_some()) {
         requests.push(Request::Fit);
     }
     if doc.is_none() {
@@ -206,6 +338,14 @@ pub fn show(
             rect.center(),
             egui::Align2::CENTER_CENTER,
             "Drop a .optobench layout or sidecar here, or open one from the ribbon",
+            egui::FontId::proportional(14.0),
+            DARK.text_dim,
+        );
+    } else if scene.is_none() {
+        painter.text(
+            rect.center(),
+            egui::Align2::CENTER_CENTER,
+            "Reading the design…",
             egui::FontId::proportional(14.0),
             DARK.text_dim,
         );
@@ -241,9 +381,23 @@ fn gizmo(painter: &egui::Painter, rect: Rect, camera: &Camera) {
 }
 
 /// The floating view toolbar; true when Fit was pressed.
-fn toolbar(ui: &mut egui::Ui, rect: Rect, camera: &mut Camera, doc: Option<&Document>) -> bool {
-    let size = Vec2::new(250.0, 30.0);
-    let bar = Rect::from_center_size(Pos2::new(rect.center().x, rect.bottom() - 28.0), size);
+fn toolbar(
+    ui: &mut egui::Ui,
+    rect: Rect,
+    camera: &mut Camera,
+    extras: &mut Extras,
+    scene: Option<&Scene>,
+    open: bool,
+) -> bool {
+    let wide = if extras.section.is_some() {
+        560.0
+    } else {
+        400.0
+    };
+    let bar = Rect::from_center_size(
+        Pos2::new(rect.center().x, rect.bottom() - 28.0),
+        Vec2::new(wide, 30.0),
+    );
     ui.painter().rect_filled(
         bar,
         egui::CornerRadius::same(DARK.radius_lg),
@@ -268,21 +422,53 @@ fn toolbar(ui: &mut egui::Ui, rect: Rect, camera: &mut Camera, doc: Option<&Docu
     {
         fit = true;
     }
-    if child.small_button("Iso").clicked() {
-        camera.isometric();
-        fit = doc.is_some();
+    for (label, view) in [
+        ("Iso", Camera::isometric as fn(&mut Camera)),
+        ("Top", Camera::top),
+        ("Front", Camera::front),
+        ("Right", Camera::right),
+    ] {
+        if child.small_button(label).clicked() {
+            view(camera);
+            fit = open;
+        }
     }
-    if child.small_button("Top").clicked() {
-        camera.top();
-        fit = doc.is_some();
+    child.separator();
+    if child
+        .selectable_label(camera.perspective, "Perspective")
+        .on_hover_text("Perspective or orthographic projection")
+        .clicked()
+    {
+        camera.perspective = !camera.perspective;
     }
-    if child.small_button("Front").clicked() {
-        camera.front();
-        fit = doc.is_some();
+    let label = match extras.section {
+        None => "Section",
+        Some((0, _)) => "Section X",
+        Some((1, _)) => "Section Y",
+        Some(_) => "Section Z",
+    };
+    let bounds = scene.and_then(|s| s.bounds);
+    if child
+        .selectable_label(extras.section.is_some(), label)
+        .on_hover_text("Cut the scene by a plane across x, then y, then z, then off")
+        .clicked()
+    {
+        extras.section = match extras.section {
+            None => Some(0),
+            Some((axis, _)) if axis < 2 => Some(axis + 1),
+            Some(_) => None,
+        }
+        .map(|axis| {
+            let middle = bounds.map_or(0.0, |(lo, hi)| 0.5 * (lo[axis] + hi[axis]));
+            (axis, middle)
+        });
     }
-    if child.small_button("Right").clicked() {
-        camera.right();
-        fit = doc.is_some();
+    if let (Some((axis, at)), Some((lo, hi))) = (extras.section.as_mut(), bounds) {
+        child.add(
+            egui::Slider::new(at, lo[*axis]..=hi[*axis])
+                .suffix(" mm")
+                .max_decimals(1),
+        );
     }
     fit
 }

@@ -24,6 +24,7 @@ pub struct App {
     stage: usize,
     doc: Option<Document>,
     camera: Camera,
+    view: viewport::Extras,
     selected: Option<usize>,
     hidden: Vec<bool>,
     show_rays: bool,
@@ -43,13 +44,19 @@ struct Shot {
     traced: bool,
     select: Option<String>,
     frames: u32,
+    viewed: bool,
     requested: bool,
     done: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl App {
     /// A window, opening `path` if given.
-    pub fn new(path: Option<PathBuf>, data_directory: Option<PathBuf>, ctx: egui::Context) -> Self {
+    pub fn new(
+        path: Option<PathBuf>,
+        data_directory: Option<PathBuf>,
+        renderer: Option<crate::render::Renderer>,
+        ctx: egui::Context,
+    ) -> Self {
         let mut app = Self {
             ctx,
             workspace: 0,
@@ -57,6 +64,10 @@ impl App {
             stage: 0,
             doc: None,
             camera: Camera::default(),
+            view: viewport::Extras {
+                renderer,
+                ..Default::default()
+            },
             selected: None,
             hidden: Vec::new(),
             show_rays: true,
@@ -72,6 +83,7 @@ impl App {
                 traced: false,
                 select: std::env::var("OPTOBENCH_UI_SELECT").ok(),
                 frames: 0,
+                viewed: false,
                 requested: false,
                 done: Default::default(),
             }),
@@ -109,6 +121,8 @@ impl App {
         self.doc = Some(Document::open(path, data, self.repaint()));
         self.selected = None;
         self.hidden.clear();
+        self.view.hovered = None;
+        self.view.section = None;
         self.fit_pending = true;
     }
 
@@ -905,6 +919,7 @@ impl eframe::App for App {
                 viewport::show(
                     ui,
                     &mut self.camera,
+                    &mut self.view,
                     self.doc.as_ref(),
                     self.selected,
                     &self.hidden,
@@ -948,6 +963,40 @@ impl App {
                 .scene
                 .as_ref()
                 .and_then(|s| s.items.iter().position(|i| i.id == id));
+        }
+        if !shot.viewed {
+            shot.viewed = true;
+            let env = |name: &str| std::env::var(name).ok().filter(|v| !v.is_empty());
+            match env("OPTOBENCH_UI_VIEW").as_deref() {
+                Some("top") => self.camera.top(),
+                Some("front") => self.camera.front(),
+                Some("right") => self.camera.right(),
+                Some("iso") => self.camera.isometric(),
+                _ => {}
+            }
+            self.camera.perspective = env("OPTOBENCH_UI_PERSPECTIVE").is_some();
+            // The selected item's box, else the scene's.
+            let scene = doc.scene.as_ref();
+            let item_box = self
+                .selected
+                .and_then(|i| scene?.items.get(i)?.mesh.as_ref())
+                .map(|m| (m.bounds.0.map(f64::from), m.bounds.1.map(f64::from)));
+            if let Some((low, high)) = item_box.or(scene.and_then(|s| s.bounds)) {
+                let centre = [0, 1, 2].map(|k| 0.5 * (low[k] + high[k]));
+                if let Some(zoom) = env("OPTOBENCH_UI_ZOOM").and_then(|z| z.parse::<f64>().ok()) {
+                    let size = (0..3).map(|k| high[k] - low[k]).fold(0.0, f64::max);
+                    self.camera.target = centre;
+                    self.camera.height = (size * zoom).max(1e-3);
+                }
+                if let Some(axis) = env("OPTOBENCH_UI_SECTION").and_then(|a| match a.as_str() {
+                    "x" => Some(0),
+                    "y" => Some(1),
+                    "z" => Some(2),
+                    _ => None,
+                }) {
+                    self.view.section = Some((axis, centre[axis]));
+                }
+            }
         }
         shot.frames += 1;
         ctx.request_repaint();

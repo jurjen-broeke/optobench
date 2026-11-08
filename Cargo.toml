@@ -28,6 +28,7 @@ optobench-commands = { path = "crates/optobench-commands" }       # L5
 # Third-party crates. Each must pass `cargo deny check` (deny.toml) and be compatible with
 # MIT OR Apache-2.0. Keep this list short; engine crates (L0-L4) should need almost none.
 # The user interface (apps/optobench-ui), as SolidCraft builds its own (design.md, Decided):
+spade = { version = "2.15", default-features = false, features = ["std"] }  # MIT OR Apache-2.0; display tessellation
 egui = "0.37"                                                     # MIT OR Apache-2.0
 eframe = { version = "0.37", default-features = false, features = ["default_fonts", "wgpu", "accesskit", "wayland", "x11"] }  # MIT OR Apache-2.0; default_fonts: OFL-1.1, Ubuntu-font-1.0 (allowed for fonts, deny.toml)
 serde_json = "1.0.154"                                            # MIT OR Apache-2.0

@@ -5,6 +5,13 @@ with the release that introduced them.
 
 ## Unreleased
 
+- M8b shaded 3D view: the interface draws the scene shaded on wgpu (depth, 4× multisampling,
+  edges and rays as lines, lenses as translucent glass), picks and highlights items under
+  the pointer, switches between perspective and orthographic, and cuts the scene with a
+  section plane across x, y or z. Exact faces are tessellated for display
+  (`BrepFace::tessellate`, `optobench_io::mesh`; constrained Delaunay triangulation from
+  the `spade` crate); `view` with `mesh` returns the triangles. The tessellated STEP
+  fixtures enclose their volumes to 0.5 %.
 - M8a interface frame: a desktop app, `optobench-ui [design.optobench] [--data-directory
   <dir>]` (egui 0.37, eframe, wgpu), in SolidCraft's dark theme with three workspaces:
   CAD and Layout as ribbons of tabs and sections, Simulate as stages with Trace as the
