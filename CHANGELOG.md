@@ -5,6 +5,17 @@ with the release that introduced them.
 
 ## Unreleased
 
+- M8a interface frame: a desktop app, `optobench-ui [design.optobench] [--data-directory
+  <dir>]` (egui 0.37, eframe, wgpu), in SolidCraft's dark theme with three workspaces:
+  CAD and Layout as ribbons of tabs and sections, Simulate as stages with Trace as the
+  primary button. Every button runs a command of the registry in the background; a
+  browser (sources, optics, detectors, DOFs, mechanics), a view with the scene's
+  wireframe and the traced rays (orbit, pan, zoom, pick, view gizmo), properties and a
+  results strip (messages, power ledger, detectors). Commands now carry a label, an icon
+  name and whether they write files (`commands` lists them). New command `view`: the
+  scene's outlines for drawing (`optobench_io::wireframe`). `trace` takes `ray_paths` and
+  returns the paths of that many rays. A missing material now names the data directory
+  that was searched.
 - M7a performance: the inside test of trimmed faces (91 % of trace time) now uses a
   bounding-volume tree of boundary segments, and on flat faces a row grid with crossing
   counts (the exact test still decides next to edges); faces skip surface hits beyond the

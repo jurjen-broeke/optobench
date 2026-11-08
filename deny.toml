@@ -4,6 +4,18 @@ all-features = true
 
 [advisories]
 version = 2
+# The interface's Linux screen-reader bridge (eframe's accesskit → atspi → zbus) brings
+# these in; atspi-common pins zbus_xml 5 and so quick-xml 0.38. Review when eframe updates.
+ignore = [
+    # quick-xml 0.38: only reads the D-Bus interface descriptions shipped with atspi, not
+    # untrusted input.
+    { id = "RUSTSEC-2026-0194", reason = "quick-xml only parses atspi's bundled D-Bus XML" },
+    { id = "RUSTSEC-2026-0195", reason = "quick-xml only parses atspi's bundled D-Bus XML" },
+    # Folded back into the zbus crate, not abandoned.
+    { id = "RUSTSEC-2026-0371", reason = "zbus_names merged into zbus; pinned by atspi" },
+    { id = "RUSTSEC-2026-0370", reason = "zvariant merged into zbus; pinned by atspi" },
+    { id = "RUSTSEC-2026-0372", reason = "zvariant_derive merged into zbus; pinned by atspi" },
+]
 
 [licenses]
 version = 2
@@ -19,3 +31,9 @@ allow-wildcard-paths = true
 [sources]
 unknown-registry = "deny"
 unknown-git = "deny"
+
+# egui's default fonts (Ubuntu, Hack, Noto Emoji, emoji-icon-font) are under font
+# licences that allow bundling them with MIT OR Apache-2.0 software; only this crate.
+[[licenses.exceptions]]
+crate = "epaint_default_fonts"
+allow = ["OFL-1.1", "Ubuntu-font-1.0"]

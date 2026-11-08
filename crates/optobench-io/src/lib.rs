@@ -19,6 +19,7 @@ pub mod sidecar;
 pub mod step;
 pub mod store;
 pub mod svg;
+pub mod wireframe;
 pub mod xlsx;
 mod zip;
 

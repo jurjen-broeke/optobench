@@ -35,10 +35,35 @@ pub type Handler = fn(&Parameters) -> Result<Value, CommandError>;
 pub struct Command {
     /// The id callers use, e.g. `version`.
     pub id: &'static str,
+    /// Its name on buttons and in menus, in title case (`Import Part`).
+    pub label: &'static str,
+    /// Its icon: an id in the user interface's icon set.
+    pub icon: &'static str,
+    /// Whether it only reads, or also writes files.
+    pub effect: Effect,
     /// One line for help texts and `commands`.
     pub summary: &'static str,
     /// Runs the command.
     pub handler: Handler,
+}
+
+/// What a command may change, as SolidCraft's plugin proposal marks its entries.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Effect {
+    /// Reads files and returns a result; changes nothing.
+    Read,
+    /// May write files (a report, an imported part, an embedded design).
+    Write,
+}
+
+impl Effect {
+    /// Its name in `commands`.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Effect::Read => "read",
+            Effect::Write => "write",
+        }
+    }
 }
 
 /// Why a command failed. The code is stable for callers; the message is for people.
@@ -99,71 +124,121 @@ impl std::error::Error for CommandError {}
 const STANDARD: &[Command] = &[
     Command {
         id: "version",
+        label: "Version",
+        icon: "info",
+        effect: Effect::Read,
         summary: "the application and file-format versions",
         handler: version,
     },
     Command {
         id: "commands",
+        label: "Commands",
+        icon: "list",
+        effect: Effect::Read,
         summary: "every available command with its summary",
         handler: commands,
     },
     Command {
         id: "materials",
+        label: "Materials",
+        icon: "glass",
+        effect: Effect::Read,
         summary: "bundled materials and those imported into the data directory",
         handler: materials::materials,
     },
     Command {
         id: "trace",
+        label: "Trace",
+        icon: "trace",
+        effect: Effect::Read,
         summary: "trace a .optobench layout: detectors, clipping, power ledger, layout view",
         handler: trace::trace,
     },
     Command {
         id: "export-placements",
+        label: "Export Placements",
+        icon: "export",
+        effect: Effect::Write,
         summary: "from a layout: element poses for CAD and a matching sidecar skeleton",
         handler: trace::export_placements,
     },
     Command {
+        id: "view",
+        label: "View",
+        icon: "view",
+        effect: Effect::Read,
+        summary: "the scene as a 3D wireframe: items with their role and polylines, sources, bounds",
+        handler: trace::view,
+    },
+    Command {
         id: "bodies",
+        label: "Bodies",
+        icon: "bodies",
+        effect: Effect::Read,
         summary: "every placed body of a STEP file: path, product, name, fingerprint",
         handler: trace::bodies,
     },
     Command {
         id: "import-material",
+        label: "Import Material",
+        icon: "import-glass",
+        effect: Effect::Write,
         summary: "import a downloaded refractiveindex.info material file, licence shown first",
         handler: materials::import_material,
     },
     Command {
         id: "parts",
+        label: "Parts",
+        icon: "part",
+        effect: Effect::Read,
         summary: "the parts in the user's parts library",
         handler: parts::parts,
     },
     Command {
         id: "import-part",
+        label: "Import Part",
+        icon: "import-part",
+        effect: Effect::Write,
         summary: "check a part file and copy it into the parts library",
         handler: parts::import_part,
     },
     Command {
         id: "curves",
+        label: "Curves",
+        icon: "curve",
+        effect: Effect::Read,
         summary: "the measured R/T curves in the user's parts library",
         handler: parts::curves,
     },
     Command {
         id: "import-curve",
+        label: "Import Curve",
+        icon: "import-curve",
+        effect: Effect::Write,
         summary: "import a measured R/T table (CSV) into the parts library",
         handler: parts::import_curve,
     },
     Command {
         id: "embed",
+        label: "Embed for Sharing",
+        icon: "embed",
+        effect: Effect::Write,
         summary: "embed the library parts, curves and materials a design uses, so it traces without them",
         handler: embed::embed,
     },
     Command {
         id: "optimize",
+        label: "Optimise",
+        icon: "optimise",
+        effect: Effect::Write,
         summary: "the DOF values that best meet a design's merit (focus, centring, pointing, collimation, power)",
         handler: optimize::optimize,
     },
     Command {
         id: "check-moves",
+        label: "Check Moves",
+        icon: "check-moves",
+        effect: Effect::Read,
         summary: "after a move report's moves are made in CAD and exported again: is every part where it should be",
         handler: moves::check_moves,
     },
@@ -245,7 +320,15 @@ fn commands(parameters: &Parameters) -> Result<Value, CommandError> {
     check_keys(parameters, &[])?;
     let list: Vec<Value> = STANDARD
         .iter()
-        .map(|c| json!({ "id": c.id, "summary": c.summary }))
+        .map(|c| {
+            json!({
+                "id": c.id,
+                "label": c.label,
+                "icon": c.icon,
+                "effect": c.effect.as_str(),
+                "summary": c.summary,
+            })
+        })
         .collect();
     Ok(json!({ "commands": list }))
 }
