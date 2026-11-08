@@ -373,7 +373,7 @@ pub(crate) fn view(parameters: &Parameters) -> Result<Value, CommandError> {
             ..Fineness::default()
         }),
     };
-    let (scene, _, _, _) = load(path, parameters)?;
+    let (scene, _, source, _) = load(path, parameters)?;
     let overrides = dof_values(parameters, &scene)?;
     let scene = scene
         .moved(&overrides)
@@ -432,6 +432,23 @@ pub(crate) fn view(parameters: &Parameters) -> Result<Value, CommandError> {
                     .map(|l| l.iter().map(|p| point(*p)).collect::<Vec<_>>())
                     .collect::<Vec<_>>(),
             });
+            // A CAD body's own axes in the scene frame: a sidecar names faces in them
+            // (a mirror's `reflect`).
+            if let Owner::Solid(i) = owner {
+                if let (Some(face), Some(object)) =
+                    (scene.solids[i].faces.first(), item.as_object_mut())
+                {
+                    let r = face.placement.rotation;
+                    object.insert(
+                        "body_axes".into(),
+                        json!([
+                            point(r.apply(optobench_math::Vec3::X)),
+                            point(r.apply(optobench_math::Vec3::Y)),
+                            point(r.apply(optobench_math::Vec3::Z)),
+                        ]),
+                    );
+                }
+            }
             if let (Some(mesh), Some(object)) = (mesh, item.as_object_mut()) {
                 object.insert("mesh".into(), mesh);
             }
@@ -447,7 +464,36 @@ pub(crate) fn view(parameters: &Parameters) -> Result<Value, CommandError> {
         })).collect::<Vec<_>>(),
         "dofs": dofs_json(&scene),
         "bounds": if low.x.is_finite() { json!([point(low), point(high)]) } else { Value::Null },
+        "design": design_json(&source),
     }))
+}
+
+/// A design file's entries as JSON for editors: its kind, layout, and each
+/// `[[element]]`, `[[source]]`, `[[detector]]`, `[[proxy]]` and `[[merit]]` with the keys
+/// as written (without the `[resolved]` section).
+fn design_json(source: &str) -> Value {
+    let body = optobench_io::resolved::split(source)
+        .map(|(body, _)| body)
+        .unwrap_or(source);
+    let Ok(table) = body.parse::<toml::Table>() else {
+        return Value::Null;
+    };
+    let list = |key: &str| {
+        table
+            .get(key)
+            .and_then(|v| serde_json::to_value(v).ok())
+            .unwrap_or_else(|| json!([]))
+    };
+    json!({
+        "kind": table.get("kind").and_then(toml::Value::as_str),
+        "layout": table.get("layout").and_then(toml::Value::as_str),
+        "step": table.get("step").and_then(toml::Value::as_str),
+        "element": list("element"),
+        "source": list("source"),
+        "detector": list("detector"),
+        "proxy": list("proxy"),
+        "merit": list("merit"),
+    })
 }
 
 /// `bodies`: every placed body of a STEP file, for writing a sidecar: assembly path,

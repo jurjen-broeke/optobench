@@ -12,6 +12,7 @@ use serde_json::{Value, json};
 
 use crate::camera::Camera;
 use crate::document::Document;
+use crate::editors::{self, New};
 use crate::theme::{Accent, DARK};
 use crate::viewport::{self, Request};
 use crate::workspaces::{Action, Control, Item, Layout, Section, Stage, WORKSPACES};
@@ -33,8 +34,52 @@ pub struct App {
     /// Where imported materials, parts and curves are; empty for the platform's default.
     data_directory: String,
     confirm: Option<&'static str>,
+    /// Values being typed into the editors.
+    drafts: editors::Drafts,
+    /// An entry chosen in the browser that is not drawn (a source, a merit term):
+    /// its table and id, or index for a merit term.
+    focus: Option<(String, String)>,
+    /// The scene version the drafts belong to.
+    drafts_version: u64,
+    /// The last import's outcome (error, text), shown in the results strip.
+    notice: Option<(bool, String)>,
+    /// A material file waiting for its licence notice to be accepted: path, name, notice.
+    licence: Option<(PathBuf, String, Value)>,
     /// See `screenshot`.
     shot: Option<Shot>,
+}
+
+/// Where in the design file an item of the view is written: its table and the entry.
+fn entry_of(design: &Value, id: &str) -> Option<(String, Value, usize)> {
+    for table in ["element", "detector", "proxy", "source"] {
+        if let Some(list) = design[table].as_array() {
+            if let Some((i, e)) = list.iter().enumerate().find(|(_, e)| e["id"] == id) {
+                return Some((table.to_owned(), e.clone(), i));
+            }
+        }
+    }
+    None
+}
+
+/// A few words on what operations change, for the runs strip.
+fn describe(operations: &[Value]) -> String {
+    let Some(first) = operations.first() else {
+        return String::new();
+    };
+    let what = first["id"]
+        .as_str()
+        .or(first["dof"].as_str())
+        .or(first["table"].as_str())
+        .unwrap_or("design");
+    let key = first["key"]
+        .as_str()
+        .unwrap_or(first["op"].as_str().unwrap_or(""));
+    let more = if operations.len() > 1 {
+        format!(" (+{})", operations.len() - 1)
+    } else {
+        String::new()
+    };
+    format!("{what} {key}{more}")
 }
 
 /// A screenshot to take once the design is ready (see `screenshot`).
@@ -77,6 +122,11 @@ impl App {
                 .map(|d| d.to_string_lossy().into_owned())
                 .unwrap_or_default(),
             confirm: None,
+            drafts: editors::Drafts::default(),
+            focus: None,
+            drafts_version: 0,
+            notice: None,
+            licence: None,
             shot: std::env::var_os("OPTOBENCH_UI_SCREENSHOT").map(|p| Shot {
                 path: PathBuf::from(p),
                 trace: std::env::var_os("OPTOBENCH_UI_TRACE").is_some(),
@@ -97,12 +147,13 @@ impl App {
         {
             app.workspace = w.min(WORKSPACES.len() - 1);
         }
+        if let Some(stage) = std::env::var("OPTOBENCH_UI_STAGE")
+            .ok()
+            .and_then(|s| s.parse::<usize>().ok())
+        {
+            app.stage = stage;
+        }
         app
-    }
-
-    fn repaint(&self) -> impl Fn() + Send + Clone + 'static {
-        let ctx = self.ctx.clone();
-        move || ctx.request_repaint()
     }
 
     fn open(&mut self, path: PathBuf) {
@@ -118,8 +169,15 @@ impl App {
         let data = Some(self.data_directory.trim())
             .filter(|d| !d.is_empty())
             .map(PathBuf::from);
-        self.doc = Some(Document::open(path, data, self.repaint()));
+        let ctx = self.ctx.clone();
+        self.doc = Some(Document::open(
+            path,
+            data,
+            std::sync::Arc::new(move || ctx.request_repaint()),
+        ));
         self.selected = None;
+        self.focus = None;
+        self.drafts.clear();
         self.hidden.clear();
         self.view.hovered = None;
         self.view.section = None;
@@ -154,6 +212,33 @@ impl App {
                 Action::Right => self.camera.right(),
                 Action::Isometric => self.camera.isometric(),
                 Action::Rays => self.show_rays = !self.show_rays,
+                Action::New => self.new_layout(),
+                Action::Undo => {
+                    if let Some(doc) = &mut self.doc {
+                        doc.undo();
+                    }
+                }
+                Action::Remove => {
+                    if let Some(op) = self.removal() {
+                        self.selected = None;
+                        self.focus = None;
+                        self.apply(vec![op]);
+                    }
+                }
+                Action::AddLens => self.add(New::Lens),
+                Action::AddMirror => self.add(New::Mirror),
+                Action::AddSource => self.add(New::Source),
+                Action::AddDetector => self.add(New::Detector),
+                Action::TagLens | Action::TagMirror => {
+                    if let Ok(op) = self.tagging(action == Action::TagMirror) {
+                        self.apply(vec![op]);
+                    }
+                }
+                Action::Apply => {
+                    if let Some(doc) = &mut self.doc {
+                        doc.apply_optimised();
+                    }
+                }
             },
             Control::Command(id) => {
                 let writes = optobench_commands::Registry::standard()
@@ -169,20 +254,266 @@ impl App {
     }
 
     fn run(&mut self, id: &str) {
-        let (repaint, again) = (self.repaint(), self.repaint());
         if let Some(doc) = &mut self.doc {
-            doc.run(id, json!({}), repaint);
-            // An optimisation changes what the view shows.
-            if id == "optimize" {
-                doc.run("trace", json!({}), again);
+            doc.start(id, json!({}));
+        }
+    }
+
+    /// Sends edit operations for the open design.
+    fn apply(&mut self, operations: Vec<Value>) {
+        if operations.is_empty() {
+            return;
+        }
+        let what = describe(&operations);
+        if let Some(doc) = &mut self.doc {
+            doc.edit(operations, what);
+        }
+    }
+
+    fn design(&self) -> Option<&Value> {
+        self.doc
+            .as_ref()
+            .and_then(|d| d.scene.as_ref())
+            .map(|s| &s.design)
+    }
+
+    fn add(&mut self, new: New) {
+        if let Some(op) = self.design().and_then(|d| editors::add(d, new)) {
+            self.apply(vec![op]);
+        }
+    }
+
+    /// The operation that removes the selected entry, if it is in the file.
+    fn removal(&self) -> Option<Value> {
+        let design = self.design()?;
+        if let Some((table, key)) = &self.focus {
+            return Some(match table.as_str() {
+                "merit" => {
+                    json!({ "op": "remove", "table": "merit", "index": key.parse::<usize>().ok()? })
+                }
+                _ => json!({ "op": "remove", "table": table, "id": key }),
+            });
+        }
+        let item = self
+            .doc
+            .as_ref()?
+            .scene
+            .as_ref()?
+            .items
+            .get(self.selected?)?;
+        let (table, _, _) = entry_of(design, &item.id)?;
+        Some(json!({ "op": "remove", "table": table, "id": item.id }))
+    }
+
+    /// The operation that tags the selected CAD body, or why it cannot.
+    fn tagging(&self, mirror: bool) -> Result<Value, String> {
+        let design = self.design().ok_or("open a sidecar first")?;
+        if design["kind"] != "sidecar" {
+            return Err("tagging is for CAD sidecars".into());
+        }
+        let item = self
+            .selected
+            .and_then(|i| self.doc.as_ref()?.scene.as_ref()?.items.get(i))
+            .ok_or("select a body in the view or under Mechanics")?;
+        if item.kind != "solid" || item.role != "absorber" {
+            return Err("select an untagged body (under Mechanics)".into());
+        }
+        let face = if mirror {
+            let normal = self
+                .view
+                .picked_normal
+                .ok_or("click the mirror's reflecting face in the view")?;
+            let axes = item.body_axes.ok_or("the body's frame is not known")?;
+            Some((normal, axes))
+        } else {
+            None
+        };
+        editors::tag(design, &item.id, face).ok_or_else(|| "this body has no occurrence".into())
+    }
+
+    /// The data directory parameter, when one is typed.
+    fn data_parameter(&self) -> Value {
+        match self.data_directory.trim() {
+            "" => json!({}),
+            d => json!({ "data_directory": d }),
+        }
+    }
+
+    /// Runs a quick command on the spot (imports of small files) and notes the outcome.
+    fn quick(&mut self, command: &str, mut parameters: Value) -> Option<Value> {
+        if let (Some(p), Some(d)) = (
+            parameters.as_object_mut(),
+            self.data_parameter().as_object(),
+        ) {
+            p.extend(d.clone());
+        }
+        match optobench_commands::Registry::standard().run(command, &parameters) {
+            Ok(v) => Some(v),
+            Err(e) => {
+                self.notice = Some((true, format!("{command}: {}", e.message)));
+                None
+            }
+        }
+    }
+
+    /// A file dropped on the window: a design opens; a part, a curve table or a material
+    /// is imported into the data directory.
+    fn dropped(&mut self, path: PathBuf) {
+        let extension = path
+            .extension()
+            .map(|e| e.to_string_lossy().to_lowercase())
+            .unwrap_or_default();
+        let name = path
+            .file_stem()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let shown = path.to_string_lossy().into_owned();
+        match extension.as_str() {
+            "optobench" => {
+                let text = std::fs::read_to_string(&path).unwrap_or_default();
+                if text.contains("kind = \"part\"") {
+                    if self
+                        .quick("import-part", json!({ "path": shown }))
+                        .is_some()
+                    {
+                        self.notice = Some((false, format!("Part imported: {name}")));
+                    }
+                } else {
+                    self.open(path);
+                }
+            }
+            "yml" | "yaml" => {
+                if let Some(preview) =
+                    self.quick("import-material", json!({ "path": shown, "name": name }))
+                {
+                    self.licence = Some((path, name, preview));
+                }
+            }
+            "xlsx" | "csv" | "txt" | "tsv" | "zip" => {
+                if let Some(out) = self.quick("import-curve", json!({ "path": shown })) {
+                    let count = out["curves"].as_array().map_or(1, Vec::len);
+                    self.notice = Some((false, format!("{count} curve(s) imported from {name}")));
+                }
+            }
+            other => {
+                self.notice = Some((
+                    true,
+                    format!(
+                        "{name}.{other}: drop a design (.optobench), a part, a curve table (.xlsx, .csv, .zip) or a material (.yml)"
+                    ),
+                ));
+            }
+        }
+    }
+
+    /// The licence notice of a material file being imported, to accept or cancel.
+    fn licence_dialog(&mut self, ctx: &egui::Context) {
+        let Some((path, name, preview)) = self.licence.clone() else {
+            return;
+        };
+        let response = egui::Modal::new(egui::Id::unique("licence")).show(ctx, |ui| {
+            ui.set_max_width(520.0);
+            ui.label(
+                RichText::new(format!("Import material {name}"))
+                    .strong()
+                    .size(14.0),
+            );
+            for (title, key) in [("Notice", "notice"), ("References", "references")] {
+                if let Some(text) = preview[key].as_str().filter(|t| !t.is_empty()) {
+                    ui.label(RichText::new(title).color(DARK.text_dim));
+                    ui.label(text);
+                }
+            }
+            ui.horizontal(|ui| {
+                if ui.button("Cancel").clicked() {
+                    return Some(false);
+                }
+                let accept =
+                    egui::Button::new(RichText::new("Accept and import").color(Color32::WHITE))
+                        .fill(self.accent().fill);
+                if ui.add(accept).clicked() {
+                    return Some(true);
+                }
+                None
+            })
+            .inner
+        });
+        match response.inner {
+            Some(true) => {
+                self.licence = None;
+                let parameters = json!({
+                    "path": path.to_string_lossy(), "name": name, "accept_licence": true,
+                });
+                if self.quick("import-material", parameters).is_some() {
+                    self.notice = Some((false, format!("Material imported: {name}")));
+                }
+            }
+            Some(false) => self.licence = None,
+            None if response.should_close() => self.licence = None,
+            None => {}
+        }
+    }
+
+    /// Starts a new planar layout at the path typed in the title bar, and opens it.
+    fn new_layout(&mut self) {
+        let typed = self.open_path.trim();
+        let path = if typed.is_empty() || PathBuf::from(typed).exists() {
+            let base = std::env::current_dir().unwrap_or_default();
+            (1..)
+                .map(|n| base.join(format!("layout-{n}.optobench")))
+                .find(|p| !p.exists())
+                .unwrap_or_default()
+        } else {
+            PathBuf::from(typed)
+        };
+        let result = optobench_commands::Registry::standard().run(
+            "edit",
+            &json!({ "path": path.to_string_lossy(), "create": { "layout": "planar" } }),
+        );
+        match result {
+            Ok(_) => {
+                self.open(path);
+                self.workspace = 1;
+            }
+            Err(e) => {
+                if let Some(doc) = &mut self.doc {
+                    doc.messages.push(crate::document::Message {
+                        error: true,
+                        text: format!("New: {}", e.message),
+                    });
+                }
             }
         }
     }
 
     /// Whether a control can run now, or why not.
     fn available(&self, control: Control) -> Result<(), String> {
+        let layout = || -> Result<(), String> {
+            match self.design().and_then(|d| d["layout"].as_str()) {
+                Some(_) => Ok(()),
+                None => Err("for layouts (planar or table)".into()),
+            }
+        };
         match control {
-            Control::Action(Action::Open) => Ok(()),
+            Control::Action(Action::Open | Action::New) => Ok(()),
+            Control::Action(Action::Undo) => match &self.doc {
+                Some(doc) if !doc.undo.is_empty() => Ok(()),
+                Some(_) => Err("nothing to undo".into()),
+                None => Err("open a design first".into()),
+            },
+            Control::Action(Action::Apply) => match &self.doc {
+                Some(doc) if doc.optimised.is_some() => Ok(()),
+                _ => Err("optimise first".into()),
+            },
+            Control::Action(Action::Remove) => self
+                .removal()
+                .map(|_| ())
+                .ok_or_else(|| "select an item of the design".into()),
+            Control::Action(
+                Action::AddLens | Action::AddMirror | Action::AddSource | Action::AddDetector,
+            ) => layout(),
+            Control::Action(Action::TagLens) => self.tagging(false).map(|_| ()),
+            Control::Action(Action::TagMirror) => self.tagging(true).map(|_| ()),
             Control::Action(_) => self
                 .doc
                 .as_ref()
@@ -209,7 +540,7 @@ impl App {
 
     fn summary(control: Control) -> String {
         match control {
-            Control::Action(a) => a.label().to_owned(),
+            Control::Action(a) => a.summary().to_owned(),
             Control::Command(id) => optobench_commands::Registry::standard()
                 .get(id)
                 .map_or(String::new(), |c| c.summary.to_owned()),
@@ -331,7 +662,15 @@ impl App {
     /// over its label.
     fn ribbon_button(&mut self, ui: &mut egui::Ui, item: Item) {
         let available = self.available(item.control);
-        let (rect, response) = ui.allocate_exact_size(Vec2::new(64.0, 58.0), Sense::click());
+        // As wide as the label needs, at least 64 points.
+        let label = Self::label(item.control);
+        let width = ui
+            .painter()
+            .layout_no_wrap(label.clone(), egui::FontId::proportional(11.0), DARK.text)
+            .size()
+            .x;
+        let (rect, response) =
+            ui.allocate_exact_size(Vec2::new((width + 12.0).max(64.0), 58.0), Sense::click());
         let enabled = available.is_ok();
         if response.hovered() && enabled {
             ui.painter()
@@ -342,7 +681,6 @@ impl App {
         } else {
             DARK.text_dim.gamma_multiply(0.6)
         };
-        let label = Self::label(item.control);
         let icon = Vec2::new(26.0, 26.0);
         let icon_rect =
             egui::Rect::from_center_size(rect.center_top() + Vec2::new(0.0, 18.0), icon);
@@ -532,6 +870,7 @@ impl App {
                         swatch(ui, colour);
                         if ui.selectable_label(on, label).clicked() {
                             app.selected = if on { None } else { Some(index) };
+                            app.focus = None;
                         }
                     });
                 };
@@ -541,7 +880,12 @@ impl App {
                         for s in &scene.sources {
                             ui.horizontal(|ui| {
                                 swatch(ui, crate::viewport::ray_colour("detected", 0));
-                                ui.label(&s.id);
+                                let on = self.focus.as_ref()
+                                    == Some(&("source".to_owned(), s.id.clone()));
+                                if ui.selectable_label(on, &s.id).clicked() {
+                                    self.focus = (!on).then(|| ("source".to_owned(), s.id.clone()));
+                                    self.selected = None;
+                                }
                             });
                         }
                     });
@@ -566,6 +910,30 @@ impl App {
                             row(ui, self, i, scene.items[i].id.clone());
                         }
                     });
+                let merit = scene.design["merit"]
+                    .as_array()
+                    .cloned()
+                    .unwrap_or_default();
+                if !merit.is_empty() {
+                    egui::CollapsingHeader::new(format!("Merit ({})", merit.len())).show(
+                        ui,
+                        |ui| {
+                            for (i, term) in merit.iter().enumerate() {
+                                let key = ("merit".to_owned(), i.to_string());
+                                let on = self.focus.as_ref() == Some(&key);
+                                let label = format!(
+                                    "{} · {}",
+                                    term["kind"].as_str().unwrap_or("?"),
+                                    term["detector"].as_str().unwrap_or("?")
+                                );
+                                if ui.selectable_label(on, label).clicked() {
+                                    self.focus = (!on).then_some(key);
+                                    self.selected = None;
+                                }
+                            }
+                        },
+                    );
+                }
                 if !scene.dofs.is_empty() {
                     egui::CollapsingHeader::new(format!(
                         "Degrees of freedom ({})",
@@ -611,46 +979,205 @@ impl App {
     }
 
     fn properties(&mut self, ui: &mut egui::Ui) {
-        if let Layout::Stages { stages, .. } = WORKSPACES[self.workspace].layout {
-            let stage = stages[self.stage.min(stages.len() - 1)];
-            ui.label(RichText::new(stage.name).strong().size(14.0));
-            ui.label(RichText::new(stage.help).color(DARK.text_dim));
-            ui.separator();
-            self.ready_card(ui);
-            ui.separator();
+        // The drafts belong to the scene they were typed against.
+        if let Some(doc) = &self.doc {
+            if doc.scene_version != self.drafts_version {
+                self.drafts.clear();
+                self.drafts_version = doc.scene_version;
+            }
         }
+        let mut operations = Vec::new();
+        egui::ScrollArea::vertical()
+            .auto_shrink(false)
+            .show(ui, |ui| {
+                if let Layout::Stages { stages, .. } = WORKSPACES[self.workspace].layout {
+                    let stage = self.stage.min(stages.len() - 1);
+                    ui.label(RichText::new(stages[stage].name).strong().size(14.0));
+                    ui.label(RichText::new(stages[stage].help).color(DARK.text_dim));
+                    ui.separator();
+                    self.ready_card(ui);
+                    ui.separator();
+                    operations = self.stage_editor(ui, stage);
+                } else {
+                    operations = self.selection_editor(ui);
+                }
+            });
+        self.apply(operations);
+    }
+
+    /// Entries of one table, each in a collapsing section with its editor.
+    fn table_editor(&mut self, ui: &mut egui::Ui, table: &str, title: &str) -> Vec<Value> {
+        let Some(design) = self.design().cloned() else {
+            return Vec::new();
+        };
+        let context = editors::Context::of(&design);
+        let mut operations = Vec::new();
+        let list = design[table].as_array().cloned().unwrap_or_default();
+        ui.label(RichText::new(format!("{title} ({})", list.len())).strong());
+        for (i, entry) in list.iter().enumerate() {
+            let name = entry["id"].as_str().map_or_else(
+                || {
+                    format!(
+                        "{} {}",
+                        entry["kind"].as_str().unwrap_or("term"),
+                        entry["detector"].as_str().unwrap_or("")
+                    )
+                },
+                str::to_owned,
+            );
+            egui::CollapsingHeader::new(name)
+                .id_salt(format!("{table}-{i}"))
+                .show(ui, |ui| {
+                    operations.extend(editors::entry(
+                        ui,
+                        &mut self.drafts,
+                        table,
+                        entry,
+                        i,
+                        &context,
+                    ));
+                });
+        }
+        operations
+    }
+
+    /// The Simulate workspace's editor for a stage.
+    fn stage_editor(&mut self, ui: &mut egui::Ui, stage: usize) -> Vec<Value> {
+        let Some(design) = self.design().cloned() else {
+            return Vec::new();
+        };
+        let layout = design["layout"].is_string();
+        let mut operations = Vec::new();
+        let mut add = |ui: &mut egui::Ui, label: &str, new: New| {
+            if layout && ui.button(label).clicked() {
+                operations.extend(editors::add(&design, new));
+            }
+        };
+        match stage {
+            0 => {
+                add(ui, "Add source", New::Source);
+                let more = self.table_editor(ui, "source", "Sources");
+                operations.extend(more);
+            }
+            1 => {
+                ui.horizontal(|ui| {
+                    add(ui, "Add lens", New::Lens);
+                    add(ui, "Add mirror", New::Mirror);
+                });
+                if !layout {
+                    ui.label(
+                        RichText::new("Tag CAD bodies as lenses or mirrors in the CAD workspace")
+                            .color(DARK.text_dim),
+                    );
+                }
+                let more = self.table_editor(ui, "element", "Optics");
+                operations.extend(more);
+            }
+            2 => {
+                add(ui, "Add detector", New::Detector);
+                let more = self.table_editor(ui, "detector", "Detectors");
+                operations.extend(more);
+                ui.separator();
+                let first = design["detector"][0]["id"].as_str().map(str::to_owned);
+                ui.horizontal_wrapped(|ui| {
+                    ui.label(RichText::new("Add merit").color(DARK.text_dim));
+                    for kind in ["focus", "centring", "pointing", "collimation", "power"] {
+                        if let Some(detector) = &first {
+                            if ui.small_button(kind).clicked() {
+                                operations.push(json!({
+                                    "op": "add", "table": "merit",
+                                    "entry": [["kind", kind], ["detector", detector]],
+                                }));
+                            }
+                        }
+                    }
+                });
+                let more = self.table_editor(ui, "merit", "Merit");
+                operations.extend(more);
+            }
+            _ => {
+                ui.label(RichText::new("Runs").strong());
+                self.runs_table(ui, 12);
+            }
+        }
+        operations
+    }
+
+    /// The editor of what is selected in the view or the browser.
+    fn selection_editor(&mut self, ui: &mut egui::Ui) -> Vec<Value> {
         ui.label(RichText::new("Properties").strong().size(14.0));
         ui.separator();
-        let Some(doc) = &self.doc else { return };
-        let Some(scene) = &doc.scene else { return };
-        let Some(item) = self.selected.and_then(|i| scene.items.get(i)) else {
+        let Some(doc) = &self.doc else {
+            return Vec::new();
+        };
+        let Some(scene) = &doc.scene else {
+            return Vec::new();
+        };
+        let design = scene.design.clone();
+        let context = editors::Context::of(&design);
+        // A source or merit term chosen in the browser.
+        if let Some((table, key)) = self.focus.clone() {
+            let found = if table == "merit" {
+                key.parse::<usize>()
+                    .ok()
+                    .and_then(|i| Some((design["merit"].get(i)?.clone(), i)))
+            } else {
+                design[&table].as_array().and_then(|l| {
+                    l.iter()
+                        .enumerate()
+                        .find(|(_, e)| e["id"] == key.as_str())
+                        .map(|(i, e)| (e.clone(), i))
+                })
+            };
+            if let Some((entry, i)) = found {
+                ui.label(RichText::new(format!("{table} {key}")).color(DARK.text_dim));
+                return editors::entry(ui, &mut self.drafts, &table, &entry, i, &context);
+            }
+        }
+        let Some(item) = self.selected.and_then(|i| scene.items.get(i)).cloned() else {
             ui.label(
                 RichText::new("Select an item in the view or the browser").color(DARK.text_dim),
             );
-            return;
+            return Vec::new();
         };
-        egui::Grid::new("properties")
-            .num_columns(2)
-            .spacing([12.0, 4.0])
-            .show(ui, |ui| {
-                for (k, v) in [
-                    ("Id", item.id.clone()),
-                    ("Kind", item.kind.clone()),
-                    ("Role", item.role.clone()),
-                    (
-                        "Occurrence",
-                        item.occurrence.clone().unwrap_or_else(|| "—".into()),
-                    ),
-                    ("Outlines", item.lines.len().to_string()),
-                ] {
-                    ui.label(RichText::new(k).color(DARK.text_dim));
-                    ui.label(v);
-                    ui.end_row();
+        let mut operations = Vec::new();
+        match entry_of(&design, &item.id) {
+            Some((table, entry, i)) => {
+                ui.label(RichText::new(format!("{table} · {}", item.role)).color(DARK.text_dim));
+                operations = editors::entry(ui, &mut self.drafts, &table, &entry, i, &context);
+            }
+            None => {
+                egui::Grid::new("properties")
+                    .num_columns(2)
+                    .spacing([12.0, 4.0])
+                    .show(ui, |ui| {
+                        for (k, v) in [
+                            ("Id", item.id.clone()),
+                            ("Kind", item.kind.clone()),
+                            ("Role", item.role.clone()),
+                            (
+                                "Occurrence",
+                                item.occurrence.clone().unwrap_or_else(|| "—".into()),
+                            ),
+                        ] {
+                            ui.label(RichText::new(k).color(DARK.text_dim));
+                            ui.label(v);
+                            ui.end_row();
+                        }
+                    });
+                if context.sidecar && item.role == "absorber" {
+                    ui.label(
+                        RichText::new(
+                            "Tag Lens makes this body a lens; for Tag Mirror, click its reflecting face first",
+                        )
+                        .color(DARK.text_dim),
+                    );
                 }
-            });
+            }
+        }
         if item.role == "detector" {
-            if let Some(d) = doc.trace.as_ref().and_then(|t| {
-                t.report["detectors"]
+            if let Some(d) = self.doc.as_ref().and_then(|doc| {
+                doc.trace.as_ref()?.report["detectors"]
                     .as_array()?
                     .iter()
                     .find(|d| d["id"] == item.id.as_str())
@@ -661,6 +1188,52 @@ impl App {
                 detector_grid(ui, &d);
             }
         }
+        operations
+    }
+
+    /// The last runs, newest first: what changed, detected power, and per detector the
+    /// centroid, RMS radius and spread.
+    fn runs_table(&self, ui: &mut egui::Ui, rows: usize) {
+        let Some(doc) = &self.doc else { return };
+        if doc.runs.is_empty() {
+            ui.label(RichText::new("Trace to start comparing runs").color(DARK.text_dim));
+            return;
+        }
+        egui::Grid::new("runs")
+            .num_columns(6)
+            .spacing([10.0, 2.0])
+            .striped(true)
+            .show(ui, |ui| {
+                for h in [
+                    "#",
+                    "after",
+                    "detected",
+                    "centroid (mm)",
+                    "rms (mm)",
+                    "spread (mrad)",
+                ] {
+                    ui.label(RichText::new(h).color(DARK.text_dim).size(11.0));
+                }
+                ui.end_row();
+                for run in doc.runs.iter().rev().take(rows) {
+                    ui.label(run.number.to_string());
+                    ui.label(&run.after);
+                    ui.label(format!("{:.2} %", 100.0 * run.detected));
+                    match run.detectors.first() {
+                        Some((_, c, rms, spread)) => {
+                            ui.label(format!("{:.4}, {:.4}", c[0], c[1]));
+                            ui.label(format!("{rms:.5}"));
+                            ui.label(format!("{spread:.4}"));
+                        }
+                        None => {
+                            ui.label("—");
+                            ui.label("—");
+                            ui.label("—");
+                        }
+                    }
+                    ui.end_row();
+                }
+            });
     }
 
     /// The Ready-to-trace card of the Simulate workspace.
@@ -711,6 +1284,9 @@ impl App {
     }
 
     fn results(&mut self, ui: &mut egui::Ui) {
+        if let Some((error, text)) = &self.notice {
+            ui.label(RichText::new(text).color(if *error { DARK.error } else { DARK.text }));
+        }
         let Some(doc) = &self.doc else {
             ui.label(RichText::new("Results appear here after a trace").color(DARK.text_dim));
             return;
@@ -757,6 +1333,16 @@ impl App {
                         );
                         detector_grid(ui, &d);
                     }
+                });
+            }
+            if !doc.runs.is_empty() {
+                ui.separator();
+                ui.vertical(|ui| {
+                    ui.label(RichText::new("Runs").strong());
+                    egui::ScrollArea::vertical()
+                        .id_salt("runs")
+                        .max_height(140.0)
+                        .show(ui, |ui| self.runs_table(ui, 20));
                 });
             }
             if let Some((command, value)) = &doc.output {
@@ -868,8 +1454,8 @@ impl eframe::App for App {
                 .filter(|p| !p.as_os_str().is_empty())
                 .collect()
         });
-        if let Some(path) = dropped.into_iter().next() {
-            self.open(path);
+        for path in dropped {
+            self.dropped(path);
         }
 
         egui::Panel::top("app_bar")
@@ -930,11 +1516,15 @@ impl eframe::App for App {
             .inner;
         for request in requests {
             match request {
-                Request::Select(index) => self.selected = index,
+                Request::Select(index) => {
+                    self.selected = index;
+                    self.focus = None;
+                }
                 Request::Fit => self.fit_pending = true,
             }
         }
         self.confirm_dialog(&ctx);
+        self.licence_dialog(&ctx);
         self.screenshot(&ctx);
     }
 }

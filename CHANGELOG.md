@@ -5,6 +5,12 @@ with the release that introduced them.
 
 ## Unreleased
 
+- M8c2 editors: the interface edits designs through `edit`: every key of the selected
+  entry, its degrees of freedom, New and Undo, adding lenses, mirrors, sources and
+  detectors to a layout, the Simulate stages' editors and a runs strip, tagging CAD bodies
+  as lenses or (by the face clicked) mirrors, applying optimised values, and importing
+  files dropped on the window. `view` also returns the file's entries (`design`) and each
+  CAD body's axes.
 - M8c1 editing: new command `edit` changes a layout or sidecar in place and keeps its
   comments (`optobench_io::edit`, on `toml_edit`): set or unset keys of entries by id
   (merit terms by index, degrees of freedom by name), add and remove entries and DOFs,

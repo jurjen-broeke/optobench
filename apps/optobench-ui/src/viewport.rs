@@ -7,7 +7,7 @@
 use egui::{Color32, Pos2, Rect, Sense, Shape, Stroke, StrokeKind, Vec2};
 
 use crate::camera::{Camera, V3};
-use crate::document::{Document, Scene};
+use crate::document::{Document, Hit, Scene};
 use crate::render::{self, Renderer};
 use crate::theme::{Accent, DARK};
 
@@ -20,6 +20,9 @@ pub struct Extras {
     pub hovered: Option<usize>,
     /// The section: the axis (0 x, 1 y, 2 z) whose plane cuts the scene, and where.
     pub section: Option<(usize, f64)>,
+    /// The normal of the face last clicked (scene frame), for tagging a mirror by its
+    /// reflecting face.
+    pub picked_normal: Option<V3>,
 }
 
 impl Extras {
@@ -44,24 +47,24 @@ pub fn pick_mesh(
     plane: Option<(V3, f64)>,
     origin: V3,
     direction: V3,
-) -> Option<usize> {
+) -> Option<(usize, Hit)> {
     let keep = |p: V3| plane.is_none_or(|(n, at)| n[0] * p[0] + n[1] * p[1] + n[2] * p[2] <= at);
-    let mut best: Option<(usize, f64)> = None;
+    let mut best: Option<(usize, Hit)> = None;
     for (i, item) in scene.items.iter().enumerate() {
         if hidden.get(i).copied().unwrap_or(false) {
             continue;
         }
-        if let Some(d) = item
+        if let Some(hit) = item
             .mesh
             .as_ref()
             .and_then(|m| m.hit(origin, direction, &keep))
         {
-            if best.is_none_or(|b| d < b.1) {
-                best = Some((i, d));
+            if best.is_none_or(|b| hit.distance < b.1.distance) {
+                best = Some((i, hit));
             }
         }
     }
-    best.map(|b| b.0)
+    best
 }
 
 /// What the view asks the app to do.
@@ -206,11 +209,11 @@ pub fn show(
             let (o, d) = camera.ray((p.x as f64, p.y as f64), centre, high);
             pick_mesh(scene, hidden, plane, o, d)
         };
-        extras.hovered = response.hover_pos().and_then(pick);
+        extras.hovered = response.hover_pos().and_then(pick).map(|p| p.0);
         if response.clicked() {
-            requests.push(Request::Select(
-                response.interact_pointer_pos().and_then(pick),
-            ));
+            let picked = response.interact_pointer_pos().and_then(pick);
+            extras.picked_normal = picked.map(|p| p.1.normal);
+            requests.push(Request::Select(picked.map(|p| p.0)));
         }
         let segments: Vec<(V3, V3, Color32)> = if show_rays {
             ray_paths(doc)
