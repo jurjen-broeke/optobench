@@ -55,5 +55,12 @@ the nominal collimation: one iteration.
       report's expectation, with tolerances, and the merit as it is now
 - [x] Golden periscope (committed, primitives): the report's moves applied in SolidCraft
       restore alignment in one iteration. M6 exit criterion met.
-- [ ] Local Thorlabs version: the beam-expander periscope of `corpus/solidcraft/agent_designs.md`
-      (needs the lens and rod STEP files)
+- [x] Local Thorlabs version: the beam-expander periscope of `corpus/solidcraft/agent_designs.md`
+      (2 mm 800 nm beam, 80 → 630 mm, BB1-E03 mirrors in KCB1 cubes, LC1715-B in a CXY1A and
+      LA1509-B in an SM1ZB/M, ER10 rods, CP33B brackets on TR30 posts into a 20 × 60 profile).
+      Misaligned in SolidCraft (bottom mirror 0.5°, L1 0.3 mm, L2 1 mm), the report's four
+      moves made in SolidCraft and exported again put all 165 solids where expected (1e-13 mm)
+      and restore centring (1.2 µm), pointing (0.24 µrad) and nominal collimation: one
+      iteration. With 7 DOFs and 5 residuals the solution is not unique; the optimiser takes
+      the smallest moves. Its 116 traces of the 13 MB assembly take about 25 minutes, which
+      is the case for the performance work on the roadmap (design.md, Improvements).
