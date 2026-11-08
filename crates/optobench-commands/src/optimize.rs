@@ -47,7 +47,9 @@ fn term_json(merit: &Merit, start: &[f64], end: &[f64]) -> Value {
 
 /// `optimize`: parameters `path` (a layout or sidecar with DOFs); optionally `merit`
 /// (in place of the file's `[[merit]]`), `dofs` (start values, mm or degrees),
-/// `max_iterations` (default 100), `report` (true: write the move report next to the
+/// `max_iterations` (default 100), `minimal_moves` (weight of the preference for the
+/// smallest moves when several settings meet the merit; default 1e-3 per mm or degree,
+/// 0 switches it off), `report` (true: write the move report next to the
 /// design as `<design>.moves.json` and `.moves.md`; or a path stem) and `data_directory`.
 /// Returns each free DOF's start and suggested value and every merit term before and
 /// after.
@@ -59,6 +61,7 @@ pub(crate) fn optimize(parameters: &Parameters) -> Result<Value, CommandError> {
             "merit",
             "dofs",
             "max_iterations",
+            "minimal_moves",
             "report",
             "data_directory",
         ],
@@ -87,7 +90,20 @@ pub(crate) fn optimize(parameters: &Parameters) -> Result<Value, CommandError> {
             )
         })? as usize;
     }
-    let result = optimise(&scene, &merit, &options).map_err(|e| failed(format!("{path}: {e}")))?;
+    let minimal_moves = match parameters.get("minimal_moves") {
+        None => optobench_optimize::MINIMAL_MOVES,
+        Some(v) => v
+            .as_f64()
+            .filter(|w| *w >= 0.0 && w.is_finite())
+            .ok_or_else(|| {
+                CommandError::new(
+                    ErrorCode::InvalidParameters,
+                    "`minimal_moves` must be a number ≥ 0",
+                )
+            })?,
+    };
+    let result = optimise(&scene, &merit, &options, minimal_moves)
+        .map_err(|e| failed(format!("{path}: {e}")))?;
     let dofs: Vec<Value> = result
         .values
         .iter()

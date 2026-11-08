@@ -13,6 +13,11 @@ with the release that introduced them.
   gives the merit as it is now. Golden periscope fixtures (`periscope*.step`: two 45°
   mirrors and a 2× Galilean expander, aligned, misaligned and realigned by the report's
   moves): the M6 exit criterion holds. `Scene::movement`, `Scene::dof_targets`.
+- The optimiser prefers the smallest moves when several DOF settings meet the merit
+  equally well (more DOFs than the merit pins down, as on a real periscope where lens
+  shifts and mirror tilts both steer the beam): a first solve with a light penalty on each
+  change picks the smallest-move solution, a second without it polishes, so determined
+  DOFs stay unbiased (`optimize` parameter `minimal_moves`, default 1e-3; 0 turns it off).
 - M6b optimiser: damped least squares (Levenberg–Marquardt with bounds,
   `optobench_optimize::lm`) over a scene's free DOFs; merit terms focus, centring,
   pointing, collimation and power (`[[merit]]` in layout and sidecar files, or the

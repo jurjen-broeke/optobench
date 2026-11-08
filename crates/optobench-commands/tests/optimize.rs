@@ -68,7 +68,8 @@ fn refocuses_onto_the_focus_of_an_aberration_free_lens() {
     let dof = &result["dofs"][0];
     assert_eq!(dof["name"], "screen_z");
     assert_eq!(dof["start"], 5.0);
-    assert!(number(&dof["suggested"]).abs() < 1e-6, "{dof}");
+    // To 10 nm: the rms radius has a kink at the focus (it grows as |z|).
+    assert!(number(&dof["suggested"]).abs() < 1e-5, "{dof}");
     let focus = &result["merit"][0];
     assert!(number(&focus["start"][0]) > 0.1);
     assert!(number(&focus["end"][0]) < 1e-6, "{focus}");
@@ -155,4 +156,36 @@ fn merit_from_the_command_and_errors() {
     )
     .expect_err("no such detector");
     assert!(error.contains("nowhere"), "{error}");
+}
+
+#[test]
+fn equally_good_settings_resolve_to_the_smallest_moves() {
+    // Two tilts of the same mirror about the same axis: only their sum steers the beam,
+    // so every split of the correction is as good. The smallest moves share it equally
+    // (the minimum-norm solution of Δ₁ + Δ₂ = −0.3°): both change by −0.15°.
+    let dir = scratch("degenerate");
+    let layout = write(
+        &dir,
+        "twice.optobench",
+        &format!(
+            "{HEADER}[[element]]\nid = \"M1\"\nkind = \"mirror\"\nat = 50\nfold = 90\ndiameter = 25\nclear_aperture = 22\n\
+             dof = [{{ name = \"a\", kind = \"tilt\", axis = [0, 0, 1], frame = \"scene\", range = [-2, 2], value = 0.3 }},\n\
+                    {{ name = \"b\", kind = \"tilt\", axis = [0, 0, 1], frame = \"scene\", range = [-2, 2] }}]\n\n\
+             [[detector]]\nid = \"screen\"\nat = 150\nsize = [40, 40]\npixels = [20, 20]\n\n\
+             [[merit]]\nkind = \"centring\"\ndetector = \"screen\"\n"
+        ),
+    );
+    let result = optimize(&layout, json!({})).expect("optimises");
+    let change = |i: usize| number(&result["dofs"][i]["change"]);
+    assert!(
+        (change(0) + 0.15).abs() < 1e-4 && (change(1) + 0.15).abs() < 1e-4,
+        "{}",
+        result["dofs"]
+    );
+    // Without the preference any split would do; it still aligns.
+    let free = optimize(&layout, json!({ "minimal_moves": 0 })).expect("optimises");
+    assert!(
+        (number(&free["dofs"][0]["suggested"]) + number(&free["dofs"][1]["suggested"])).abs()
+            < 1e-6
+    );
 }

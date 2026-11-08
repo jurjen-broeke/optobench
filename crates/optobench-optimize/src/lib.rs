@@ -126,12 +126,23 @@ impl Optimised {
 const SLIDE_STEP: f64 = 1e-3;
 const TILT_STEP: f64 = 1e-6;
 
+/// The default weight of the smallest-moves preference (see [`optimise`]).
+pub const MINIMAL_MOVES: f64 = 1e-3;
+
 /// The values of the scene's free DOFs (neither locked nor coupled) that minimise the
 /// weighted merit, starting from the scene's own values, within the DOFs' ranges.
+///
+/// When several settings meet the merit equally well (more DOFs than the merit pins
+/// down, such as a lens shift and a mirror tilt that both steer the beam), the smallest
+/// moves are preferred: a first solve adds, per DOF, the residual `minimal_moves` × its
+/// change (mm for slides, degrees for tilts; Tikhonov regularisation), which picks the
+/// smallest-move point of such a valley; a second solve without it polishes from there,
+/// so DOFs the merit does fix are not biased. 0 switches the first solve off.
 pub fn optimise(
     scene: &Scene,
     merit: &[Merit],
     options: &lm::Options,
+    minimal_moves: f64,
 ) -> Result<Optimised, String> {
     if merit.is_empty() {
         return Err("no merit terms: say what alignment should achieve".into());
@@ -166,16 +177,44 @@ pub fn optimise(
         let traced = moved.trace().map_err(|e| e.to_string())?;
         residuals(merit, &traced)
     };
-    let weighted = |x: &[f64]| -> Result<Vec<f64>, String> {
-        Ok(evaluate(x)?
+    let weighted = |x: &[f64], minimal_moves: f64| -> Result<Vec<f64>, String> {
+        let mut r: Vec<f64> = evaluate(x)?
             .iter()
             .zip(merit)
             .flat_map(|(r, m)| r.iter().map(move |v| v * m.weight))
-            .collect())
+            .collect();
+        if minimal_moves > 0.0 {
+            r.extend(free.iter().zip(x).map(|(d, &v)| {
+                let change = v - d.value;
+                minimal_moves
+                    * if d.motion.is_angle() {
+                        change.to_degrees()
+                    } else {
+                        change
+                    }
+            }));
+        }
+        Ok(r)
     };
     let start: Vec<f64> = variables.iter().map(|v| v.start).collect();
     let before = evaluate(&start)?;
-    let outcome = lm::minimise(weighted, &variables, options)?;
+    // First with the smallest-moves preference (to choose among equally good settings),
+    // then without it from there, so DOFs the merit does fix end where it puts them.
+    let outcome = if minimal_moves > 0.0 {
+        let first = lm::minimise(|x: &[f64]| weighted(x, minimal_moves), &variables, options)?;
+        let polish: Vec<lm::Variable> = variables
+            .iter()
+            .zip(&first.x)
+            .map(|(v, &x)| lm::Variable { start: x, ..*v })
+            .collect();
+        let mut second = lm::minimise(|x: &[f64]| weighted(x, 0.0), &polish, options)?;
+        second.start_cost = weighted(&start, 0.0).map(|r| r.iter().map(|v| v * v).sum())?;
+        second.iterations += first.iterations;
+        second.evaluations += first.evaluations;
+        second
+    } else {
+        lm::minimise(|x: &[f64]| weighted(x, 0.0), &variables, options)?
+    };
     let after = evaluate(&outcome.x)?;
     Ok(Optimised {
         values: free
