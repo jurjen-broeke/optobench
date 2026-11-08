@@ -12,6 +12,7 @@ pub mod bvh;
 pub mod coating;
 mod interaction;
 pub mod nonsequential;
+pub mod objective;
 mod paraxial;
 mod ray;
 mod sequential;

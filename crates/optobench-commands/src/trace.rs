@@ -407,6 +407,8 @@ pub(crate) fn view(parameters: &Parameters) -> Result<Value, CommandError> {
                     let role = match e.kind {
                         ElementKind::Lens { .. } => "lens",
                         ElementKind::Mirror { .. } => "mirror",
+                        ElementKind::Objective { .. } => "objective",
+                        ElementKind::Sample { .. } => "sample",
                     };
                     ("element", e.id.clone(), None, role)
                 }
@@ -465,6 +467,56 @@ pub(crate) fn view(parameters: &Parameters) -> Result<Value, CommandError> {
         "dofs": dofs_json(&scene),
         "bounds": if low.x.is_finite() { json!([point(low), point(high)]) } else { Value::Null },
         "design": design_json(&source),
+    }))
+}
+
+/// `focus`: where the light that reaches a detector focuses (M9a): per ray its launch
+/// height and axial crossing, the paraxial, marginal and best focus (least RMS spot) and
+/// that RMS radius, all along the detector's axis from its plane (mm). Parameters `path`;
+/// optionally `detector` (an id; default the first), `dofs` and `data_directory`.
+pub(crate) fn focus(parameters: &Parameters) -> Result<Value, CommandError> {
+    check_keys(parameters, &["path", "detector", "dofs", "data_directory"])?;
+    let path = text(parameters, "path")?.ok_or_else(|| {
+        CommandError::new(ErrorCode::InvalidParameters, "missing parameter `path`")
+    })?;
+    let (scene, _, _, _) = load(path, parameters)?;
+    let overrides = dof_values(parameters, &scene)?;
+    let scene = scene
+        .moved(&overrides)
+        .map_err(|e| failed(format!("{path}: {e}")))?;
+    let index = match text(parameters, "detector")? {
+        None => 0,
+        Some(id) => scene
+            .detectors
+            .iter()
+            .position(|d| d.id == id)
+            .ok_or_else(|| {
+                CommandError::new(ErrorCode::InvalidParameters, format!("no detector `{id}`"))
+            })?,
+    };
+    let detector = scene.detectors.get(index).ok_or_else(|| {
+        CommandError::new(
+            ErrorCode::InvalidParameters,
+            format!("{path}: the design has no detector"),
+        )
+    })?;
+    let traced = scene.trace().map_err(|e| failed(format!("{path}: {e}")))?;
+    let found = optobench_analysis::focus(&scene, &traced, index).ok_or_else(|| {
+        failed(format!(
+            "{path}: fewer than two rays reached `{}`",
+            detector.id
+        ))
+    })?;
+    Ok(json!({
+        "detector": detector.id,
+        "paraxial_mm": found.paraxial,
+        "marginal_mm": found.marginal,
+        "best_mm": found.best,
+        "best_rms_mm": found.best_rms,
+        "steepest_deg": found.steepest.to_degrees(),
+        "crossings": found.crossings.iter().map(|c| json!({
+            "height_mm": c.height, "z_mm": c.z, "miss_mm": c.miss, "power_w": c.power,
+        })).collect::<Vec<_>>(),
     }))
 }
 

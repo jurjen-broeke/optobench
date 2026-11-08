@@ -894,7 +894,12 @@ impl App {
                         }
                     });
                 let optics: Vec<usize> = (0..scene.items.len())
-                    .filter(|&i| matches!(scene.items[i].role.as_str(), "lens" | "mirror"))
+                    .filter(|&i| {
+                        matches!(
+                            scene.items[i].role.as_str(),
+                            "lens" | "mirror" | "objective" | "sample"
+                        )
+                    })
                     .collect();
                 egui::CollapsingHeader::new(format!("Optics ({})", optics.len()))
                     .default_open(true)
@@ -1264,7 +1269,9 @@ impl App {
                 let optics = scene
                     .items
                     .iter()
-                    .filter(|i| matches!(i.role.as_str(), "lens" | "mirror"))
+                    .filter(|i| {
+                        matches!(i.role.as_str(), "lens" | "mirror" | "objective" | "sample")
+                    })
                     .count();
                 notes.push((true, format!("{optics} optical item(s)")));
             }

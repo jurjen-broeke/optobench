@@ -228,6 +228,14 @@ const STANDARD: &[Command] = &[
         handler: embed::embed,
     },
     Command {
+        id: "focus",
+        label: "Focus",
+        icon: "focus",
+        effect: Effect::Read,
+        summary: "where the light reaching a detector focuses: axial crossings by ray height, paraxial, marginal and best focus",
+        handler: trace::focus,
+    },
+    Command {
         id: "edit",
         label: "Edit",
         icon: "edit",

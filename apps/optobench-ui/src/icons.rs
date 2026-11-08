@@ -524,6 +524,16 @@ pub fn draw(painter: &Painter, rect: Rect, id: &str, enabled: bool) {
             }
             c.dot(pos2(32.0, 32.0), 5.5, r.beam);
         }
+        "focus" => {
+            // Rays converging to a point on the axis, through a lens.
+            let iso = Iso::at(0.75, 24.0, 32.0);
+            c.line(&[pos2(4.0, 32.0), pos2(60.0, 32.0)], 2.0, r.guide);
+            for z in [22.0, 2.0] {
+                c.line(&[iso.p(0.0, 0.0, z), pos2(52.0, 32.0)], ACTION, r.beam);
+            }
+            c.disc(iso, -1.5, 1.5, 16.0, r.a2, r.a1);
+            c.dot(pos2(52.0, 32.0), 5.0, r.a3);
+        }
         "check-moves" => {
             let iso = Iso::at(0.75, 26.0, 36.0);
             // Where the part was (guide outline) and where it is (grey).
@@ -720,6 +730,7 @@ pub const ALL: &[&str] = &[
     "add-detector",
     "trace",
     "optimise",
+    "focus",
     "check-moves",
     "bodies",
     "tag-lens",

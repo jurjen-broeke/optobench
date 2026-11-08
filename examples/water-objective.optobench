@@ -1,0 +1,42 @@
+format = "optobench/1"
+kind = "layout"
+layout = "planar"
+
+# An ideal water-immersion objective (f = 9 mm, NA 1.0: a 20× objective with a 180 mm
+# tube lens) focusing a collimated beam that fills its pupil, through a 0.17 mm cover
+# glass into water, as designed: the rays meet at one point just under the glass. Change
+# the cover glass's thickness or material, or the immersion, and `focus` shows the
+# focal shift and spherical aberration of the mismatch (docs/milestones/M9-microscopy.md).
+
+[[source]]
+id = "beam"
+kind = "collimated"
+wavelength_um = 0.92
+power_w = 0.1
+diameter = 17.9
+rings = 8
+at = 0.0
+
+[[element]]
+id = "OBJ"
+kind = "objective"
+at = 100.0
+focal_length = 9.0
+na = 1.0
+pupil_distance = 45.0
+working_distance = 2.0
+immersion = 1.333
+cover_glass = { thickness = 0.17, material = 1.5255 }
+
+[[element]]
+id = "S"
+kind = "sample"
+at = 147.0
+above = 1.333                     # the immersion water
+layers = [ { thickness = 0.17, material = 1.5255 }, { thickness = 3.0, material = 1.333 } ]
+
+[[detector]]
+id = "focus"
+at = 147.27                       # 0.1 mm past the design focus
+size = [0.5, 0.5]
+pixels = [64, 64]

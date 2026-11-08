@@ -44,6 +44,27 @@
 //! # coatings = ["ideal", "uncoated"]  # instead: one per surface
 //!
 //! [[element]]
+//! id = "OBJ"
+//! kind = "objective"                # an ideal objective (optobench_trace::objective)
+//! at = 200.0                        # its pupil plane; +z (along the path) to the sample
+//! focal_length = 9.0                # f: the pupil radius is f · na
+//! na = 1.0
+//! pupil_distance = 45.0             # pupil plane to the front plane (mm)
+//! working_distance = 2.0            # design: front plane to the cover glass (or focus)
+//! immersion = "water"               # design immersion; default 1.0 (dry)
+//! cover_glass = { thickness = 0.17, material = 1.5255 }   # design; omit for none
+//! sample_medium = "water"           # design medium at the focus; default the immersion
+//!
+//! [[element]]
+//! id = "S"
+//! kind = "sample"                   # flat layers from `at` along the path
+//! at = 247.0
+//! above = "water"                   # the immersion above the first face; default the
+//!                                   # surroundings (the objective's rays go on in it)
+//! layers = [ { thickness = 0.17, material = 1.5255 }, { thickness = 5.0, material = "water" } ]
+//! below = 1.0                       # optional; default the surroundings
+//!
+//! [[element]]
 //! id = "L2"
 //! at = 150.0
 //! library = "thorlabs/LA1951-ML"    # prescription, glasses, diameter, clear aperture and
@@ -1096,6 +1117,122 @@ pub fn parse_with(text: &str, lookups: &Lookups) -> Result<Scene, FileError> {
                             lookups,
                             &item.context,
                         )?,
+                    },
+                });
+            }
+            "objective" => {
+                check_keys(
+                    item.table,
+                    &with(
+                        position,
+                        &[
+                            "id",
+                            "kind",
+                            "focal_length",
+                            "na",
+                            "pupil_distance",
+                            "working_distance",
+                            "immersion",
+                            "cover_glass",
+                            "sample_medium",
+                            "diameter",
+                            "dof",
+                        ],
+                    ),
+                    &item.context,
+                )?;
+                let material = |key: &str| -> Result<Option<Medium>, FileError> {
+                    item.table
+                        .get(key)
+                        .map(|v| medium(v, lookup, &format!("{} `{key}`", item.context)))
+                        .transpose()
+                };
+                let immersion = material("immersion")?.unwrap_or_else(|| 1.0.into());
+                let working_distance = item.positive("working_distance")?;
+                let mut design_layers = vec![optobench_trace::objective::DesignLayer {
+                    thickness: working_distance,
+                    medium: immersion.clone(),
+                }];
+                if let Some(cover) = item.table.get("cover_glass") {
+                    let table = cover.as_table().ok_or_else(|| {
+                        error(format!(
+                            "{}: `cover_glass` is {{ thickness = …, material = … }}",
+                            item.context
+                        ))
+                    })?;
+                    let context = format!("{} `cover_glass`", item.context);
+                    check_keys(table, &["thickness", "material"], &context)?;
+                    let cover = Item { table, context };
+                    design_layers.push(optobench_trace::objective::DesignLayer {
+                        thickness: cover.positive("thickness")?,
+                        medium: medium(cover.get("material")?, lookup, &cover.context)?,
+                    });
+                }
+                let design_sample = material("sample_medium")?.unwrap_or_else(|| immersion.clone());
+                let objective = optobench_trace::objective::IdealObjective {
+                    focal_length: item.positive("focal_length")?,
+                    na: item.positive("na")?,
+                    pupil_distance: item.positive("pupil_distance")?,
+                    design_layers,
+                    design_sample,
+                };
+                let diameter = item.optional_number(
+                    "diameter",
+                    (2.0 * objective.pupil_radius() * 1.5).max(20.0),
+                )?;
+                scene.elements.push(Element {
+                    id,
+                    frame: placement.frame(item)?,
+                    kind: ElementKind::Objective {
+                        objective,
+                        diameter,
+                    },
+                });
+            }
+            "sample" => {
+                check_keys(
+                    item.table,
+                    &with(
+                        position,
+                        &["id", "kind", "layers", "above", "below", "diameter", "dof"],
+                    ),
+                    &item.context,
+                )?;
+                let layers = item
+                    .get("layers")?
+                    .as_array()
+                    .ok_or_else(|| error(format!("{}: `layers` must be a list", item.context)))?
+                    .iter()
+                    .map(|l| {
+                        let table = l.as_table().ok_or_else(|| {
+                            error(format!(
+                                "{}: each layer is {{ thickness = …, material = … }}",
+                                item.context
+                            ))
+                        })?;
+                        let context = format!("{} layer", item.context);
+                        check_keys(table, &["thickness", "material"], &context)?;
+                        let layer = Item { table, context };
+                        Ok((
+                            layer.positive("thickness")?,
+                            medium(layer.get("material")?, lookup, &layer.context)?,
+                        ))
+                    })
+                    .collect::<Result<Vec<_>, FileError>>()?;
+                let material = |key: &str| -> Result<Option<Medium>, FileError> {
+                    item.table
+                        .get(key)
+                        .map(|v| medium(v, lookup, &format!("{} `{key}`", item.context)))
+                        .transpose()
+                };
+                scene.elements.push(Element {
+                    id,
+                    frame: placement.frame(item)?,
+                    kind: ElementKind::Sample {
+                        layers,
+                        above: material("above")?,
+                        below: material("below")?,
+                        diameter: item.optional_number("diameter", 50.0)?,
                     },
                 });
             }

@@ -18,11 +18,13 @@
 
 #![forbid(unsafe_code)]
 
+mod focus;
 mod pupil;
 mod spot;
 mod wavefront;
 mod zernike;
 
+pub use focus::{Crossing, Focus, focus};
 pub use pupil::{Aiming, Analysis, AnalysisError, Field, ImageRay, Pupils};
 pub use spot::{FanPoint, RayFan, SpotDiagram};
 pub use wavefront::Wavefront;
