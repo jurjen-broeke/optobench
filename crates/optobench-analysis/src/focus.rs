@@ -127,18 +127,27 @@ pub fn focus(scene: &Scene, trace: &SceneTrace, detector: usize) -> Option<Focus
     };
     let a_mean = mean(&|l| (l.point.x, l.point.y));
     let b_mean = mean(&|l| slope(l.direction));
-    let (mut ab, mut bb, mut aa) = (0.0, 0.0, 0.0);
+    let (mut ab, mut bb) = (0.0, 0.0);
     for l in &lines {
         let a = (l.point.x - a_mean.0, l.point.y - a_mean.1);
         let s = slope(l.direction);
         let b = (s.0 - b_mean.0, s.1 - b_mean.1);
         ab += l.power * (a.0 * b.0 + a.1 * b.1);
         bb += l.power * (b.0 * b.0 + b.1 * b.1);
-        aa += l.power * (a.0 * a.0 + a.1 * a.1);
     }
     let best = if bb > 0.0 { -ab / bb } else { 0.0 };
-    let best_rms = ((aa + 2.0 * ab * best + bb * best * best) / w)
-        .max(0.0)
+    // The spot there, from the deviations themselves: the expanded quadratic
+    // Σ w (a² + 2ab z + b² z²) cancels to a few 1e-9 mm in a perfect focus.
+    let best_rms = (lines
+        .iter()
+        .map(|l| {
+            let s = slope(l.direction);
+            let x = l.point.x - a_mean.0 + (s.0 - b_mean.0) * best;
+            let y = l.point.y - a_mean.1 + (s.1 - b_mean.1) * best;
+            l.power * (x * x + y * y)
+        })
+        .sum::<f64>()
+        / w)
         .sqrt();
 
     // Paraxial focus: z against h² through the rays off the axis, a line through the
