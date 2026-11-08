@@ -139,6 +139,15 @@ pub enum Role {
     },
     /// Absorbs and records clipping: mounts, tubes, plates, stops.
     Absorber,
+    /// An ideal thin lens of focal length `focal_length` (mm) in the local z = 0 plane: a
+    /// ray at local height (x, y) has its direction's slopes (taken along its own sense
+    /// of travel) changed by −(x, y) / f, exactly. Hits beyond `clear_radius` are clipped.
+    IdealLens {
+        /// Focal length (mm); negative for a diverging lens.
+        focal_length: f64,
+        /// Radius of the clear aperture (mm), or `None`.
+        clear_radius: Option<f64>,
+    },
     /// The pupil of an ideal objective (`crate::objective`): a ray arriving from the
     /// local −z side leaves from the objective's front plane into `exit_medium`, the
     /// medium in front of it; rays beyond the pupil or the wrong way are clipped.
@@ -611,6 +620,27 @@ impl NonSequentialSystem {
                     };
                     record.detector_point = Some((hit.point.x, hit.point.y));
                     return record;
+                }
+                Role::IdealLens {
+                    focal_length,
+                    clear_radius,
+                } => {
+                    if outside_clear(*clear_radius) {
+                        record.end = End::Clipped { face: face_index };
+                        return record;
+                    }
+                    let to_local = face.placement.inverse();
+                    let d = to_local.apply_vector(ray.direction);
+                    if d.z.abs() > 1e-15 {
+                        let sense = d.z.signum();
+                        let (tx, ty) = (
+                            d.x / d.z.abs() - hit.point.x / focal_length,
+                            d.y / d.z.abs() - hit.point.y / focal_length,
+                        );
+                        if let Some(new) = Vec3::new(tx, ty, sense).normalized() {
+                            ray.direction = face.placement.apply_vector(new);
+                        }
+                    }
                 }
                 Role::Objective {
                     objective,

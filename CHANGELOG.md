@@ -5,6 +5,11 @@ with the release that introduced them.
 
 ## Unreleased
 
+- M9b scanning and relays: layout element `ideal_lens` (a perfect thin lens); new command
+  `sweep` traces over a DOF's values and reports per value the detectors and each
+  source's chief ray element by element (pupil walk, scan slopes, landing point and
+  angle). The 4f galvo relay into an ideal objective matches the hand calculation to
+  1e-9.
 - M9a ideal objective and immersion: layout elements `objective` (focal length, NA,
   pupil distance, working distance, design immersion, cover glass and sample medium; the
   Abbe sine condition, rays stopped beyond f · NA) and `sample` (flat layers with the

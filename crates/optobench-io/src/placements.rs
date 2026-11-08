@@ -46,6 +46,7 @@ pub fn placements(scene: &Scene) -> Value {
                 ElementKind::Lens { .. } => "lens",
                 ElementKind::Mirror { .. } => "mirror",
                 ElementKind::Objective { .. } => "objective",
+                ElementKind::IdealLens { .. } => "ideal_lens",
                 ElementKind::Sample { .. } => "sample",
             });
             entry
@@ -168,7 +169,9 @@ pub fn sidecar(scene: &Scene, layout: &Table, step_name: &str) -> String {
             }
             ElementKind::Mirror { .. } => out.push_str("kind = \"mirror\"\nreflect = [0, 0, 1]\n"),
             // Ideal objectives and samples are not CAD bodies: they stay in the layout.
-            ElementKind::Objective { .. } | ElementKind::Sample { .. } => out.push_str(
+            ElementKind::Objective { .. }
+            | ElementKind::IdealLens { .. }
+            | ElementKind::Sample { .. } => out.push_str(
                 "# an ideal objective or a sample: not a CAD body; keep it in a layout\n",
             ),
         }

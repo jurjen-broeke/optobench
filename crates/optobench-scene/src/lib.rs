@@ -101,6 +101,13 @@ pub enum ElementKind {
         /// Clear aperture diameter (mm).
         clear_aperture: f64,
     },
+    /// An ideal thin lens (a perfect paraxial lens): the frame's origin is its plane.
+    IdealLens {
+        /// Focal length (mm); negative for a diverging lens.
+        focal_length: f64,
+        /// Diameter (mm): rays beyond it are clipped.
+        diameter: f64,
+    },
     /// An ideal microscope objective (`optobench_trace::objective`): the frame's origin
     /// is its pupil, +z towards the sample.
     Objective {
@@ -519,6 +526,35 @@ impl Scene {
                             owner,
                         });
                     }
+                }
+                ElementKind::IdealLens {
+                    focal_length,
+                    diameter,
+                } => {
+                    let id = &element.id;
+                    if !(focal_length.is_finite() && *focal_length != 0.0 && *diameter > 0.0) {
+                        return Err(invalid(format!(
+                            "ideal lens `{id}`: needs a finite, non-zero focal length and a positive diameter"
+                        )));
+                    }
+                    let flat = LensSurface {
+                        radius: f64::INFINITY,
+                        conic: 0.0,
+                    };
+                    system.faces.push(Face {
+                        shape: Shape::Profile(flat.shape()),
+                        placement: transform,
+                        region: Region::Disk {
+                            radius: diameter / 2.0 * 1.0001,
+                        },
+                        role: Role::IdealLens {
+                            focal_length: *focal_length,
+                            clear_radius: Some(diameter / 2.0),
+                        },
+                        negative_medium: air,
+                        positive_medium: air,
+                        owner,
+                    });
                 }
                 ElementKind::Objective {
                     objective,
@@ -1057,6 +1093,7 @@ impl Scene {
                         ElementKind::Lens { clear_aperture, .. }
                         | ElementKind::Mirror { clear_aperture, .. } => clear_aperture / 2.0,
                         ElementKind::Objective { objective, .. } => objective.pupil_radius(),
+                        ElementKind::IdealLens { diameter, .. } => diameter / 2.0,
                         ElementKind::Sample { diameter, .. } => diameter / 2.0,
                     };
                     let axis = e.frame.axes()[2];

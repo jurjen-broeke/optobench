@@ -47,12 +47,22 @@ interfaces (the tests use 0.05 mm).
 
 ## M9b Scanning and relays
 
-- [ ] Scan mirror: a mirror whose tilt is a DOF swept over a range
-- [ ] `sweep` command: trace over a DOF's values (positions on a detector per angle)
-- [ ] Pupil conjugation and telecentricity: chief-ray height at a pupil plane and its
-      angle at the image, per scan angle
-- [ ] Exit check: a 4f scan/tube relay with a galvo against the hand calculation
-      (scan angle to field position, pupil walk)
+- [x] Scan mirror: a mirror with a tilt DOF (for an in-plane scan in a planar layout,
+      about the scene's z axis: `frame = "scene"`, `axis = [0, 0, 1]`), turning the beam
+      by twice the angle
+- [x] `ideal_lens` element: a perfect thin lens (slopes change by −h / f exactly), for
+      relays and tube lenses checked against hand calculations
+- [x] `sweep` command: trace over a DOF's values (`values`, or `from`, `to`, `steps`):
+      per value every detector's direct power, centroid, RMS radius and pointing, and
+      each source's chief ray element by element (where it crosses each element's plane
+      and its slopes on arrival) and where it lands on its detector, at what slopes
+- [x] Pupil conjugation and telecentricity from the sweep: the chief ray's height at an
+      objective's pupil (pupil walk) and its slopes at the image
+- [x] Exit check (commands `tests/scan.rs`): a galvo through a 4f relay (f₁ = 50 mm,
+      f₂ = 200 mm) into an ideal objective, swept over ±2° in nine steps: at the scan
+      lens height f₁ tan 2α; telecentric between the lenses; no pupil walk; at the pupil
+      slope −(f₁/f₂) tan 2α; at the image f · that slope, telecentric and in sharp
+      focus; each to 1e-9
 
 ## M9c Gaussian beams and the vectorial PSF
 
