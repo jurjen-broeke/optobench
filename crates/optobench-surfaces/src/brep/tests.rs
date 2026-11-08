@@ -330,3 +330,104 @@ fn far_hits_on_an_unbounded_surface_are_not_on_the_face() {
             .is_none()
     );
 }
+
+/// The inside test as it was before the segment tree and the plane grid (M7): the nearest
+/// boundary segment by a scan in loop order, and its side.
+fn contains_by_scan(face: &BrepFace, point: Vec3, normal: Vec3) -> bool {
+    match face.nearest_by_scan(point) {
+        None => false,
+        Some((l, k, s, distance)) => face.lean(l, k, s, point, normal) > 0.0 || distance < 1e-20,
+    }
+}
+
+#[test]
+fn fast_inside_tests_agree_with_the_scan() {
+    // A flat face (a finely sampled wavy outer loop, a square hole and a round hole, in a
+    // tilted plane) and a curved one (a cylinder band): random points on each, and points
+    // on and next to their edges.
+    let mut seed = 99u64;
+    let mut random = || {
+        seed = seed
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
+        (seed >> 11) as f64 / (1u64 << 53) as f64
+    };
+    let plane = Frame::new(
+        Vec3::new(3.0, -2.0, 7.0),
+        Vec3::new(0.2, -0.3, 1.0),
+        Vec3::X,
+    )
+    .expect("frame");
+    let on_plane = |x: f64, y: f64| plane.to_parent_point(Vec3::new(x, y, 0.0));
+    let outer: Vec<Vec3> = (0..1500)
+        .map(|i| {
+            let a = core::f64::consts::TAU * i as f64 / 1500.0;
+            let r = 20.0 + (9.0 * a).sin();
+            on_plane(r * a.cos(), r * a.sin())
+        })
+        .collect();
+    // Holes run clockwise (the face on their left).
+    let square = vec![
+        on_plane(-5.0, -5.0),
+        on_plane(-5.0, 1.0),
+        on_plane(1.0, 1.0),
+        on_plane(1.0, -5.0),
+    ];
+    let round: Vec<Vec3> = (0..200)
+        .map(|i| {
+            let a = -core::f64::consts::TAU * i as f64 / 200.0;
+            on_plane(8.0 + 3.0 * a.cos(), 6.0 + 3.0 * a.sin())
+        })
+        .collect();
+    let flat = BrepFace::new(FaceSurface::Plane(plane), false, vec![outer, square, round]);
+    assert!(flat.plane_grid.is_some());
+    let normal = plane.axes()[2];
+    let mut points: Vec<Vec3> = (0..6000)
+        .map(|_| on_plane(50.0 * random() - 25.0, 50.0 * random() - 25.0))
+        .collect();
+    for l in &flat.loops {
+        for (k, &p) in l.iter().enumerate().step_by(7) {
+            let q = l[(k + 1) % l.len()];
+            points.push(p);
+            points.push(p + (q - p) * 0.5);
+            points.push(p + (q - p) * 0.5 + plane.axes()[0] * 2e-6);
+            points.push(p + (q - p) * 0.5 - plane.axes()[1] * 3e-7);
+        }
+    }
+    for p in &points {
+        assert_eq!(
+            flat.contains(*p, normal),
+            contains_by_scan(&flat, *p, normal),
+            "flat at {p:?}"
+        );
+    }
+    // A cylinder band (r 5, z 0 to 10) cut by a wavy top edge: the segment tree path.
+    let cylinder = FaceSurface::Cylinder {
+        frame: Frame::PARENT,
+        radius: 5.0,
+    };
+    let bottom: Vec<Vec3> = (0..400)
+        .map(|i| {
+            let a = core::f64::consts::TAU * i as f64 / 400.0;
+            Vec3::new(5.0 * a.cos(), 5.0 * a.sin(), 0.0)
+        })
+        .collect();
+    let top: Vec<Vec3> = (0..400)
+        .map(|i| {
+            let a = -core::f64::consts::TAU * i as f64 / 400.0;
+            Vec3::new(5.0 * a.cos(), 5.0 * a.sin(), 8.0 + (5.0 * a).sin())
+        })
+        .collect();
+    let band = BrepFace::new(cylinder, false, vec![bottom, top]);
+    assert!(band.plane_grid.is_none());
+    for _ in 0..5000 {
+        let (a, z) = (core::f64::consts::TAU * random(), 12.0 * random() - 1.0);
+        let p = Vec3::new(5.0 * a.cos(), 5.0 * a.sin(), z);
+        let n = Vec3::new(a.cos(), a.sin(), 0.0);
+        assert_eq!(
+            band.contains(p, n),
+            contains_by_scan(&band, p, n),
+            "band at {p:?}"
+        );
+    }
+}

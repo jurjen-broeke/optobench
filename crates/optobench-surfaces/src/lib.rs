@@ -21,6 +21,7 @@
 #![forbid(unsafe_code)]
 
 pub mod brep;
+mod segments;
 
 use optobench_math::{Vec3, find_root};
 

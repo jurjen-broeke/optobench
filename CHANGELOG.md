@@ -5,6 +5,12 @@ with the release that introduced them.
 
 ## Unreleased
 
+- M7a performance: the inside test of trimmed faces (91 % of trace time) now uses a
+  bounding-volume tree of boundary segments, and on flat faces a row grid with crossing
+  counts (the exact test still decides next to edges); faces skip surface hits beyond the
+  nearest hit found so far. The Thorlabs beam-expander periscope traces in 0.40 s instead
+  of 3.4 s and optimises in 50 s instead of about 25 minutes, with unchanged results.
+  `examples/trace_timing` times a design. Design decisions for the interface recorded.
 - Roadmap: two milestones after M6, M7 Performance (converted-face cache, parallel rays,
   faster B-spline seeding, fewer traces per optimiser step; exit: the Thorlabs
   beam-expander periscope optimised in under 2 minutes) and M8 Interface (a stand-alone
