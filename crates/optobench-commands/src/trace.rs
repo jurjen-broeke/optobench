@@ -408,6 +408,7 @@ pub(crate) fn view(parameters: &Parameters) -> Result<Value, CommandError> {
                         ElementKind::Lens { .. } => "lens",
                         ElementKind::Mirror { .. } => "mirror",
                         ElementKind::Objective { .. } => "objective",
+                        ElementKind::IdealLens { .. } => "lens",
                         ElementKind::Sample { .. } => "sample",
                     };
                     ("element", e.id.clone(), None, role)

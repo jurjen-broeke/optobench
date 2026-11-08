@@ -44,6 +44,13 @@
 //! # coatings = ["ideal", "uncoated"]  # instead: one per surface
 //!
 //! [[element]]
+//! id = "SL"
+//! kind = "ideal_lens"               # a perfect thin lens: slopes change by −h / f
+//! at = 100.0
+//! focal_length = 50.0               # negative for a diverging lens
+//! diameter = 25.4                   # optional; rays beyond it are clipped
+//!
+//! [[element]]
 //! id = "OBJ"
 //! kind = "objective"                # an ideal objective (optobench_trace::objective)
 //! at = 200.0                        # its pupil plane; +z (along the path) to the sample
@@ -1117,6 +1124,21 @@ pub fn parse_with(text: &str, lookups: &Lookups) -> Result<Scene, FileError> {
                             lookups,
                             &item.context,
                         )?,
+                    },
+                });
+            }
+            "ideal_lens" => {
+                check_keys(
+                    item.table,
+                    &with(position, &["id", "kind", "focal_length", "diameter", "dof"]),
+                    &item.context,
+                )?;
+                scene.elements.push(Element {
+                    id,
+                    frame: placement.frame(item)?,
+                    kind: ElementKind::IdealLens {
+                        focal_length: item.number("focal_length")?,
+                        diameter: item.optional_number("diameter", 25.4)?,
                     },
                 });
             }

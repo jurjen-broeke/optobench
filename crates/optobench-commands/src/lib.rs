@@ -21,6 +21,7 @@ mod materials;
 mod moves;
 mod optimize;
 mod parts;
+mod sweep;
 mod trace;
 
 use serde_json::{Map, Value, json};
@@ -234,6 +235,14 @@ const STANDARD: &[Command] = &[
         effect: Effect::Read,
         summary: "where the light reaching a detector focuses: axial crossings by ray height, paraxial, marginal and best focus",
         handler: trace::focus,
+    },
+    Command {
+        id: "sweep",
+        label: "Sweep",
+        icon: "sweep",
+        effect: Effect::Read,
+        summary: "trace over a degree of freedom's values (a scan mirror's angle): detectors and the chief ray's path per value",
+        handler: sweep::sweep,
     },
     Command {
         id: "edit",

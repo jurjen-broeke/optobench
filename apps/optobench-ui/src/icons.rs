@@ -524,6 +524,26 @@ pub fn draw(painter: &Painter, rect: Rect, id: &str, enabled: bool) {
             }
             c.dot(pos2(32.0, 32.0), 5.5, r.beam);
         }
+        "sweep" => {
+            // A mirror turning, and the fan of beams it sends.
+            let hit = pos2(20.0, 44.0);
+            for (end, width) in [
+                (pos2(58.0, 14.0), 2.4),
+                (pos2(60.0, 28.0), ACTION),
+                (pos2(58.0, 42.0), 2.4),
+            ] {
+                c.line(&[hit, end], width, r.beam);
+            }
+            let arc = c.arc(hit, 16.0, -62.0, -8.0);
+            c.line(&arc, 2.4, r.a3);
+            let mirror = [
+                pos2(8.0, 56.0),
+                pos2(13.0, 61.0),
+                pos2(33.0, 33.0),
+                pos2(28.0, 28.0),
+            ];
+            c.face(&mirror, r.p1);
+        }
         "focus" => {
             // Rays converging to a point on the axis, through a lens.
             let iso = Iso::at(0.75, 24.0, 32.0);
@@ -731,6 +751,7 @@ pub const ALL: &[&str] = &[
     "trace",
     "optimise",
     "focus",
+    "sweep",
     "check-moves",
     "bodies",
     "tag-lens",
