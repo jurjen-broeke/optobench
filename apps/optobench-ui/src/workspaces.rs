@@ -34,6 +34,26 @@ pub enum Action {
     Isometric,
     /// Show or hide the traced rays.
     Rays,
+    /// Start a new layout at the path typed in the title bar.
+    New,
+    /// Put the file back as it was before the last edit.
+    Undo,
+    /// Take the selected entry out of the design.
+    Remove,
+    /// Add a lens to a layout.
+    AddLens,
+    /// Add a mirror to a layout.
+    AddMirror,
+    /// Add a source to a layout.
+    AddSource,
+    /// Add a detector to a layout.
+    AddDetector,
+    /// Tag the selected CAD body as a lens.
+    TagLens,
+    /// Tag the selected CAD body as a mirror reflecting on the face clicked.
+    TagMirror,
+    /// Write the last optimisation's suggested values into the design.
+    Apply,
 }
 
 impl Action {
@@ -48,6 +68,39 @@ impl Action {
             Action::Right => "Right",
             Action::Isometric => "Isometric",
             Action::Rays => "Rays",
+            Action::New => "New",
+            Action::Undo => "Undo",
+            Action::Remove => "Remove",
+            Action::AddLens => "Lens",
+            Action::AddMirror => "Mirror",
+            Action::AddSource => "Source",
+            Action::AddDetector => "Detector",
+            Action::TagLens => "Tag Lens",
+            Action::TagMirror => "Tag Mirror",
+            Action::Apply => "Apply",
+        }
+    }
+
+    /// What it does, for its tooltip.
+    pub fn summary(self) -> &'static str {
+        match self {
+            Action::Open => "open the design typed in the title bar",
+            Action::Reload => "read the design again from disk",
+            Action::Fit => "fit the scene to the view",
+            Action::Top | Action::Front | Action::Right | Action::Isometric => "a standard view",
+            Action::Rays => "show or hide the traced rays",
+            Action::New => "start a new planar layout at the path typed in the title bar",
+            Action::Undo => "put the file back as it was before the last change",
+            Action::Remove => "take the selected item out of the design",
+            Action::AddLens => "add a biconvex singlet after the last item",
+            Action::AddMirror => "add a flat mirror after the last item",
+            Action::AddSource => "add a collimated beam",
+            Action::AddDetector => "add a screen after the last item",
+            Action::TagLens => "make the selected CAD body a lens (glass, n = 1.5 to start)",
+            Action::TagMirror => {
+                "make the selected CAD body a mirror reflecting on the face you clicked"
+            }
+            Action::Apply => "write the optimised values into the design's degrees of freedom",
         }
     }
 }
@@ -152,6 +205,28 @@ const FILE_SECTION: Section = Section {
     items: &[
         button(Control::Action(Action::Open)),
         button(Control::Action(Action::Reload)),
+        button(Control::Action(Action::Undo)),
+    ],
+};
+
+const LAYOUT_FILE_SECTION: Section = Section {
+    name: "FILE",
+    items: &[
+        button(Control::Action(Action::New)),
+        button(Control::Action(Action::Open)),
+        button(Control::Action(Action::Undo)),
+        menu(Control::Action(Action::Reload)),
+    ],
+};
+
+const ADD_SECTION: Section = Section {
+    name: "ADD",
+    items: &[
+        button(Control::Action(Action::AddLens)),
+        button(Control::Action(Action::AddMirror)),
+        button(Control::Action(Action::AddSource)),
+        button(Control::Action(Action::AddDetector)),
+        menu(Control::Action(Action::Remove)),
     ],
 };
 
@@ -179,6 +254,14 @@ pub const WORKSPACES: [Workspace; 3] = [
                 sections: &[
                     FILE_SECTION,
                     Section {
+                        name: "TAG",
+                        items: &[
+                            button(Control::Action(Action::TagLens)),
+                            button(Control::Action(Action::TagMirror)),
+                            menu(Control::Action(Action::Remove)),
+                        ],
+                    },
+                    Section {
                         name: "INSPECT",
                         items: &[button(command("bodies")), button(command("trace"))],
                     },
@@ -190,7 +273,11 @@ pub const WORKSPACES: [Workspace; 3] = [
                 sections: &[
                     Section {
                         name: "ALIGN",
-                        items: &[button(command("optimize")), button(command("check-moves"))],
+                        items: &[
+                            button(command("optimize")),
+                            button(Control::Action(Action::Apply)),
+                            button(command("check-moves")),
+                        ],
                     },
                     Section {
                         name: "SHARE",
@@ -212,10 +299,15 @@ pub const WORKSPACES: [Workspace; 3] = [
             Tab {
                 name: "Layout",
                 sections: &[
-                    FILE_SECTION,
+                    LAYOUT_FILE_SECTION,
+                    ADD_SECTION,
                     Section {
                         name: "TRACE",
-                        items: &[button(command("trace")), button(command("optimize"))],
+                        items: &[
+                            button(command("trace")),
+                            button(command("optimize")),
+                            button(Control::Action(Action::Apply)),
+                        ],
                     },
                     Section {
                         name: "OUTPUT",
@@ -259,6 +351,8 @@ pub const WORKSPACES: [Workspace; 3] = [
             primary: command("trace"),
             tools: &[
                 button(command("optimize")),
+                button(Control::Action(Action::Apply)),
+                button(Control::Action(Action::Undo)),
                 button(Control::Action(Action::Rays)),
                 button(Control::Action(Action::Fit)),
             ],

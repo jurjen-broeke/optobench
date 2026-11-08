@@ -24,6 +24,17 @@ pub struct Item {
     pub lines: Vec<Vec<V3>>,
     /// Triangles for the shaded view, if `view` gave them.
     pub mesh: Option<Mesh>,
+    /// For a CAD body, its own x, y and z axes in the scene frame.
+    pub body_axes: Option<[V3; 3]>,
+}
+
+/// Where a line of sight met an item.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Hit {
+    /// Distance along the line (mm).
+    pub distance: f64,
+    /// The unit normal of the triangle met, facing the viewer.
+    pub normal: V3,
 }
 
 /// An item's triangles, ready for the GPU.
@@ -84,8 +95,8 @@ impl Mesh {
     }
 
     /// The nearest hit of a ray (origin, unit direction) on a triangle at a point `keep`
-    /// accepts, as the distance along it (Möller–Trumbore).
-    pub fn hit(&self, origin: V3, direction: V3, keep: &dyn Fn(V3) -> bool) -> Option<f64> {
+    /// accepts (Möller–Trumbore).
+    pub fn hit(&self, origin: V3, direction: V3, keep: &dyn Fn(V3) -> bool) -> Option<Hit> {
         let (low, high) = self.bounds;
         // Slab test on the box first.
         let (mut t0, mut t1) = (f64::NEG_INFINITY, f64::INFINITY);
@@ -117,7 +128,7 @@ impl Mesh {
             ]
         };
         let dot = |a: V3, b: V3| a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
-        let mut best: Option<f64> = None;
+        let mut best: Option<Hit> = None;
         for t in self.triangles.chunks_exact(3) {
             let (a, b, c) = (at(t[0]), at(t[1]), at(t[2]));
             let (e1, e2) = (sub(b, a), sub(c, a));
@@ -138,8 +149,14 @@ impl Mesh {
             }
             let distance = dot(e2, q) / det;
             let point = [0, 1, 2].map(|k| origin[k] + direction[k] * distance);
-            if distance > 0.0 && best.is_none_or(|b| distance < b) && keep(point) {
-                best = Some(distance);
+            if distance > 0.0 && best.is_none_or(|b| distance < b.distance) && keep(point) {
+                let n = cross(e1, e2);
+                let length = dot(n, n).sqrt().max(1e-300);
+                let facing = if dot(n, direction) > 0.0 { -1.0 } else { 1.0 };
+                best = Some(Hit {
+                    distance,
+                    normal: n.map(|c| facing * c / length),
+                });
             }
         }
         best
@@ -168,6 +185,8 @@ pub struct Scene {
     pub bounds: Option<(V3, V3)>,
     /// The degrees of freedom, as `view` and `trace` report them.
     pub dofs: Vec<Value>,
+    /// The file's entries as written (`view`'s `design`), for the editors.
+    pub design: Value,
 }
 
 /// A traced ray's path.
@@ -229,6 +248,9 @@ impl Scene {
                     })
                     .unwrap_or_default(),
                 mesh: item.get("mesh").and_then(Mesh::from_json),
+                body_axes: item["body_axes"]
+                    .as_array()
+                    .and_then(|a| Some([v3(a.first()?)?, v3(a.get(1)?)?, v3(a.get(2)?)?])),
             })
             .collect();
         let sources = value["sources"]
@@ -253,6 +275,7 @@ impl Scene {
             sources,
             bounds,
             dofs: value["dofs"].as_array().cloned().unwrap_or_default(),
+            design: value["design"].clone(),
         })
     }
 
@@ -321,6 +344,23 @@ pub struct Message {
     pub text: String,
 }
 
+/// One trace, for comparing runs.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Run {
+    /// 1, 2, …
+    pub number: usize,
+    /// What changed before it, in words (the last edit or optimisation).
+    pub after: String,
+    /// Detected over launched power.
+    pub detected: f64,
+    /// Per detector: id, direct centroid (mm), direct RMS radius (mm), direct RMS slope
+    /// spread (mrad).
+    pub detectors: Vec<(String, [f64; 2], f64, f64)>,
+}
+
+/// A function that asks for a repaint.
+pub type Repaint = std::sync::Arc<dyn Fn() + Send + Sync>;
+
 /// The open design.
 pub struct Document {
     /// Its file.
@@ -341,6 +381,16 @@ pub struct Document {
     pub running: Vec<String>,
     /// Messages, newest last.
     pub messages: Vec<Message>,
+    /// The file's earlier texts, newest last, for undoing edits.
+    pub undo: Vec<String>,
+    /// The traces so far.
+    pub runs: Vec<Run>,
+    /// The last optimisation's result, until applied or replaced.
+    pub optimised: Option<Value>,
+    /// What the next run follows (for the runs strip).
+    changed: String,
+    undoing: bool,
+    repaint: Repaint,
     sender: Sender<Finished>,
     receiver: Receiver<Finished>,
 }
@@ -350,11 +400,7 @@ pub const RAYS_DRAWN: u64 = 400;
 
 impl Document {
     /// Opens a design: reads its scene in the background.
-    pub fn open(
-        path: PathBuf,
-        data_directory: Option<PathBuf>,
-        repaint: impl Fn() + Send + Clone + 'static,
-    ) -> Self {
+    pub fn open(path: PathBuf, data_directory: Option<PathBuf>, repaint: Repaint) -> Self {
         let (sender, receiver) = channel();
         let mut doc = Self {
             path,
@@ -366,10 +412,16 @@ impl Document {
             output: None,
             running: Vec::new(),
             messages: Vec::new(),
+            undo: Vec::new(),
+            runs: Vec::new(),
+            optimised: None,
+            changed: "opened".into(),
+            undoing: false,
+            repaint,
             sender,
             receiver,
         };
-        doc.run("view", json!({}), repaint);
+        doc.start("view", json!({}));
         doc
     }
 
@@ -388,6 +440,7 @@ impl Document {
         let uses_data = matches!(
             command,
             "view"
+                | "edit"
                 | "trace"
                 | "optimize"
                 | "embed"
@@ -434,6 +487,7 @@ impl Document {
                 }
             }
             "parts" | "curves" | "materials" => Ok(json!({})),
+            "edit" => Ok(json!({ "path": path })),
             "import-part" | "import-curve" | "import-material" => {
                 Err("drop the file on the window to import it (coming with M8c)".into())
             }
@@ -442,6 +496,51 @@ impl Document {
     }
 
     /// Runs a command in the background with `extra` parameters added to the design's.
+    pub fn start(&mut self, command: &str, extra: Value) {
+        let repaint = self.repaint.clone();
+        self.run(command, extra, move || repaint());
+    }
+
+    /// Changes the file (`edit` operations); the scene is read again when it is written,
+    /// and traced again if it was traced. `what` says what changed, for the runs strip.
+    pub fn edit(&mut self, operations: Vec<Value>, what: impl Into<String>) {
+        if operations.is_empty() {
+            return;
+        }
+        self.changed = what.into();
+        self.start("edit", json!({ "operations": operations }));
+    }
+
+    /// Puts back the file as it was before the last edit.
+    pub fn undo(&mut self) {
+        if let Some(text) = self.undo.pop() {
+            self.undoing = true;
+            self.changed = "undo".into();
+            self.start(
+                "edit",
+                json!({ "operations": [{ "op": "replace", "text": text }] }),
+            );
+        }
+    }
+
+    /// Writes the last optimisation's suggested values into the file's DOFs.
+    pub fn apply_optimised(&mut self) {
+        let Some(result) = self.optimised.take() else {
+            return;
+        };
+        let operations: Vec<Value> = result["dofs"]
+            .as_array()
+            .map(|dofs| {
+                dofs.iter()
+                    .map(|d| json!({ "op": "set", "dof": d["name"], "key": "value", "value": d["suggested"] }))
+                    .collect()
+            })
+            .unwrap_or_default();
+        self.edit(operations, "optimised values applied");
+    }
+
+    /// Runs a command in the background with `extra` parameters added to the design's;
+    /// `repaint` is called when it is done.
     pub fn run(&mut self, command: &str, extra: Value, repaint: impl Fn() + Send + 'static) {
         let parameters = match self.parameters(command) {
             Ok(mut p) => {
@@ -505,6 +604,33 @@ impl Document {
                     text: e,
                 }),
             },
+            ("edit", Ok(value)) => {
+                if let (false, Some(previous)) = (self.undoing, value["previous"].as_str()) {
+                    self.undo.push(previous.to_owned());
+                }
+                self.undoing = false;
+                self.messages.push(Message {
+                    error: false,
+                    text: format!("Saved: {}", self.changed),
+                });
+                self.start("view", json!({}));
+                if self.trace.is_some() {
+                    self.start("trace", json!({}));
+                }
+            }
+            ("optimize", Ok(value)) => {
+                let cost = |k: &str| value["cost"][k].as_f64().unwrap_or(f64::NAN);
+                self.messages.push(Message {
+                    error: false,
+                    text: format!(
+                        "Optimised: merit {:.3e} → {:.3e}; Apply writes the values",
+                        cost("start"),
+                        cost("end")
+                    ),
+                });
+                self.output = Some(("optimize".into(), value.clone()));
+                self.optimised = Some(value);
+            }
             ("trace", Ok(value)) => {
                 let detected = value["ledger"]["detected_w"].as_f64().unwrap_or(0.0);
                 let launched = value["ledger"]["launched_w"].as_f64().unwrap_or(0.0);
@@ -523,6 +649,35 @@ impl Document {
                 if let Some(scene) = &mut self.scene {
                     scene.dofs = value["dofs"].as_array().cloned().unwrap_or_default();
                 }
+                self.runs.push(Run {
+                    number: self.runs.len() + 1,
+                    after: std::mem::take(&mut self.changed),
+                    detected: if launched > 0.0 {
+                        detected / launched
+                    } else {
+                        0.0
+                    },
+                    detectors: value["detectors"]
+                        .as_array()
+                        .map(|list| {
+                            list.iter()
+                                .map(|d| {
+                                    let n = |k: &str| d[k].as_f64().unwrap_or(f64::NAN);
+                                    let c = &d["direct_centroid_mm"];
+                                    (
+                                        d["id"].as_str().unwrap_or("?").to_owned(),
+                                        [
+                                            c[0].as_f64().unwrap_or(f64::NAN),
+                                            c[1].as_f64().unwrap_or(f64::NAN),
+                                        ],
+                                        n("direct_rms_radius_mm"),
+                                        n("direct_rms_slope_mrad"),
+                                    )
+                                })
+                                .collect()
+                        })
+                        .unwrap_or_default(),
+                });
                 self.trace = Some(Trace::from_json(value));
                 self.trace_version += 1;
             }
@@ -588,7 +743,8 @@ mod tests {
         let above = [centre[0], centre[1], hi[2] as f64 + 100.0];
         let hit = lens
             .hit(above, [0.0, 0.0, -1.0], &|_| true)
-            .expect("meets L2");
+            .expect("meets L2")
+            .distance;
         assert!(
             hit > 100.0 - 1e-6 && hit < 100.0 + (hi[2] - lo[2]) as f64 + 1e-6,
             "{hit}"
@@ -625,6 +781,103 @@ mod tests {
         );
     }
 
+    /// Waits until the document's background commands are done.
+    fn settle(doc: &mut Document) {
+        for _ in 0..600 {
+            doc.poll();
+            if doc.running.is_empty() {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        panic!("commands still running: {:?}", doc.running);
+    }
+
+    #[test]
+    fn an_edit_is_written_read_again_and_undone() {
+        let dir = std::env::temp_dir().join(format!("optobench-ui-edit-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("scratch");
+        let path = dir.join("periscope.optobench");
+        std::fs::copy(
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/table-periscope.optobench"),
+            &path,
+        )
+        .expect("copied");
+        let original = std::fs::read_to_string(&path).expect("read");
+        let mut doc = Document::open(path.clone(), Some(dir.clone()), std::sync::Arc::new(|| {}));
+        settle(&mut doc);
+        let version = doc.scene_version;
+        doc.edit(
+            vec![json!({ "op": "set", "table": "element", "id": "M2", "key": "height", "value": 160.0 })],
+            "M2 height",
+        );
+        settle(&mut doc);
+        assert!(
+            std::fs::read_to_string(&path)
+                .expect("read")
+                .contains("height = 160.0")
+        );
+        assert!(doc.scene_version > version, "the scene was read again");
+        let m2 = doc.scene.as_ref().expect("scene").design["element"][1].clone();
+        assert_eq!(m2["height"], 160.0);
+        assert_eq!(doc.undo.len(), 1);
+        // A refused edit leaves the file and says why.
+        doc.edit(
+            vec![json!({ "op": "set", "table": "element", "id": "M2", "key": "kind", "value": "banana" })],
+            "bad",
+        );
+        settle(&mut doc);
+        assert!(doc.messages.last().expect("a message").error);
+        assert_eq!(doc.undo.len(), 1);
+        doc.undo();
+        settle(&mut doc);
+        assert_eq!(std::fs::read_to_string(&path).expect("read"), original);
+        assert!(doc.undo.is_empty());
+    }
+
+    #[test]
+    fn a_cad_body_is_untagged_and_tagged_again_as_a_mirror() {
+        let dir = std::env::temp_dir().join(format!("optobench-ui-tag-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("scratch");
+        for name in ["periscope.optobench", "periscope.step"] {
+            std::fs::copy(fixtures().join(name), dir.join(name)).expect("copied");
+        }
+        let path = dir.join("periscope.optobench");
+        let mut doc = Document::open(path.clone(), Some(dir.clone()), std::sync::Arc::new(|| {}));
+        settle(&mut doc);
+        doc.edit(
+            vec![json!({ "op": "remove", "table": "element", "id": "M2" })],
+            "untag",
+        );
+        settle(&mut doc);
+        doc.start("trace", json!({}));
+        settle(&mut doc);
+        let detected = |doc: &Document| {
+            let r = &doc.trace.as_ref().expect("traced").report["ledger"];
+            r["detected_w"].as_f64().unwrap_or(0.0) / r["launched_w"].as_f64().unwrap_or(1.0)
+        };
+        assert!(
+            detected(&doc) < 0.5,
+            "without M2 the light misses the screen"
+        );
+        // M2's body is now an untagged body; click its reflecting face (its own +z).
+        let scene = doc.scene.as_ref().expect("scene");
+        let body = scene
+            .items
+            .iter()
+            .find(|i| i.occurrence.as_deref() == Some("mirror:2"))
+            .expect("the body");
+        assert_eq!(body.role, "absorber");
+        let axes = body.body_axes.expect("its frame");
+        let op =
+            crate::editors::tag(&scene.design, &body.id, Some((axes[2], axes))).expect("a tag");
+        doc.edit(vec![op], "tag mirror");
+        settle(&mut doc);
+        let text = std::fs::read_to_string(&path).expect("read");
+        assert!(text.contains("reflect = [0.0, 0.0, 1.0]"), "{text}");
+        assert!((detected(&doc) - 1.0).abs() < 1e-9, "{}", detected(&doc));
+    }
+
     #[test]
     fn buttons_say_why_they_cannot_run() {
         let (sender, receiver) = channel();
@@ -638,6 +891,12 @@ mod tests {
             output: None,
             running: Vec::new(),
             messages: Vec::new(),
+            undo: Vec::new(),
+            runs: Vec::new(),
+            optimised: None,
+            changed: String::new(),
+            undoing: false,
+            repaint: std::sync::Arc::new(|| {}),
             sender,
             receiver,
         };

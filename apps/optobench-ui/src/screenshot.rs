@@ -1,8 +1,9 @@
 //! Screenshots of the window for checking and documenting the interface without a person
 //! at the screen: with `OPTOBENCH_UI_SCREENSHOT=<file.bmp>` the app waits until the open
 //! design is read (and traced, with `OPTOBENCH_UI_TRACE=1`), saves the window as a 24-bit
-//! BMP and exits. `OPTOBENCH_UI_WORKSPACE` (0, 1, 2) and `OPTOBENCH_UI_SELECT` (an item
-//! id) set the workspace and the selection first; `OPTOBENCH_UI_VIEW` (top, front, right,
+//! BMP and exits. `OPTOBENCH_UI_WORKSPACE` (0, 1, 2), `OPTOBENCH_UI_STAGE` (Simulate's
+//! stage, 0 to 3) and `OPTOBENCH_UI_SELECT` (an item id) set the workspace and the
+//! selection first; `OPTOBENCH_UI_VIEW` (top, front, right,
 //! iso), `OPTOBENCH_UI_PERSPECTIVE=1`, `OPTOBENCH_UI_ZOOM` (the view's height in sizes of
 //! the selected item, or of the scene, centred on it) and `OPTOBENCH_UI_SECTION` (x, y or
 //! z: a cut through its centre) set the view.

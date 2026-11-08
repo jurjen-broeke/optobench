@@ -8,6 +8,7 @@
 mod app;
 mod camera;
 mod document;
+mod editors;
 mod render;
 mod screenshot;
 mod theme;

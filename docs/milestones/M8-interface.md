@@ -83,12 +83,24 @@ hits where there is no face. The tessellation no longer depends on it.
 
 ### M8c2 Editors in the interface
 
-- [ ] Layout tools: add, place, move and rotate elements, sources, detectors; edit their
-      properties; undo
-- [ ] Simulate stepper: per-stage editors (sources, optics, detectors and merit), Ready
-      to trace from the design's checks, a strip of runs to compare
-- [ ] CAD: tag bodies as elements, add DOFs, optimise, apply and show the move report
-- [ ] Import by dropping files on the window
+- [x] `view` returns the file's entries as written (`design`) and each CAD body's own
+      axes; editors for every key (numbers, vectors, words with their choices, text,
+      anything else as JSON), committed when typing or dragging ends, through `edit`;
+      the scene is read and traced again after each change
+- [x] Layout tools: New, Undo, Remove, and add lens, mirror, source or detector after
+      the last item (planar: 50 mm further; table: two holes further); place, move and
+      rotate by their keys (`at`, `fold`, `hole`, `height`, `axis`)
+- [x] Degrees of freedom on each entry: value within its range, add slide or tilt along
+      the scene's axes, remove
+- [x] Simulate stepper: editors per stage (sources; optics; detectors and merit terms,
+      add a term by kind); a runs strip comparing each trace with what changed before it
+- [x] CAD: Tag Lens, and Tag Mirror on the face clicked (its normal in the body's own
+      frame becomes `reflect`); Untag; Optimise, then Apply writes the suggested values
+- [x] Dropped files: designs open; parts, curve tables (xlsx, csv, txt, zip) are
+      imported; a material's licence notice is shown to accept before importing
+- [x] Checks: an edit written, read again, refused when it breaks the design, undone;
+      the golden periscope's M2 untagged (the light misses) and tagged again by its face
+      (all of it arrives); new entries get free ids and places after the rest
 
 ### M8c3 Icons and the exit test
 
