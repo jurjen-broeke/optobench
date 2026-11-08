@@ -47,12 +47,21 @@ fn term_json(merit: &Merit, start: &[f64], end: &[f64]) -> Value {
 
 /// `optimize`: parameters `path` (a layout or sidecar with DOFs); optionally `merit`
 /// (in place of the file's `[[merit]]`), `dofs` (start values, mm or degrees),
-/// `max_iterations` (default 100) and `data_directory`. Returns each free DOF's start
-/// and suggested value and every merit term before and after. Writes nothing.
+/// `max_iterations` (default 100), `report` (true: write the move report next to the
+/// design as `<design>.moves.json` and `.moves.md`; or a path stem) and `data_directory`.
+/// Returns each free DOF's start and suggested value and every merit term before and
+/// after.
 pub(crate) fn optimize(parameters: &Parameters) -> Result<Value, CommandError> {
     check_keys(
         parameters,
-        &["path", "merit", "dofs", "max_iterations", "data_directory"],
+        &[
+            "path",
+            "merit",
+            "dofs",
+            "max_iterations",
+            "report",
+            "data_directory",
+        ],
     )?;
     let path = parameters
         .get("path")
@@ -101,13 +110,30 @@ pub(crate) fn optimize(parameters: &Parameters) -> Result<Value, CommandError> {
             })
         })
         .collect();
+    let terms: Vec<Value> = merit
+        .iter()
+        .zip(&result.terms)
+        .map(|(m, (a, b))| term_json(m, a, b))
+        .collect();
+    let mut written = Value::Null;
+    if let Some(parameter) = parameters.get("report") {
+        if let Some((json_path, md_path)) =
+            crate::moves::report_paths(std::path::Path::new(path), parameter)?
+        {
+            let (report, markdown) =
+                crate::moves::report(&scene, &result, &dofs, &terms, std::path::Path::new(path))?;
+            let text = serde_json::to_string_pretty(&report).map_err(|e| failed(e.to_string()))?;
+            std::fs::write(&json_path, text)
+                .map_err(|e| failed(format!("{}: {e}", json_path.display())))?;
+            std::fs::write(&md_path, markdown)
+                .map_err(|e| failed(format!("{}: {e}", md_path.display())))?;
+            written = json!({ "json": json_path.to_string_lossy(), "markdown": md_path.to_string_lossy() });
+        }
+    }
     Ok(json!({
         "dofs": dofs,
-        "merit": merit
-            .iter()
-            .zip(&result.terms)
-            .map(|(m, (a, b))| term_json(m, a, b))
-            .collect::<Vec<_>>(),
+        "merit": terms,
+        "report": written,
         "cost": { "start": result.outcome.start_cost, "end": result.outcome.cost },
         "converged": result.outcome.converged,
         "iterations": result.outcome.iterations,

@@ -17,6 +17,7 @@
 
 mod embed;
 mod materials;
+mod moves;
 mod optimize;
 mod parts;
 mod trace;
@@ -160,6 +161,11 @@ const STANDARD: &[Command] = &[
         id: "optimize",
         summary: "the DOF values that best meet a design's merit (focus, centring, pointing, collimation, power)",
         handler: optimize::optimize,
+    },
+    Command {
+        id: "check-moves",
+        summary: "after a move report's moves are made in CAD and exported again: is every part where it should be",
+        handler: moves::check_moves,
     },
 ];
 
