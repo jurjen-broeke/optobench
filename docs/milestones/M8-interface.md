@@ -68,10 +68,31 @@ hits where there is no face. The tessellation no longer depends on it.
 
 ## M8c Workspaces at work
 
-- [ ] Layout tools: place, move and rotate elements, edit their properties, save
-- [ ] Simulate stepper: per-stage editors (sources, optics, detectors and merit), Ready to
-      trace from the design's checks, a strip of runs to compare
-- [ ] CAD: tag bodies as elements, add DOFs, optimise and show the move report
-- [ ] optobench's own icon set in SolidCraft's design language
+### M8c1 Editing through the registry
+
+- [x] `optobench_io::edit`: edits that keep a file's comments and layout (`toml_edit`):
+      `set` and `unset` a key of an entry (by table and id, `[[merit]]` by index, or a
+      degree of freedom by name), `add` and `remove` entries, `add_dof` and `remove_dof`,
+      `replace` the whole text; `[resolved]` stays last; new planar or table layouts
+- [x] `edit` command: writes only when the result still reads as a scene with the
+      user's data (a sidecar is read with its STEP file), through a temporary file;
+      returns the previous text for undoing; `dry_run`; `create` for a new layout
+- [x] Checks: an edit written and undone; breaking edits refused with the file
+      untouched; a layout built from nothing and traced; the optimiser's suggestions
+      written back as DOF values realign the misaligned golden periscope
+
+### M8c2 Editors in the interface
+
+- [ ] Layout tools: add, place, move and rotate elements, sources, detectors; edit their
+      properties; undo
+- [ ] Simulate stepper: per-stage editors (sources, optics, detectors and merit), Ready
+      to trace from the design's checks, a strip of runs to compare
+- [ ] CAD: tag bodies as elements, add DOFs, optimise, apply and show the move report
 - [ ] Import by dropping files on the window
-- [ ] Exit test
+
+### M8c3 Icons and the exit test
+
+- [ ] optobench's own icon set in SolidCraft's design language
+- [ ] Exit test: a layout built, traced, optimised and saved from the interface alone;
+      the golden periscope's CAD workflow (tag, DOFs, optimise, move report) in the
+      interface

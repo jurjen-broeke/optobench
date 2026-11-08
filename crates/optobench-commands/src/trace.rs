@@ -13,7 +13,10 @@ use serde_json::{Value, json};
 
 use crate::{CommandError, ErrorCode, Parameters, check_keys};
 
-fn text<'a>(parameters: &'a Parameters, key: &str) -> Result<Option<&'a str>, CommandError> {
+pub(crate) fn text<'a>(
+    parameters: &'a Parameters,
+    key: &str,
+) -> Result<Option<&'a str>, CommandError> {
     match parameters.get(key) {
         None => Ok(None),
         Some(Value::String(s)) => Ok(Some(s)),
@@ -109,11 +112,29 @@ pub(crate) fn load(
     ),
     CommandError,
 > {
+    let source = std::fs::read_to_string(path).map_err(|e| failed(format!("{path}: {e}")))?;
+    load_text(path, source, parameters)
+}
+
+/// A design's text read as if it were the file at `path` (for checking an edit before it
+/// is written).
+#[allow(clippy::type_complexity)]
+pub(crate) fn load_text(
+    path: &str,
+    source: String,
+    parameters: &Parameters,
+) -> Result<
+    (
+        optobench_scene::Scene,
+        Vec<optobench_io::sidecar::PartMatch>,
+        String,
+        Option<PathBuf>,
+    ),
+    CommandError,
+> {
     let data: Option<PathBuf> = text(parameters, "data_directory")?
         .map(PathBuf::from)
         .or_else(default_data_directory);
-
-    let source = std::fs::read_to_string(path).map_err(|e| failed(format!("{path}: {e}")))?;
     let lookup = |name: &str| material(data.as_deref(), name);
     let library = match &data {
         Some(root) => optobench_io::library::load(root).map_err(failed)?,

@@ -5,6 +5,11 @@ with the release that introduced them.
 
 ## Unreleased
 
+- M8c1 editing: new command `edit` changes a layout or sidecar in place and keeps its
+  comments (`optobench_io::edit`, on `toml_edit`): set or unset keys of entries by id
+  (merit terms by index, degrees of freedom by name), add and remove entries and DOFs,
+  replace the whole text (undo), or start a new planar or table layout. An edit is
+  written only when the design still reads, and returns the previous text.
 - M8b shaded 3D view: the interface draws the scene shaded on wgpu (depth, 4× multisampling,
   edges and rays as lines, lenses as translucent glass), picks and highlights items under
   the pointer, switches between perspective and orthographic, and cuts the scene with a
