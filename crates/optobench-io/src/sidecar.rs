@@ -28,6 +28,16 @@
 //! library = "thorlabs/AC254-060-A"  # prescription and glasses from the parts library
 //!
 //! [[element]]
+//! id = "M2"
+//! kind = "mirror"
+//! body = { product = "pf10-03-p01p" }
+//! reflect = [0, 0, 1]
+//! # Degrees of freedom as in layout files, moving the element's whole CAD occurrence
+//! # (part and mount); axes in the assembly frame unless frame = "local" (the body's
+//! # own), tilts about the centre of the element's bodies unless given a `pivot`.
+//! dof = [ { name = "M2_tip", kind = "tilt", axis = [1, 0, 0], range = [-4, 4] } ]
+//!
+//! [[element]]
 //! id = "M1"
 //! kind = "mirror"
 //! body = { product = "pf10-03-p01p" }
@@ -100,13 +110,14 @@ use optobench_trace::Coating;
 use toml::{Table, Value};
 
 use crate::scene_file::{
-    FileError, Item, Lookups, MaterialLookup, check_header, check_keys, error, items, medium,
+    FileError, Item, Lookups, MaterialLookup, check_header, check_keys, dofs, error, items, medium,
     resolve_coatings, with, with_element_coatings,
 };
 use crate::sha256::sha256_hex;
 use crate::step::faces::{EDGE_TOLERANCE, PlacedFace, faces};
 use crate::step::{self, StepModel, Surface};
 use optobench_library::CoatingSpec;
+use optobench_scene::dof::Target;
 
 /// One placed body of the assembly, ready to become a solid.
 #[derive(Debug, Clone)]
@@ -125,6 +136,75 @@ pub struct PlacedBody {
     pub placement: Transform,
     /// Its exact faces, in its own frame.
     pub faces: Vec<SolidFace>,
+}
+
+/// An element's DOFs: they move its CAD occurrence (every body of it, the mount too).
+/// Axes are in the assembly frame unless a DOF says `frame = "local"` (the body's own
+/// frame); tilts turn about the centre of the element's bodies unless given a `pivot`.
+fn element_dofs(
+    item: &Item,
+    bodies: &[PlacedBody],
+    found: &[usize],
+) -> Result<Vec<optobench_scene::dof::Dof>, FileError> {
+    if !item.table.contains_key("dof") {
+        return Ok(Vec::new());
+    }
+    let occurrences: Vec<String> = found.iter().map(|&i| bodies[i].occurrence()).collect();
+    let Some(first) = occurrences.first() else {
+        return Ok(Vec::new());
+    };
+    if occurrences.iter().any(|o| o != first) {
+        return Err(error(format!(
+            "{}: an element with a DOF must be one CAD occurrence; its bodies are in {}",
+            item.context,
+            occurrences.join(", ")
+        )));
+    }
+    // The centre of the box around the element's bodies, in the assembly frame.
+    let points: Vec<Vec3> = found
+        .iter()
+        .flat_map(|&i| {
+            let body = &bodies[i];
+            body.faces.iter().flat_map(move |f| {
+                f.geometry
+                    .loops
+                    .iter()
+                    .flatten()
+                    .map(move |p| body.placement.apply_point(*p))
+            })
+        })
+        .collect();
+    let centre = if points.is_empty() {
+        bodies[found[0]].placement.translation
+    } else {
+        let low = points.iter().fold(points[0], |a, p| {
+            Vec3::new(a.x.min(p.x), a.y.min(p.y), a.z.min(p.z))
+        });
+        let high = points.iter().fold(points[0], |a, p| {
+            Vec3::new(a.x.max(p.x), a.y.max(p.y), a.z.max(p.z))
+        });
+        (low + high) * 0.5
+    };
+    let local = Frame::from_transform(bodies[found[0]].placement);
+    dofs(
+        item,
+        &Target::Occurrence(first.clone()),
+        &local,
+        true,
+        centre,
+    )
+}
+
+impl PlacedBody {
+    /// The CAD occurrence it belongs to: its assembly path, or its product's name for a
+    /// body at the root.
+    pub fn occurrence(&self) -> String {
+        if self.path.is_empty() {
+            self.product.clone()
+        } else {
+            self.path.clone()
+        }
+    }
 }
 
 /// A body's geometry fingerprint: independent of names and placement, so it survives a
@@ -545,6 +625,7 @@ fn add_part(
         scene.solids.push(Solid {
             id: solid.clone(),
             faces: body.faces.clone(),
+            occurrence: body.occurrence(),
             role: SolidRole::Lens {
                 material,
                 coating: if known {
@@ -665,6 +746,7 @@ pub fn read(text: &str, sidecar: &Path, lookups: &Lookups) -> Result<Read, FileE
         detectors: Vec::new(),
         solids: Vec::new(),
         split_cutoff: crate::scene_file::trace_options(&root)?,
+        dofs: Vec::new(),
     };
     let mut tagged = vec![false; bodies.len()];
     // Bodies an element names, tagged or not (a library part's mount).
@@ -677,7 +759,9 @@ pub fn read(text: &str, sidecar: &Path, lookups: &Lookups) -> Result<Read, FileE
         if let Some(value) = item.table.get("library") {
             check_keys(
                 item.table,
-                &["id", "kind", "body", "library", "coating", "coatings"],
+                &[
+                    "id", "kind", "body", "library", "coating", "coatings", "dof",
+                ],
                 &item.context,
             )?;
             let key = value.as_str().ok_or_else(|| {
@@ -730,6 +814,7 @@ pub fn read(text: &str, sidecar: &Path, lookups: &Lookups) -> Result<Read, FileE
             for &i in &found {
                 claimed[i] = true;
             }
+            scene.dofs.extend(element_dofs(&item, &bodies, &found)?);
             continue;
         }
         let kind = item.text("kind")?;
@@ -754,7 +839,15 @@ pub fn read(text: &str, sidecar: &Path, lookups: &Lookups) -> Result<Read, FileE
             "lens" | "filter" => {
                 check_keys(
                     item.table,
-                    &["id", "kind", "body", "material", "materials", "coating"],
+                    &[
+                        "id",
+                        "kind",
+                        "body",
+                        "material",
+                        "materials",
+                        "coating",
+                        "dof",
+                    ],
                     &item.context,
                 )?;
                 let spec = match item.table.get("coating") {
@@ -807,6 +900,7 @@ pub fn read(text: &str, sidecar: &Path, lookups: &Lookups) -> Result<Read, FileE
                     scene.solids.push(Solid {
                         id: solid_id(i),
                         faces: bodies[i].faces.clone(),
+                        occurrence: bodies[i].occurrence(),
                         role: SolidRole::Lens {
                             material: medium(value, lookup, &item.context)?,
                             coating: if kind == "filter" {
@@ -822,7 +916,7 @@ pub fn read(text: &str, sidecar: &Path, lookups: &Lookups) -> Result<Read, FileE
             "mirror" => {
                 check_keys(
                     item.table,
-                    &["id", "kind", "body", "reflect"],
+                    &["id", "kind", "body", "reflect", "dof"],
                     &item.context,
                 )?;
                 let normal = item
@@ -856,6 +950,7 @@ pub fn read(text: &str, sidecar: &Path, lookups: &Lookups) -> Result<Read, FileE
                     scene.solids.push(Solid {
                         id: solid_id(i),
                         faces: bodies[i].faces.clone(),
+                        occurrence: bodies[i].occurrence(),
                         role: SolidRole::Mirror { reflecting },
                     });
                 }
@@ -867,6 +962,7 @@ pub fn read(text: &str, sidecar: &Path, lookups: &Lookups) -> Result<Read, FileE
                 )));
             }
         }
+        scene.dofs.extend(element_dofs(&item, &bodies, &found)?);
     }
 
     // Products named after a library part: their glass bodies become lenses.
@@ -931,6 +1027,7 @@ pub fn read(text: &str, sidecar: &Path, lookups: &Lookups) -> Result<Read, FileE
         scene.solids.push(Solid {
             id,
             faces: body.faces.clone(),
+            occurrence: body.occurrence(),
             role: SolidRole::Absorber,
         });
     }
@@ -941,24 +1038,34 @@ pub fn read(text: &str, sidecar: &Path, lookups: &Lookups) -> Result<Read, FileE
         scene
             .sources
             .push(crate::scene_file::source(&item, &position, frame)?);
+        let target = Target::Source(item.text("id")?.to_owned());
+        scene
+            .dofs
+            .extend(dofs(&item, &target, &frame, false, frame.origin())?);
     }
     for item in items(&root, "detector")? {
         check_keys(
             item.table,
-            &with(&position, &["id", "size", "pixels"]),
+            &with(&position, &["id", "size", "pixels", "dof"]),
             &item.context,
         )?;
         let size = item.pair("size")?;
         if !(size.0 > 0.0 && size.1 > 0.0) {
             return Err(error(format!("{}: `size` must be positive", item.context)));
         }
+        let frame = placement_frame(&item, &bodies)?;
         scene.detectors.push(Detector {
             id: item.text("id")?.to_owned(),
-            frame: placement_frame(&item, &bodies)?,
+            frame,
             size,
             pixels: item.count_pair("pixels")?,
         });
+        let target = Target::Detector(item.text("id")?.to_owned());
+        scene
+            .dofs
+            .extend(dofs(&item, &target, &frame, false, frame.origin())?);
     }
+    crate::scene_file::check_dofs(&scene)?;
     Ok(Read { scene, parts })
 }
 

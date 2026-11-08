@@ -52,6 +52,16 @@
 //!                                   # (coating and clear_aperture may be given here too)
 //!
 //! [[element]]
+//! id = "L3"
+//! # … as L1, plus degrees of freedom (elements, sources and detectors; see
+//! # optobench_scene::dof): slides in mm, tilts in degrees, axes and pivots in the item's
+//! # own frame unless frame = "scene"
+//! dof = [ { name = "L3_z", kind = "slide", axis = "z", range = [-10, 10] },
+//!         { name = "L3_tip", kind = "tilt", axis = "x", pivot = [0, 0, 0], range = [-2, 2] },
+//!         { name = "L3_x", kind = "slide", axis = "x", locked = true, value = 0.1 } ]
+//! # a coupled DOF: { name = "D_z", kind = "slide", axis = "z", follows = "L3_z", ratio = 1 }
+//!
+//! [[element]]
 //! id = "M1"
 //! kind = "mirror"
 //! at = 180.0
@@ -91,6 +101,7 @@
 //! naming the closest valid key. Lengths are in mm, angles in degrees.
 
 use optobench_library::{CoatingSpec, Library, Outline, Part};
+use optobench_scene::dof::{Dof, Motion, Target};
 
 use crate::coatings::CurveLookup;
 use optobench_materials::Medium;
@@ -122,22 +133,33 @@ pub(crate) fn error(message: impl Into<String>) -> FileError {
 
 /// Edit distance, for suggesting the closest valid key.
 fn distance(a: &str, b: &str) -> usize {
-    let b: Vec<char> = b.chars().collect();
-    let mut row: Vec<usize> = (0..=b.len()).collect();
-    for (i, ca) in a.chars().enumerate() {
-        let mut previous = row[0];
-        row[0] = i + 1;
-        for (j, cb) in b.iter().enumerate() {
-            let substitution = previous + usize::from(ca != *cb);
-            previous = row[j + 1];
-            row[j + 1] = substitution.min(row[j] + 1).min(row[j + 1] + 1);
+    // Edit distance with adjacent transpositions counted as one edit (optimal string
+    // alignment), so `rnage` is one edit from `range`.
+    let (a, b): (Vec<char>, Vec<char>) = (a.chars().collect(), b.chars().collect());
+    let mut d = vec![vec![0usize; b.len() + 1]; a.len() + 1];
+    for (i, row) in d.iter_mut().enumerate() {
+        row[0] = i;
+    }
+    for (j, cell) in d[0].iter_mut().enumerate() {
+        *cell = j;
+    }
+    for i in 1..=a.len() {
+        for j in 1..=b.len() {
+            let cost = usize::from(a[i - 1] != b[j - 1]);
+            let mut best = (d[i - 1][j] + 1)
+                .min(d[i][j - 1] + 1)
+                .min(d[i - 1][j - 1] + cost);
+            if i > 1 && j > 1 && a[i - 1] == b[j - 2] && a[i - 2] == b[j - 1] {
+                best = best.min(d[i - 2][j - 2] + 1);
+            }
+            d[i][j] = best;
         }
     }
-    row[b.len()]
+    d[a.len()][b.len()]
 }
 
 /// Keys that belong to later milestones, with the milestone.
-const LATER: &[(&str, &str)] = &[("dof", "degrees of freedom arrive in M6")];
+const LATER: &[(&str, &str)] = &[];
 
 /// Rejects any key of `table` not in `allowed`, naming the closest valid one.
 pub(crate) fn check_keys(table: &Table, allowed: &[&str], context: &str) -> Result<(), FileError> {
@@ -397,6 +419,7 @@ pub(crate) fn source(
         "power_w",
         "rings",
         "spectrum",
+        "dof",
     ];
     let allowed: Vec<&str> = common
         .iter()
@@ -636,6 +659,172 @@ pub(crate) fn resolve_coatings(
         .collect()
 }
 
+/// An item's `dof` list (see `optobench_scene::dof`). `local` is the item's nominal
+/// frame; axes and pivots are in it unless a DOF says `frame = "scene"` (the default
+/// with `scene_default`). `default_pivot` (scene frame) is where tilts turn without a
+/// `pivot`. Lengths in mm, angles in degrees.
+pub(crate) fn dofs(
+    item: &Item,
+    target: &Target,
+    local: &Frame,
+    scene_default: bool,
+    default_pivot: Vec3,
+) -> Result<Vec<Dof>, FileError> {
+    let Some(value) = item.table.get("dof") else {
+        return Ok(Vec::new());
+    };
+    let list = value.as_array().ok_or_else(|| {
+        error(format!(
+            "{}: `dof` is a list of {{ name, kind, axis, … }}",
+            item.context
+        ))
+    })?;
+    list.iter()
+        .map(|entry| {
+            let table = entry.as_table().ok_or_else(|| {
+                error(format!(
+                    "{}: each DOF is {{ name = …, kind = \"slide\" | \"tilt\", axis = … }}",
+                    item.context
+                ))
+            })?;
+            let name = table.get("name").and_then(Value::as_str).unwrap_or("?");
+            let context = format!("{} DOF `{name}`", item.context);
+            check_keys(
+                table,
+                &[
+                    "name", "kind", "axis", "frame", "pivot", "range", "value", "locked",
+                    "follows", "ratio",
+                ],
+                &context,
+            )?;
+            let dof = Item {
+                table,
+                context: context.clone(),
+            };
+            let name = dof.text("name")?.to_owned();
+            let in_scene = match table.get("frame").map(|f| f.as_str()) {
+                None => scene_default,
+                Some(Some("scene")) => true,
+                Some(Some("local")) => false,
+                Some(_) => {
+                    return Err(error(format!(
+                        "{context}: `frame` is \"local\" (the item's own) or \"scene\""
+                    )));
+                }
+            };
+            let to_scene_vector = |v: Vec3| {
+                if in_scene {
+                    v
+                } else {
+                    local.to_parent_vector(v)
+                }
+            };
+            let axis = match table.get("axis") {
+                Some(Value::String(a)) => match a.as_str() {
+                    "x" => Vec3::X,
+                    "y" => Vec3::Y,
+                    "z" => Vec3::Z,
+                    _ => {
+                        return Err(error(format!(
+                            "{context}: `axis` is \"x\", \"y\", \"z\" or [x, y, z]"
+                        )));
+                    }
+                },
+                Some(_) => dof.vector("axis")?,
+                None => return Err(error(format!("{context}: missing `axis`"))),
+            };
+            let axis = to_scene_vector(axis)
+                .normalized()
+                .ok_or_else(|| error(format!("{context}: `axis` has zero length")))?;
+            let kind = dof.text("kind")?;
+            let scale = match kind {
+                "slide" => 1.0,
+                "tilt" => core::f64::consts::PI / 180.0,
+                other => {
+                    return Err(error(format!(
+                        "{context}: kind `{other}` is not known; use \"slide\" or \"tilt\""
+                    )));
+                }
+            };
+            let motion = if kind == "slide" {
+                if table.contains_key("pivot") {
+                    return Err(error(format!("{context}: a slide has no `pivot`")));
+                }
+                Motion::Slide { axis }
+            } else {
+                let pivot = if table.contains_key("pivot") {
+                    let p = dof.vector("pivot")?;
+                    if in_scene {
+                        p
+                    } else {
+                        local.to_parent_point(p)
+                    }
+                } else {
+                    default_pivot
+                };
+                Motion::Tilt { axis, pivot }
+            };
+            let range = match table.get("range") {
+                None => None,
+                Some(_) => {
+                    let (low, high) = dof.pair("range")?;
+                    if low > high {
+                        return Err(error(format!("{context}: `range` runs from low to high")));
+                    }
+                    Some((low * scale, high * scale))
+                }
+            };
+            let locked = match table.get("locked") {
+                None => false,
+                Some(Value::Boolean(b)) => *b,
+                Some(_) => return Err(error(format!("{context}: `locked` is true or false"))),
+            };
+            let follows = match table.get("follows") {
+                None => {
+                    if table.contains_key("ratio") {
+                        return Err(error(format!("{context}: `ratio` goes with `follows`")));
+                    }
+                    None
+                }
+                Some(Value::String(leader)) => {
+                    Some((leader.clone(), dof.optional_number("ratio", 1.0)?))
+                }
+                Some(_) => return Err(error(format!("{context}: `follows` names another DOF"))),
+            };
+            if follows.is_some() && (locked || table.contains_key("value")) {
+                return Err(error(format!(
+                    "{context}: a DOF that follows another takes its value from it"
+                )));
+            }
+            Ok(Dof {
+                name,
+                target: target.clone(),
+                motion,
+                range,
+                locked,
+                follows,
+                value: dof.optional_number("value", 0.0)? * scale,
+            })
+        })
+        .collect()
+}
+
+/// Checks the scene's DOFs: unique names, couplings that resolve, values in range.
+pub(crate) fn check_dofs(scene: &Scene) -> Result<(), FileError> {
+    for (i, dof) in scene.dofs.iter().enumerate() {
+        if scene.dofs[..i].iter().any(|d| d.name == dof.name) {
+            return Err(error(format!(
+                "two degrees of freedom are named `{}`",
+                dof.name
+            )));
+        }
+    }
+    scene
+        .dof_values(&std::collections::BTreeMap::new())
+        .map(|_| ())
+        .map_err(|e| error(e.to_string()))
+}
+
 /// Checks the first two lines: the format tag and the kind.
 pub(crate) fn check_header(text: &str) -> Result<(), FileError> {
     let mut lines = text
@@ -811,6 +1000,7 @@ pub fn parse_with(text: &str, lookups: &Lookups) -> Result<Scene, FileError> {
         detectors: Vec::new(),
         solids: Vec::new(),
         split_cutoff: trace_options(&root)?,
+        dofs: Vec::new(),
     };
 
     for item in items(&root, "source")? {
@@ -825,6 +1015,10 @@ pub fn parse_with(text: &str, lookups: &Lookups) -> Result<Scene, FileError> {
         scene
             .sources
             .push(source(&item, &with(position, &["offset"]), frame)?);
+        let target = Target::Source(item.text("id")?.to_owned());
+        scene
+            .dofs
+            .extend(dofs(&item, &target, &frame, false, frame.origin())?);
     }
 
     for item in &elements {
@@ -860,6 +1054,7 @@ pub fn parse_with(text: &str, lookups: &Lookups) -> Result<Scene, FileError> {
                             "coating",
                             "coatings",
                             "clear_aperture",
+                            "dof",
                         ],
                     ),
                     &item.context,
@@ -914,6 +1109,7 @@ pub fn parse_with(text: &str, lookups: &Lookups) -> Result<Scene, FileError> {
                             "clear_aperture",
                             "coating",
                             "coatings",
+                            "dof",
                         ],
                     ),
                     &item.context,
@@ -966,9 +1162,9 @@ pub fn parse_with(text: &str, lookups: &Lookups) -> Result<Scene, FileError> {
                 let mut keys = with(
                     position,
                     if part.is_some() {
-                        &["id", "kind", "library", "reversed", "clear_aperture"]
+                        &["id", "kind", "library", "reversed", "clear_aperture", "dof"]
                     } else {
-                        &["id", "kind", "radius", "diameter", "clear_aperture"]
+                        &["id", "kind", "radius", "diameter", "clear_aperture", "dof"]
                     },
                 );
                 if matches!(placement, Placement::Planar(_)) {
@@ -1013,6 +1209,11 @@ pub fn parse_with(text: &str, lookups: &Lookups) -> Result<Scene, FileError> {
                 )));
             }
         }
+        let frame = scene.elements[scene.elements.len() - 1].frame;
+        let target = Target::Element(item.text("id")?.to_owned());
+        scene
+            .dofs
+            .extend(dofs(item, &target, &frame, false, frame.origin())?);
     }
 
     for item in items(&root, "proxy")? {
@@ -1089,7 +1290,7 @@ pub fn parse_with(text: &str, lookups: &Lookups) -> Result<Scene, FileError> {
     for item in items(&root, "detector")? {
         check_keys(
             item.table,
-            &with(position, &["id", "size", "pixels"]),
+            &with(position, &["id", "size", "pixels", "dof"]),
             &item.context,
         )?;
         let size = item.pair("size")?;
@@ -1102,7 +1303,13 @@ pub fn parse_with(text: &str, lookups: &Lookups) -> Result<Scene, FileError> {
             size,
             pixels: item.count_pair("pixels")?,
         });
+        let frame = scene.detectors[scene.detectors.len() - 1].frame;
+        let target = Target::Detector(item.text("id")?.to_owned());
+        scene
+            .dofs
+            .extend(dofs(&item, &target, &frame, false, frame.origin())?);
     }
+    check_dofs(&scene)?;
     Ok(scene)
 }
 
@@ -1144,11 +1351,6 @@ mod tests {
             "{}",
             error.0
         );
-        let error = read(&format!(
-            "{HEADER}[[element]]\nid = \"L1\"\nkind = \"lens\"\nat = 0\ndof = []\n"
-        ))
-        .expect_err("rejected");
-        assert!(error.0.contains("M6"), "{}", error.0);
         let error = read(&format!(
             "{HEADER}[[element]]\nid = \"L1\"\nat = 0\nlibrary = \"example/none\"\n"
         ))
@@ -1240,6 +1442,63 @@ mod tests {
         ] {
             let error = source(body).expect_err("rejected");
             assert!(error.0.contains(message), "{body}: {}", error.0);
+        }
+    }
+
+    #[test]
+    fn degrees_of_freedom_are_read_strictly() {
+        let lens = "[[element]]\nid = \"L1\"\nkind = \"lens\"\nat = 10\nsurfaces = [{ radius = 50 }, { radius = \"inf\" }]\nthickness = [4]\nmaterial = [1.5]\ndiameter = 20\nclear_aperture = 18\n";
+        let scene = read(&format!(
+            "{HEADER}{lens}dof = [{{ name = \"z\", kind = \"slide\", axis = \"z\", range = [-1, 2], value = 0.5 }}, \
+             {{ name = \"tip\", kind = \"tilt\", axis = \"x\", pivot = [0, 0, 2], range = [-3, 3] }}]\n"
+        ))
+        .expect("valid");
+        assert_eq!(scene.dofs.len(), 2);
+        // Local axes become scene axes: the planar axis runs along +x, so the element's
+        // own z is the scene's x.
+        let Motion::Slide { axis } = scene.dofs[0].motion else {
+            panic!("a slide")
+        };
+        assert!((axis - Vec3::X).length() < 1e-12);
+        assert!((scene.dofs[0].value - 0.5).abs() < 1e-15);
+        let Motion::Tilt { pivot, .. } = scene.dofs[1].motion else {
+            panic!("a tilt")
+        };
+        assert!((pivot - Vec3::new(12.0, 0.0, 0.0)).length() < 1e-12);
+        assert!((scene.dofs[1].range.expect("range").1 - 3f64.to_radians()).abs() < 1e-15);
+        for (dof, message) in [
+            (
+                "{ name = \"a\", kind = \"spin\", axis = \"z\" }",
+                "not known",
+            ),
+            ("{ name = \"a\", kind = \"slide\", axis = \"w\" }", "`axis`"),
+            (
+                "{ name = \"a\", kind = \"slide\", axis = \"z\", pivot = [0, 0, 0] }",
+                "no `pivot`",
+            ),
+            (
+                "{ name = \"a\", kind = \"slide\", axis = \"z\", range = [2, 1] }",
+                "low to high",
+            ),
+            (
+                "{ name = \"a\", kind = \"slide\", axis = \"z\", range = [0, 1], value = 2 }",
+                "outside its range",
+            ),
+            (
+                "{ name = \"a\", kind = \"slide\", axis = \"z\", follows = \"b\" }",
+                "`b`",
+            ),
+            (
+                "{ name = \"a\", kind = \"slide\", axis = \"z\" }, { name = \"a\", kind = \"slide\", axis = \"x\" }",
+                "two degrees of freedom",
+            ),
+            (
+                "{ name = \"a\", kind = \"slide\", axis = \"z\", rnage = [0, 1] }",
+                "did you mean `range`",
+            ),
+        ] {
+            let error = read(&format!("{HEADER}{lens}dof = [{dof}]\n")).expect_err("rejected");
+            assert!(error.0.contains(message), "{dof}: {}", error.0);
         }
     }
 

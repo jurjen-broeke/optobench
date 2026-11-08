@@ -12,6 +12,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod dof;
 pub mod layout;
 
 use std::sync::Arc;
@@ -268,6 +269,9 @@ pub struct Solid {
     pub faces: Vec<SolidFace>,
     /// What it does.
     pub role: SolidRole,
+    /// The CAD occurrence it belongs to (assembly path, or product name for a body at the
+    /// root): DOFs move whole occurrences.
+    pub occurrence: String,
 }
 
 /// A standalone scene.
@@ -290,6 +294,8 @@ pub struct Scene {
     /// transmitted part only. The default is [`DEFAULT_SPLIT_CUTOFF`] (docs/design.md,
     /// Optical model).
     pub split_cutoff: Option<f64>,
+    /// Degrees of freedom (see [`dof`]).
+    pub dofs: Vec<dof::Dof>,
 }
 
 /// Default splitting cutoff, as a fraction of the total source power.
