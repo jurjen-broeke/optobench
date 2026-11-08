@@ -8,6 +8,7 @@ use optobench_io::sidecar;
 use optobench_io::store::{default_data_directory, material};
 use optobench_io::svg::{self, View};
 use optobench_scene::Owner;
+use optobench_surfaces::brep::Fineness;
 use serde_json::{Value, json};
 
 use crate::{CommandError, ErrorCode, Parameters, check_keys};
@@ -316,13 +317,15 @@ fn ray_paths(traced: &optobench_scene::SceneTrace, n: usize) -> Value {
 
 /// `view`: the scene as a 3D wireframe for views with their own camera (the user
 /// interface): per item its kind, id, role and polylines (mm, scene frame), the sources,
-/// and the scene's bounds. Parameters `path`; optionally `data_directory`, `dofs` and
-/// `max_points` (per boundary loop, default 32).
+/// and the scene's bounds. Parameters `path`; optionally `data_directory`, `dofs`,
+/// `max_points` (per boundary loop, default 32) and `mesh` (true, or the chord tolerance
+/// in mm, default 0.05: add each item's triangles as flat arrays `positions` and
+/// `normals`, three numbers per vertex, and `triangles`, three vertex indices each).
 pub(crate) fn view(parameters: &Parameters) -> Result<Value, CommandError> {
     use optobench_scene::{ElementKind, SolidRole};
     check_keys(
         parameters,
-        &["path", "data_directory", "dofs", "max_points"],
+        &["path", "data_directory", "dofs", "max_points", "mesh"],
     )?;
     let path = text(parameters, "path")?.ok_or_else(|| {
         CommandError::new(ErrorCode::InvalidParameters, "missing parameter `path`")
@@ -336,6 +339,19 @@ pub(crate) fn view(parameters: &Parameters) -> Result<Value, CommandError> {
             )
         })? as usize,
     };
+    let fineness = match parameters.get("mesh") {
+        None | Some(Value::Bool(false)) => None,
+        Some(Value::Bool(true)) => Some(Fineness::default()),
+        Some(v) => Some(Fineness {
+            chord: v.as_f64().filter(|c| *c > 0.0).ok_or_else(|| {
+                CommandError::new(
+                    ErrorCode::InvalidParameters,
+                    "`mesh` must be true, false or a chord tolerance in mm > 0",
+                )
+            })?,
+            ..Fineness::default()
+        }),
+    };
     let (scene, _, _, _) = load(path, parameters)?;
     let overrides = dof_values(parameters, &scene)?;
     let scene = scene
@@ -344,9 +360,22 @@ pub(crate) fn view(parameters: &Parameters) -> Result<Value, CommandError> {
     let built = scene.build().map_err(|e| failed(format!("{path}: {e}")))?;
     let mut low = optobench_math::Vec3::new(f64::INFINITY, f64::INFINITY, f64::INFINITY);
     let mut high = -low;
+    let mut meshes = fineness.map(|f| optobench_io::mesh::meshes(&built, f).into_iter());
     let items: Vec<Value> = optobench_io::wireframe::wireframe(&built, max_points)
         .into_iter()
         .map(|(owner, lines)| {
+            let mesh = meshes.as_mut().and_then(Iterator::next).map(|(_, m)| {
+                let round = |x: f64, step: f64| (x / step).round() * step;
+                json!({
+                    "positions": m.positions.iter()
+                        .flat_map(|p| [p.x, p.y, p.z].map(|x| round(x, 1e-4)))
+                        .collect::<Vec<_>>(),
+                    "normals": m.normals.iter()
+                        .flat_map(|n| [n.x, n.y, n.z].map(|x| round(x, 1e-3)))
+                        .collect::<Vec<_>>(),
+                    "triangles": m.triangles.iter().flatten().collect::<Vec<_>>(),
+                })
+            });
             for p in lines.iter().flatten() {
                 low = optobench_math::Vec3::new(low.x.min(p.x), low.y.min(p.y), low.z.min(p.z));
                 high = optobench_math::Vec3::new(high.x.max(p.x), high.y.max(p.y), high.z.max(p.z));
@@ -372,7 +401,7 @@ pub(crate) fn view(parameters: &Parameters) -> Result<Value, CommandError> {
                     ("solid", s.id.clone(), Some(s.occurrence.clone()), role)
                 }
             };
-            json!({
+            let mut item = json!({
                 "kind": kind,
                 "id": id,
                 "occurrence": occurrence,
@@ -381,7 +410,11 @@ pub(crate) fn view(parameters: &Parameters) -> Result<Value, CommandError> {
                     .iter()
                     .map(|l| l.iter().map(|p| point(*p)).collect::<Vec<_>>())
                     .collect::<Vec<_>>(),
-            })
+            });
+            if let (Some(mesh), Some(object)) = (mesh, item.as_object_mut()) {
+                object.insert("mesh".into(), mesh);
+            }
+            item
         })
         .collect();
     Ok(json!({

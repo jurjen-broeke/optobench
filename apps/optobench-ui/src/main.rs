@@ -8,6 +8,7 @@
 mod app;
 mod camera;
 mod document;
+mod render;
 mod screenshot;
 mod theme;
 mod viewport;
@@ -41,9 +42,11 @@ fn main() -> eframe::Result {
         options,
         Box::new(|cc| {
             theme::install(&cc.egui_ctx);
+            let renderer = cc.wgpu_render_state.as_ref().map(render::Renderer::new);
             Ok(Box::new(app::App::new(
                 path,
                 data_directory,
+                renderer,
                 cc.egui_ctx.clone(),
             )))
         }),

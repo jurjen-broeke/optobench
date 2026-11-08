@@ -13,6 +13,7 @@ layer = "L1"
 
 [dependencies]
 optobench-math.workspace = true
+spade.workspace = true
 
 [lints]
 workspace = true

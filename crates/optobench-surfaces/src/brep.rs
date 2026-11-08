@@ -19,6 +19,9 @@ use std::f64::consts::TAU;
 
 use optobench_math::{Frame, Rotation, Vec3, find_root_bracketed};
 
+mod tessellate;
+pub use tessellate::{Fineness, Mesh};
+
 /// An axis-aligned bounding box.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Aabb {
