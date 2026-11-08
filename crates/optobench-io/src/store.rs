@@ -349,8 +349,9 @@ pub fn material(root: Option<&Path>, name: &str) -> Result<Medium, String> {
     })?;
     load(root, name).map(|(medium, _)| medium).map_err(|e| match e {
         StoreError::NotFound(_) => format!(
-            "no material `{name}`: not bundled ({}) and not imported (see the `materials` command)",
-            BUNDLED.join(", ")
+            "no material `{name}`: not bundled ({}) and not imported into {} (see the `materials` command)",
+            BUNDLED.join(", "),
+            root.display()
         ),
         other => other.to_string(),
     })

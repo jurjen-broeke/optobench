@@ -1,0 +1,25 @@
+[package]
+name = "optobench-ui"
+description = "Desktop user interface for optobench, in SolidCraft's style"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[package.metadata.optobench]
+layer = "apps"
+
+[dependencies]
+optobench-commands.workspace = true
+serde_json.workspace = true
+egui.workspace = true
+eframe.workspace = true
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "optobench-ui"
+path = "src/main.rs"

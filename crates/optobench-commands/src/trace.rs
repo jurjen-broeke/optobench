@@ -151,6 +151,7 @@ pub(crate) fn trace(parameters: &Parameters) -> Result<Value, CommandError> {
             "svg",
             "view",
             "rays_drawn",
+            "ray_paths",
             "dofs",
         ],
     )?;
@@ -256,12 +257,143 @@ pub(crate) fn trace(parameters: &Parameters) -> Result<Value, CommandError> {
             "clear_aperture_used": f.clear_aperture_used,
         })).collect::<Vec<_>>(),
     });
+    if let Some(n) = parameters.get("ray_paths") {
+        let n = n.as_u64().ok_or_else(|| {
+            CommandError::new(
+                ErrorCode::InvalidParameters,
+                "`ray_paths` must be a whole number",
+            )
+        })? as usize;
+        result["ray_paths"] = ray_paths(&traced, n);
+    }
     if let Some(output) = text(parameters, "svg")? {
         let drawing = svg::layout(&scene, &built, &traced, view, rays_drawn);
         std::fs::write(Path::new(output), drawing).map_err(|e| failed(format!("{output}: {e}")))?;
         result["svg"] = json!(output);
     }
     Ok(result)
+}
+
+fn round(x: f64) -> f64 {
+    (x * 1e4).round() / 1e4
+}
+
+fn point(p: optobench_math::Vec3) -> Value {
+    json!([round(p.x), round(p.y), round(p.z)])
+}
+
+/// The first `n` rays' paths, main paths first: points (mm), how each ended, its power
+/// and, for a ray that left the scene, its last direction.
+fn ray_paths(traced: &optobench_scene::SceneTrace, n: usize) -> Value {
+    use optobench_trace::nonsequential::End;
+    let mut order: Vec<&optobench_trace::nonsequential::RayRecord> =
+        traced.records.iter().collect();
+    order.sort_by_key(|r| r.generation);
+    json!(
+        order
+            .into_iter()
+            .take(n)
+            .map(|r| {
+                let end = match r.end {
+                    End::Detected { .. } => "detected",
+                    End::Clipped { .. } => "clipped",
+                    End::Escaped => "escaped",
+                    End::Stopped => "stopped",
+                    End::MaterialUndefined { .. } => "material_undefined",
+                };
+                json!({
+                    "points": r.points.iter().map(|p| point(*p)).collect::<Vec<_>>(),
+                    "end": end,
+                    "power_w": r.launched.power,
+                    "wavelength_um": r.ray.wavelength,
+                    "generation": r.generation,
+                    "direction": point(r.ray.direction),
+                })
+            })
+            .collect::<Vec<_>>()
+    )
+}
+
+/// `view`: the scene as a 3D wireframe for views with their own camera (the user
+/// interface): per item its kind, id, role and polylines (mm, scene frame), the sources,
+/// and the scene's bounds. Parameters `path`; optionally `data_directory`, `dofs` and
+/// `max_points` (per boundary loop, default 32).
+pub(crate) fn view(parameters: &Parameters) -> Result<Value, CommandError> {
+    use optobench_scene::{ElementKind, SolidRole};
+    check_keys(
+        parameters,
+        &["path", "data_directory", "dofs", "max_points"],
+    )?;
+    let path = text(parameters, "path")?.ok_or_else(|| {
+        CommandError::new(ErrorCode::InvalidParameters, "missing parameter `path`")
+    })?;
+    let max_points = match parameters.get("max_points") {
+        None => 32,
+        Some(v) => v.as_u64().filter(|n| *n >= 2).ok_or_else(|| {
+            CommandError::new(
+                ErrorCode::InvalidParameters,
+                "`max_points` must be a whole number ≥ 2",
+            )
+        })? as usize,
+    };
+    let (scene, _, _, _) = load(path, parameters)?;
+    let overrides = dof_values(parameters, &scene)?;
+    let scene = scene
+        .moved(&overrides)
+        .map_err(|e| failed(format!("{path}: {e}")))?;
+    let built = scene.build().map_err(|e| failed(format!("{path}: {e}")))?;
+    let mut low = optobench_math::Vec3::new(f64::INFINITY, f64::INFINITY, f64::INFINITY);
+    let mut high = -low;
+    let items: Vec<Value> = optobench_io::wireframe::wireframe(&built, max_points)
+        .into_iter()
+        .map(|(owner, lines)| {
+            for p in lines.iter().flatten() {
+                low = optobench_math::Vec3::new(low.x.min(p.x), low.y.min(p.y), low.z.min(p.z));
+                high = optobench_math::Vec3::new(high.x.max(p.x), high.y.max(p.y), high.z.max(p.z));
+            }
+            let (kind, id, occurrence, role) = match owner {
+                Owner::Element(i) => {
+                    let e = &scene.elements[i];
+                    let role = match e.kind {
+                        ElementKind::Lens { .. } => "lens",
+                        ElementKind::Mirror { .. } => "mirror",
+                    };
+                    ("element", e.id.clone(), None, role)
+                }
+                Owner::Proxy(i) => ("proxy", scene.proxies[i].id.clone(), None, "absorber"),
+                Owner::Detector(i) => ("detector", scene.detectors[i].id.clone(), None, "detector"),
+                Owner::Solid(i) => {
+                    let s = &scene.solids[i];
+                    let role = match s.role {
+                        SolidRole::Absorber => "absorber",
+                        SolidRole::Lens { .. } => "lens",
+                        SolidRole::Mirror { .. } => "mirror",
+                    };
+                    ("solid", s.id.clone(), Some(s.occurrence.clone()), role)
+                }
+            };
+            json!({
+                "kind": kind,
+                "id": id,
+                "occurrence": occurrence,
+                "role": role,
+                "lines": lines
+                    .iter()
+                    .map(|l| l.iter().map(|p| point(*p)).collect::<Vec<_>>())
+                    .collect::<Vec<_>>(),
+            })
+        })
+        .collect();
+    Ok(json!({
+        "items": items,
+        "sources": scene.sources.iter().map(|s| json!({
+            "id": s.id,
+            "origin": point(s.frame.origin()),
+            "axis": point(s.frame.axes()[2]),
+        })).collect::<Vec<_>>(),
+        "dofs": dofs_json(&scene),
+        "bounds": if low.x.is_finite() { json!([point(low), point(high)]) } else { Value::Null },
+    }))
 }
 
 /// `bodies`: every placed body of a STEP file, for writing a sidecar: assembly path,
