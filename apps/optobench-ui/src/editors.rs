@@ -247,7 +247,7 @@ pub fn entry(
         });
     if WITH_DOFS.contains(&table) && entry["id"].is_string() {
         ui.add_space(6.0);
-        operations.extend(dofs(ui, drafts, table, entry, &base));
+        operations.extend(dofs(ui, drafts, table, entry, &base, context.sidecar));
     }
     ui.add_space(4.0);
     let what = if context.sidecar && table == "element" {
@@ -272,7 +272,16 @@ const WITH_DOFS: &[&str] = &["element", "source", "detector"];
 
 /// The degrees of freedom of an entry: value within the range, remove; and a line to
 /// add one.
-fn dofs(ui: &mut Ui, drafts: &mut Drafts, table: &str, entry: &Value, base: &str) -> Vec<Value> {
+/// In a layout the axes are the item's own (z along its optical axis); in a sidecar they
+/// are the scene's, as the view's gizmo shows them.
+fn dofs(
+    ui: &mut Ui,
+    drafts: &mut Drafts,
+    table: &str,
+    entry: &Value,
+    base: &str,
+    sidecar: bool,
+) -> Vec<Value> {
     let mut operations = Vec::new();
     let id = entry["id"].as_str().unwrap_or_default();
     ui.label(RichText::new("Degrees of freedom").strong());
@@ -328,7 +337,13 @@ fn dofs(ui: &mut Ui, drafts: &mut Drafts, table: &str, entry: &Value, base: &str
             }
         });
     }
-    ui.horizontal(|ui| {
+    let frame = if sidecar { "scene" } else { "local" };
+    let axes_named = if sidecar {
+        "the scene's"
+    } else {
+        "its own (z along its optical axis)"
+    };
+    ui.horizontal_wrapped(|ui| {
         ui.label(RichText::new("Add").color(DARK.text_dim));
         for (kind, axis, label, range) in [
             ("slide", [1, 0, 0], "slide x", 5.0),
@@ -344,12 +359,14 @@ fn dofs(ui: &mut Ui, drafts: &mut Drafts, table: &str, entry: &Value, base: &str
             }
             if ui
                 .small_button(label)
-                .on_hover_text(format!("A {kind} along or about the scene's {axis:?}, ±{range}"))
+                .on_hover_text(format!(
+                    "A {kind} along or about {axis:?} in {axes_named} axes, ±{range}"
+                ))
                 .clicked()
             {
                 operations.push(json!({
                     "op": "add_dof", "table": table, "id": id,
-                    "dof_entry": { "name": name, "kind": kind, "axis": axis, "range": [-range, range] },
+                    "dof_entry": [["name", name], ["kind", kind], ["axis", axis], ["frame", frame], ["range", [-range, range]]],
                 }));
             }
         }
@@ -513,10 +530,11 @@ pub fn tag(design: &Value, solid: &str, mirror_face: Option<(V3, [V3; 3])>) -> O
         ]),
         Some((normal, axes)) => {
             // The face normal in the body's own frame, made unit again (the axes come
-            // rounded) and rounded so the file stays legible.
+            // rounded) and rounded to 1e-4, the precision of the triangles it was read
+            // from; `reflect` picks faces within 1°, so this keeps the file legible.
             let local = axes.map(|a| normal[0] * a[0] + normal[1] * a[1] + normal[2] * a[2]);
             let length = local.iter().map(|c| c * c).sum::<f64>().sqrt().max(1e-300);
-            let local = local.map(|c| (c / length * 1e6).round() / 1e6);
+            let local = local.map(|c| (c / length * 1e4).round() / 1e4 + 0.0);
             json!([
                 ["id", next_id(design, "M")],
                 ["kind", "mirror"],

@@ -538,6 +538,16 @@ impl App {
         }
     }
 
+    /// The icon id of a control: the command's from the registry, or the action's.
+    fn icon(control: Control) -> String {
+        match control {
+            Control::Action(a) => a.icon().to_owned(),
+            Control::Command(id) => optobench_commands::Registry::standard()
+                .get(id)
+                .map_or(id.to_owned(), |c| c.icon.to_owned()),
+        }
+    }
+
     fn summary(control: Control) -> String {
         match control {
             Control::Action(a) => a.summary().to_owned(),
@@ -597,6 +607,7 @@ impl App {
     fn workspace_tile(&mut self, ui: &mut egui::Ui) {
         let accent = self.accent();
         let (rect, response) = ui.allocate_exact_size(Vec2::new(104.0, 78.0), Sense::click());
+        response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, "Workspace"));
         let fill = if response.hovered() {
             accent.soft.gamma_multiply(1.3)
         } else {
@@ -611,17 +622,12 @@ impl App {
             ],
             Stroke::new(3.0, accent.fill),
         );
-        // The workspace's emblem: a lens between two rays (the icon set comes in M8c).
-        let c = rect.center() - Vec2::new(0.0, 16.0);
-        ui.painter()
-            .circle_stroke(c, 9.0, Stroke::new(1.6, accent.ink));
-        ui.painter().line_segment(
-            [c - Vec2::new(18.0, 4.0), c + Vec2::new(18.0, 4.0)],
-            Stroke::new(1.4, accent.ink),
-        );
-        ui.painter().line_segment(
-            [c - Vec2::new(18.0, -4.0), c + Vec2::new(18.0, -4.0)],
-            Stroke::new(1.4, accent.ink),
+        // The workspace's emblem.
+        crate::icons::draw(
+            ui.painter(),
+            egui::Rect::from_center_size(rect.center() - Vec2::new(0.0, 15.0), Vec2::splat(30.0)),
+            &format!("workspace-{}", WORKSPACES[self.workspace].id),
+            true,
         );
         ui.painter().text(
             rect.center() + Vec2::new(0.0, 10.0),
@@ -685,19 +691,14 @@ impl App {
         let icon_rect =
             egui::Rect::from_center_size(rect.center_top() + Vec2::new(0.0, 18.0), icon);
         let active = matches!(item.control, Control::Action(Action::Rays)) && self.show_rays;
-        ui.painter().rect_stroke(
-            icon_rect,
-            CornerRadius::same(DARK.radius_sm),
-            Stroke::new(1.4, if active { self.accent().ink } else { ink }),
-            egui::StrokeKind::Inside,
-        );
-        ui.painter().text(
-            icon_rect.center(),
-            egui::Align2::CENTER_CENTER,
-            label.chars().next().unwrap_or('?').to_string(),
-            egui::FontId::proportional(13.0),
-            ink,
-        );
+        if active {
+            ui.painter().rect_filled(
+                icon_rect.expand(3.0),
+                CornerRadius::same(DARK.radius_sm),
+                self.accent().soft,
+            );
+        }
+        crate::icons::draw(ui.painter(), icon_rect, &Self::icon(item.control), enabled);
         ui.painter().text(
             rect.center_bottom() - Vec2::new(0.0, 9.0),
             egui::Align2::CENTER_CENTER,
@@ -705,6 +706,9 @@ impl App {
             egui::FontId::proportional(11.0),
             ink,
         );
+        // Named for screen readers (and the interface tests).
+        response
+            .widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, enabled, label.clone()));
         let response = match &available {
             Ok(()) => response.on_hover_text(Self::summary(item.control)),
             Err(why) => response.on_hover_text(format!("{}: {why}", Self::summary(item.control))),
@@ -1486,6 +1490,32 @@ impl eframe::App for App {
             .frame(Frame::new().fill(DARK.panel).inner_margin(Margin::same(8)))
             .show(ui, |ui| self.properties(ui));
         let accent = self.accent();
+        // The icon review sheet (OPTOBENCH_UI_ICON_SHEET): every icon at 64, 32, 24 and 16.
+        if std::env::var_os("OPTOBENCH_UI_ICON_SHEET").is_some() {
+            egui::CentralPanel::default().show(ui, |ui| {
+                egui::Grid::new("icon-sheet")
+                    .spacing([14.0, 10.0])
+                    .show(ui, |ui| {
+                        for (k, id) in crate::icons::ALL.iter().enumerate() {
+                            ui.vertical(|ui| {
+                                ui.horizontal(|ui| {
+                                    for size in [64.0, 32.0, 24.0, 16.0] {
+                                        let (rect, _) = ui
+                                            .allocate_exact_size(Vec2::splat(size), Sense::hover());
+                                        crate::icons::draw(ui.painter(), rect, id, true);
+                                    }
+                                });
+                                ui.label(RichText::new(*id).size(10.0).color(DARK.text_dim));
+                            });
+                            if k % 5 == 4 {
+                                ui.end_row();
+                            }
+                        }
+                    });
+            });
+            self.screenshot(&ctx);
+            return;
+        }
         let requests = egui::CentralPanel::no_frame()
             .show(ui, |ui| {
                 // Fit once the scene has arrived, with the view's own aspect.
@@ -1637,4 +1667,288 @@ fn chevron(painter: &egui::Painter, at: egui::Pos2, colour: Color32) {
         [at + Vec2::new(0.0, 1.5), at + Vec2::new(3.0, -1.5)],
         stroke,
     );
+}
+
+/// The M8 exit test (docs/milestones/M8-interface.md): the window driven through its own
+/// buttons and fields, as a person would, with `egui_kittest` (no screen, no GPU).
+#[cfg(test)]
+mod exit {
+    use std::path::{Path, PathBuf};
+
+    use egui_kittest::Harness;
+    use egui_kittest::kittest::Queryable;
+    use serde_json::{Value, json};
+
+    use super::App;
+
+    fn scratch(label: &str) -> PathBuf {
+        let dir =
+            std::env::temp_dir().join(format!("optobench-exit-{label}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("scratch");
+        dir
+    }
+
+    fn window(path: Option<PathBuf>, data: &Path) -> Harness<'static, App> {
+        let data = data.to_path_buf();
+        Harness::builder()
+            .with_size(egui::Vec2::new(1440.0, 900.0))
+            .build_eframe(move |cc| App::new(path, Some(data), None, cc.egui_ctx.clone()))
+    }
+
+    /// Runs frames until the background commands are done.
+    fn settle(h: &mut Harness<'static, App>) {
+        let busy = |h: &Harness<'static, App>| {
+            h.state()
+                .doc
+                .as_ref()
+                .is_some_and(|d| !d.running.is_empty())
+        };
+        for _ in 0..6000 {
+            h.step();
+            if !busy(h) {
+                h.step();
+                h.step();
+                if !busy(h) {
+                    return;
+                }
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        panic!(
+            "still running: {:?}",
+            h.state().doc.as_ref().map(|d| &d.running)
+        );
+    }
+
+    /// Clicks the first widget with this label and waits for what it started.
+    fn click(h: &mut Harness<'static, App>, label: &str) {
+        h.step();
+        h.query_all_by_label(label)
+            .next()
+            .unwrap_or_else(|| panic!("no `{label}` on the screen"))
+            .click();
+        h.step();
+        h.step();
+        settle(h);
+    }
+
+    fn errors(h: &Harness<'static, App>) -> Vec<String> {
+        h.state()
+            .doc
+            .as_ref()
+            .map(|d| {
+                d.messages
+                    .iter()
+                    .filter(|m| m.error)
+                    .map(|m| m.text.clone())
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    fn trace(path: &Path, data: &Path) -> Value {
+        optobench_commands::Registry::standard()
+            .run(
+                "trace",
+                &json!({ "path": path.to_string_lossy(), "data_directory": data.to_string_lossy() }),
+            )
+            .expect("traces")
+    }
+
+    #[test]
+    fn a_layout_is_built_traced_optimised_and_saved_in_the_window() {
+        // A collimated beam, a biconvex singlet (R ±50 mm, 4 mm, n = 1.5: f ≈ 50.7 mm)
+        // and a screen 50 mm behind it, about 1 mm short of the focus; the optimiser
+        // slides the screen onto the focus.
+        let dir = scratch("layout");
+        let path = dir.join("bench.optobench");
+        let mut h = window(None, &dir);
+        click(&mut h, "Workspace");
+        click(&mut h, "Layout");
+        h.state_mut().open_path = path.to_string_lossy().into_owned(); // typed in the title bar
+        click(&mut h, "New");
+        assert!(path.is_file(), "New made the file");
+        for add in ["Source", "Lens", "Detector"] {
+            click(&mut h, add);
+        }
+        click(&mut h, "D1");
+        click(&mut h, "slide z");
+        click(&mut h, "Workspace");
+        click(&mut h, "Simulate");
+        click(&mut h, "3  Detectors & merit");
+        click(&mut h, "focus");
+        click(&mut h, "Trace");
+        click(&mut h, "Optimise");
+        assert!(
+            h.state()
+                .doc
+                .as_ref()
+                .is_some_and(|d| d.optimised.is_some()),
+            "{:?}",
+            errors(&h)
+        );
+        click(&mut h, "Apply");
+        assert!(errors(&h).is_empty(), "{:?}", errors(&h));
+
+        let text = std::fs::read_to_string(&path).expect("saved");
+        for expected in [
+            "[[source]]",
+            "[[element]]",
+            "[[detector]]",
+            "kind = \"focus\"",
+            "name = \"D1_slide_z\"",
+            "value = ",
+        ] {
+            assert!(text.contains(expected), "`{expected}` in\n{text}");
+        }
+        // The runs strip: before and after the optimised values.
+        let doc = h.state().doc.as_ref().expect("open");
+        assert!(doc.runs.len() >= 2, "{} runs", doc.runs.len());
+        let first = doc.runs[0].detectors[0].2;
+        let last = doc.runs[doc.runs.len() - 1].detectors[0].2;
+        assert!(last < 0.5 * first, "rms radius {first} → {last}");
+        // What the window saved traces the same on its own.
+        let again = trace(&path, &dir);
+        let rms = again["detectors"][0]["direct_rms_radius_mm"]
+            .as_f64()
+            .expect("rms");
+        assert!((rms - last).abs() < 1e-9 * (1.0 + rms), "{rms} vs {last}");
+        // The uncoated singlet reflects about 4 % at each face (Fresnel); the window's
+        // last run and the saved file agree on what arrives.
+        let saved = again["ledger"]["detected_w"].as_f64().expect("detected")
+            / again["ledger"]["launched_w"].as_f64().expect("launched");
+        assert!((doc.runs[doc.runs.len() - 1].detected - saved).abs() < 1e-12);
+        assert!(saved > 0.9 && saved < 0.95, "{saved}");
+    }
+
+    #[test]
+    fn the_golden_periscopes_cad_workflow_runs_in_the_window() {
+        // The misaligned golden periscope with M2 not yet tagged: tag its body as a
+        // mirror by clicking its reflecting face, give it two tilts, optimise, write the
+        // move report and apply the values.
+        let fixtures =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../crates/optobench-io/tests/step");
+        let dir = scratch("cad");
+        for name in [
+            "periscope-misaligned.optobench",
+            "periscope-misaligned.step",
+        ] {
+            std::fs::copy(fixtures.join(name), dir.join(name)).expect("copied");
+        }
+        let path = dir.join("periscope-misaligned.optobench");
+        optobench_commands::Registry::standard()
+            .run(
+                "edit",
+                &json!({ "path": path.to_string_lossy(), "data_directory": dir.to_string_lossy(),
+                         "operations": [{ "op": "remove", "table": "element", "id": "M2" }] }),
+            )
+            .expect("M2 untagged");
+        let before = trace(&path, &dir);
+        assert!(
+            before["ledger"]["detected_w"].as_f64().unwrap_or(1.0)
+                < 0.5 * before["ledger"]["launched_w"].as_f64().unwrap_or(0.0),
+            "without M2 the light misses the screen"
+        );
+
+        let mut h = window(Some(path.clone()), &dir);
+        settle(&mut h);
+        // Turn the view to face M2's reflecting face (its own +z), as by orbiting, and
+        // click its middle.
+        let (centre, normal) = {
+            let scene = h
+                .state()
+                .doc
+                .as_ref()
+                .and_then(|d| d.scene.as_ref())
+                .expect("scene");
+            let body = scene
+                .items
+                .iter()
+                .find(|i| i.occurrence.as_deref() == Some("mirror:2"))
+                .expect("M2's body");
+            let axes = body.body_axes.expect("its frame");
+            let (lo, hi) = body.mesh.as_ref().expect("triangles").bounds;
+            let middle = [0, 1, 2].map(|k| 0.5 * (lo[k] + hi[k]) as f64);
+            let n = axes[2];
+            ([0, 1, 2].map(|k| middle[k] + 3.0 * n[k]), n)
+        };
+        {
+            let app = h.state_mut();
+            app.camera.target = centre;
+            app.camera.height = 120.0;
+            app.camera.pitch = normal[2].asin();
+            app.camera.yaw = normal[1].atan2(normal[0]);
+        }
+        h.step();
+        let rect = h.state().view.rect.expect("drawn");
+        let at = rect.center();
+        h.event(egui::Event::PointerMoved(at));
+        for pressed in [true, false] {
+            h.event(egui::Event::PointerButton {
+                pos: at,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: egui::Modifiers::NONE,
+            });
+            h.step();
+        }
+        settle(&mut h);
+        assert!(
+            h.state().view.picked_normal.is_some(),
+            "the face was clicked"
+        );
+        click(&mut h, "Tag Mirror");
+        assert!(errors(&h).is_empty(), "{:?}", errors(&h));
+        let text = std::fs::read_to_string(&path).expect("read");
+        assert!(text.contains("reflect = [0.0, 0.0, 1.0]"), "{text}");
+
+        // Select the new mirror (click it again) and give it two tilts.
+        for pressed in [true, false] {
+            h.event(egui::Event::PointerButton {
+                pos: at,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: egui::Modifiers::NONE,
+            });
+            h.step();
+        }
+        settle(&mut h);
+        click(&mut h, "tilt x");
+        click(&mut h, "tilt y");
+        assert!(errors(&h).is_empty(), "{:?}", errors(&h));
+        click(&mut h, "Align");
+        click(&mut h, "Optimise");
+        let optimised = h
+            .state()
+            .doc
+            .as_ref()
+            .and_then(|d| d.optimised.clone())
+            .expect("optimised");
+        let names: Vec<&str> = optimised["dofs"]
+            .as_array()
+            .expect("dofs")
+            .iter()
+            .filter_map(|d| d["name"].as_str())
+            .collect();
+        assert!(
+            names.contains(&"M2_tilt_x") && names.contains(&"M2_tilt_y"),
+            "{names:?}"
+        );
+        assert!(
+            dir.join("periscope-misaligned.moves.md").is_file(),
+            "the move report"
+        );
+        let (start, end) = (
+            optimised["cost"]["start"].as_f64().expect("cost"),
+            optimised["cost"]["end"].as_f64().expect("cost"),
+        );
+        assert!(end < 1e-3 * start, "merit {start} → {end}");
+        click(&mut h, "Apply");
+        assert!(errors(&h).is_empty(), "{:?}", errors(&h));
+        let after = trace(&path, &dir);
+        let detected = after["ledger"]["detected_w"].as_f64().expect("detected")
+            / after["ledger"]["launched_w"].as_f64().expect("launched");
+        assert!((detected - 1.0).abs() < 1e-6, "{detected}");
+    }
 }

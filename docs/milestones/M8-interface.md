@@ -104,7 +104,21 @@ hits where there is no face. The tessellation no longer depends on it.
 
 ### M8c3 Icons and the exit test
 
-- [ ] optobench's own icon set in SolidCraft's design language
-- [ ] Exit test: a layout built, traced, optimised and saved from the interface alone;
-      the golden periscope's CAD workflow (tag, DOFs, optimise, move report) in the
-      interface
+- [x] optobench's own icon set (`icons.rs`, 40 icons), drawn with egui's painter in
+      SolidCraft's icon language: navigation as line art; optical parts as volumes in
+      the isometric cube projection with grey reference geometry and blue results; an
+      optics `beam` role in the ray red; add, import and remove with the blue badge. Every
+      command, action and workspace has its icon (a test checks it); a review sheet
+      (`OPTOBENCH_UI_ICON_SHEET`) shows all at 64, 32, 24 and 16 points
+- [x] Degree-of-freedom buttons name their frame: a layout item's own axes (z along its
+      optical axis), a sidecar's scene axes
+- [x] Exit test (`app.rs`, `exit`), the window driven through its own buttons with
+      `egui_kittest` (no screen, no GPU):
+      - a layout built from nothing (New, Source, Lens, Detector), a slide added to the
+        screen, a focus merit term added in Simulate, traced, optimised and applied: the
+        spot shrinks, and the saved file traces the same on its own
+      - the golden periscope's CAD workflow: M2's body tagged as a mirror by clicking its
+        reflecting face, two tilts added, optimised with the move report written,
+        values applied: all the light reaches the screen
+
+**The M8 exit criterion is met.**
