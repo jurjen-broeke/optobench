@@ -60,6 +60,7 @@ fn empty() -> Scene {
         detectors: vec![],
         solids: vec![],
         split_cutoff: None,
+        dofs: Vec::new(),
     }
 }
 

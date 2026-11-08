@@ -27,14 +27,88 @@ fn failed(message: impl Into<String>) -> CommandError {
     CommandError::new(ErrorCode::Failed, message)
 }
 
+/// The `dofs` parameter: `{ "<name>": value }` in mm (slides) or degrees (tilts).
+pub(crate) fn dof_values(
+    parameters: &Parameters,
+    scene: &optobench_scene::Scene,
+) -> Result<std::collections::BTreeMap<String, f64>, CommandError> {
+    let invalid = |m: String| CommandError::new(ErrorCode::InvalidParameters, m);
+    let mut out = std::collections::BTreeMap::new();
+    let Some(value) = parameters.get("dofs") else {
+        return Ok(out);
+    };
+    let map = value
+        .as_object()
+        .ok_or_else(|| invalid("`dofs` is an object of name: value".into()))?;
+    for (name, v) in map {
+        let v = v
+            .as_f64()
+            .ok_or_else(|| invalid(format!("`dofs.{name}` must be a number")))?;
+        let dof = scene
+            .dofs
+            .iter()
+            .find(|d| &d.name == name)
+            .ok_or_else(|| invalid(format!("no degree of freedom `{name}`")))?;
+        if dof.locked {
+            return Err(invalid(format!("`{name}` is locked")));
+        }
+        out.insert(
+            name.clone(),
+            if dof.motion.is_angle() {
+                v.to_radians()
+            } else {
+                v
+            },
+        );
+    }
+    Ok(out)
+}
+
+/// The scene's DOFs and their values (mm or degrees).
+pub(crate) fn dofs_json(scene: &optobench_scene::Scene) -> Value {
+    json!(
+        scene
+            .dofs
+            .iter()
+            .map(|d| {
+                let angle = d.motion.is_angle();
+                let unit = |x: f64| if angle { x.to_degrees() } else { x };
+                let mut v = json!({
+                    "name": d.name,
+                    "kind": if angle { "tilt" } else { "slide" },
+                    "unit": if angle { "deg" } else { "mm" },
+                    "value": unit(d.value),
+                    "locked": d.locked,
+                });
+                if let Some((low, high)) = d.range {
+                    v["range"] = json!([unit(low), unit(high)]);
+                }
+                if let Some((leader, ratio)) = &d.follows {
+                    v["follows"] = json!(leader);
+                    v["ratio"] = json!(ratio);
+                }
+                v
+            })
+            .collect::<Vec<_>>()
+    )
+}
+
 /// `trace`: parameters `path` (a `.optobench` layout, or a sidecar next to its STEP file),
 /// and optionally `data_directory`
 /// (for imported materials), `svg` (where to write the layout view), `view` (`top` or
-/// `side`) and `rays_drawn` (default 200).
+/// `side`), `rays_drawn` (default 200) and `dofs` (`{ "<name>": value }`, mm or degrees,
+/// in place of the file's values).
 pub(crate) fn trace(parameters: &Parameters) -> Result<Value, CommandError> {
     check_keys(
         parameters,
-        &["path", "data_directory", "svg", "view", "rays_drawn"],
+        &[
+            "path",
+            "data_directory",
+            "svg",
+            "view",
+            "rays_drawn",
+            "dofs",
+        ],
     )?;
     let path = text(parameters, "path")?.ok_or_else(|| {
         CommandError::new(ErrorCode::InvalidParameters, "missing parameter `path`")
@@ -84,6 +158,10 @@ pub(crate) fn trace(parameters: &Parameters) -> Result<Value, CommandError> {
         _ => scene_file::parse_with(&source, &lookups).map(|scene| (scene, Vec::new())),
     }
     .map_err(|e| failed(format!("{path}: {e}")))?;
+    let overrides = dof_values(parameters, &scene)?;
+    let scene = scene
+        .moved(&overrides)
+        .map_err(|e| failed(format!("{path}: {e}")))?;
     let built = scene.build().map_err(|e| failed(format!("{path}: {e}")))?;
     let traced = scene.trace().map_err(|e| failed(format!("{path}: {e}")))?;
 
@@ -145,6 +223,7 @@ pub(crate) fn trace(parameters: &Parameters) -> Result<Value, CommandError> {
         "detectors": detectors,
         "clipping": clipping,
         "parts": crate::parts::matches_json(&parts),
+        "dofs": dofs_json(&scene),
         "embedded": crate::embed::compare(&source, data.as_deref())?,
         "footprints": traced.footprints.iter().map(|f| json!({
             "id": f.id,

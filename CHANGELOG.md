@@ -5,6 +5,11 @@ with the release that introduced them.
 
 ## Unreleased
 
+- M6a degrees of freedom (`optobench_scene::dof`): `dof = [...]` on elements, sources and
+  detectors in layout and sidecar files: slides and tilts about a pivot, with ranges,
+  `locked`, and coupled DOFs (`follows`, `ratio`). In a sidecar a DOF moves the element's
+  whole CAD occurrence. `trace` takes `dofs` values (mm, degrees) and reports them. The
+  closest-key hint counts swapped letters as one edit (`rnage` → `range`).
 - M5c3 embedded parameters: the `embed` command writes a `[resolved]` section at the end
   of a layout or sidecar with the library parts, R/T curves and imported materials the
   trace used, each with its file's SHA-256 (`optobench_io::resolved`). Readers use
