@@ -15,6 +15,7 @@
 
 #![forbid(unsafe_code)]
 
+mod edit;
 mod embed;
 mod materials;
 mod moves;
@@ -225,6 +226,14 @@ const STANDARD: &[Command] = &[
         effect: Effect::Write,
         summary: "embed the library parts, curves and materials a design uses, so it traces without them",
         handler: embed::embed,
+    },
+    Command {
+        id: "edit",
+        label: "Edit",
+        icon: "edit",
+        effect: Effect::Write,
+        summary: "change a layout or sidecar in place (set, add, remove entries and DOFs), keeping its comments; refused if the design would no longer read",
+        handler: edit::edit,
     },
     Command {
         id: "optimize",

@@ -8,6 +8,7 @@
 
 pub mod coatings;
 pub mod curves;
+pub mod edit;
 pub mod library;
 pub mod merit;
 pub mod mesh;

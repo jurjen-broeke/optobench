@@ -21,6 +21,7 @@ optobench-surfaces.workspace = true
 optobench-library.workspace = true
 optobench-optimize.workspace = true
 toml.workspace = true
+toml_edit.workspace = true
 
 [lints]
 workspace = true
