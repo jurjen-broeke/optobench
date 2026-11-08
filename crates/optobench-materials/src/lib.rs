@@ -269,6 +269,11 @@ impl Medium {
     pub fn material(&self) -> &dyn Material {
         self.0.as_ref()
     }
+
+    /// Whether two handles share one material (the same model, not merely equal values).
+    pub fn same(&self, other: &Medium) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
+    }
 }
 
 impl From<f64> for Medium {

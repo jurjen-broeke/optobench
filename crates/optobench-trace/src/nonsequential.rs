@@ -139,6 +139,15 @@ pub enum Role {
     },
     /// Absorbs and records clipping: mounts, tubes, plates, stops.
     Absorber,
+    /// The pupil of an ideal objective (`crate::objective`): a ray arriving from the
+    /// local −z side leaves from the objective's front plane into `exit_medium`, the
+    /// medium in front of it; rays beyond the pupil or the wrong way are clipped.
+    Objective {
+        /// The objective.
+        objective: Arc<crate::objective::IdealObjective>,
+        /// The medium in front of the front plane.
+        exit_medium: usize,
+    },
     /// Absorbs and records a detection, for detector `detector`.
     Detector {
         /// The detector's index (meaning set by the caller).
@@ -602,6 +611,51 @@ impl NonSequentialSystem {
                     };
                     record.detector_point = Some((hit.point.x, hit.point.y));
                     return record;
+                }
+                Role::Objective {
+                    objective,
+                    exit_medium,
+                } => {
+                    let to_local = face.placement.inverse();
+                    let exit_index = match self.medium(*exit_medium, launched.wavelength) {
+                        Ok((n, _)) => n,
+                        Err(end) => {
+                            record.end = end;
+                            return record;
+                        }
+                    };
+                    let passage = objective.pass(
+                        hit.point,
+                        to_local.apply_vector(ray.direction),
+                        launched.wavelength,
+                        exit_index,
+                    );
+                    match passage {
+                        Ok(crate::objective::Passage::Leaves {
+                            position,
+                            direction,
+                            optical_path,
+                        }) => {
+                            ray.position = face.placement.apply_point(position);
+                            ray.direction = face.placement.apply_vector(direction);
+                            ray.optical_path += optical_path;
+                            record.points.push(ray.position);
+                            medium = *exit_medium;
+                            // It leaves from another place: nothing to skip there.
+                            skip.clear();
+                        }
+                        Ok(_) => {
+                            record.end = End::Clipped { face: face_index };
+                            return record;
+                        }
+                        Err(error) => {
+                            record.end = End::MaterialUndefined {
+                                medium: *exit_medium,
+                                error,
+                            };
+                            return record;
+                        }
+                    }
                 }
                 Role::Mirror { clear_radius } => {
                     if outside_clear(*clear_radius) {

@@ -13,6 +13,7 @@ layer = "L5"
 
 [dependencies]
 optobench-io.workspace = true
+optobench-analysis.workspace = true
 optobench-math.workspace = true
 optobench-library.workspace = true
 optobench-optimize.workspace = true

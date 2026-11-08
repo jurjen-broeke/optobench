@@ -84,6 +84,8 @@ pub fn role_colour(role: &str) -> Color32 {
         "lens" => Color32::from_rgb(110, 200, 235),
         "mirror" => Color32::from_rgb(214, 220, 230),
         "detector" => Color32::from_rgb(236, 200, 80),
+        "sample" => Color32::from_rgb(110, 160, 220),
+        "objective" => Color32::from_rgb(214, 128, 36),
         _ => Color32::from_rgb(112, 120, 136),
     }
 }

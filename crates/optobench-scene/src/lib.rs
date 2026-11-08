@@ -101,6 +101,27 @@ pub enum ElementKind {
         /// Clear aperture diameter (mm).
         clear_aperture: f64,
     },
+    /// An ideal microscope objective (`optobench_trace::objective`): the frame's origin
+    /// is its pupil, +z towards the sample.
+    Objective {
+        /// The objective's design.
+        objective: optobench_trace::objective::IdealObjective,
+        /// The barrel's diameter at the pupil (mm): rays inside it but beyond the pupil
+        /// are stopped, rays outside it pass by.
+        diameter: f64,
+    },
+    /// A sample: flat layers from the frame's origin along +z, between the medium above
+    /// the first face (the immersion) and the one below the last.
+    Sample {
+        /// Layers in order: thickness (mm) and medium.
+        layers: Vec<(f64, Medium)>,
+        /// The medium above the first face; the surroundings if `None`.
+        above: Option<Medium>,
+        /// The medium below the last face; the surroundings if `None`.
+        below: Option<Medium>,
+        /// Lateral extent (mm).
+        diameter: f64,
+    },
 }
 
 /// An optical element.
@@ -402,6 +423,8 @@ impl Scene {
         let mut system = NonSequentialSystem::new(self.surrounding.clone());
         let mut owners = Vec::new();
         let air = 0;
+        // The first face of each sample, for finding what is in front of an objective.
+        let mut sample_tops: Vec<usize> = Vec::new();
 
         for (index, element) in self.elements.iter().enumerate() {
             let owner = owners.len();
@@ -497,6 +520,93 @@ impl Scene {
                         });
                     }
                 }
+                ElementKind::Objective {
+                    objective,
+                    diameter,
+                } => {
+                    let id = &element.id;
+                    if !(objective.focal_length > 0.0
+                        && objective.na > 0.0
+                        && objective.pupil_distance > 0.0)
+                    {
+                        return Err(invalid(format!(
+                            "objective `{id}`: focal length, NA and pupil distance must be positive"
+                        )));
+                    }
+                    if *diameter < 2.0 * objective.pupil_radius() {
+                        return Err(invalid(format!(
+                            "objective `{id}`: the diameter ({diameter} mm) is smaller than the pupil (f · NA = {:.3} mm radius)",
+                            objective.pupil_radius()
+                        )));
+                    }
+                    let flat = LensSurface {
+                        radius: f64::INFINITY,
+                        conic: 0.0,
+                    };
+                    system.faces.push(Face {
+                        shape: Shape::Profile(flat.shape()),
+                        placement: transform,
+                        region: Region::Disk {
+                            radius: diameter / 2.0,
+                        },
+                        role: Role::Objective {
+                            objective: std::sync::Arc::new(objective.clone()),
+                            exit_medium: air,
+                        },
+                        negative_medium: air,
+                        positive_medium: air,
+                        owner,
+                    });
+                }
+                ElementKind::Sample {
+                    layers,
+                    above,
+                    below,
+                    diameter,
+                } => {
+                    let id = &element.id;
+                    if layers.is_empty() || layers.iter().any(|(t, _)| t.is_nan() || *t <= 0.0) {
+                        return Err(invalid(format!(
+                            "sample `{id}`: at least one layer, each thicker than zero"
+                        )));
+                    }
+                    let flat = LensSurface {
+                        radius: f64::INFINITY,
+                        conic: 0.0,
+                    };
+                    let medium_or_air = |m: &Option<Medium>, system: &mut NonSequentialSystem| {
+                        m.as_ref().map_or(air, |m| system.add_medium(m.clone()))
+                    };
+                    let mut media = vec![medium_or_air(above, &mut system)];
+                    for (_, m) in layers {
+                        media.push(system.add_medium(m.clone()));
+                    }
+                    media.push(medium_or_air(below, &mut system));
+                    let mut z = 0.0;
+                    for i in 0..=layers.len() {
+                        if i == 0 {
+                            sample_tops.push(system.faces.len());
+                        }
+                        system.faces.push(Face {
+                            shape: Shape::Profile(flat.shape()),
+                            placement: transform
+                                * optobench_math::Transform::from_translation(Vec3::new(
+                                    0.0, 0.0, z,
+                                )),
+                            region: Region::Disk {
+                                radius: diameter / 2.0,
+                            },
+                            role: Role::Refract {
+                                coating: Coating::Uncoated,
+                                clear_radius: None,
+                            },
+                            negative_medium: media[i],
+                            positive_medium: media[i + 1],
+                            owner,
+                        });
+                        z += layers.get(i).map_or(0.0, |(t, _)| *t);
+                    }
+                }
                 ElementKind::Mirror {
                     radius,
                     diameter,
@@ -520,6 +630,41 @@ impl Scene {
                         owner,
                     });
                 }
+            }
+        }
+
+        // Each objective's rays go on in the medium in front of it: above the first sample
+        // face its axis meets from the front plane, else the surroundings.
+        let objectives: Vec<usize> = (0..system.faces.len())
+            .filter(|&i| matches!(system.faces[i].role, Role::Objective { .. }))
+            .collect();
+        for i in objectives {
+            let Role::Objective { objective, .. } = &system.faces[i].role else {
+                continue;
+            };
+            let front = system.faces[i].placement.apply_point(Vec3::new(
+                0.0,
+                0.0,
+                objective.pupil_distance,
+            ));
+            let axis = system.faces[i].placement.apply_vector(Vec3::Z);
+            let medium = sample_tops
+                .iter()
+                .filter_map(|&f| {
+                    let face = &system.faces[f];
+                    let local = face.placement.inverse();
+                    let o = local.apply_point(front);
+                    let d = local.apply_vector(axis);
+                    // The top face is the plane z = 0 of its frame.
+                    (d.z.abs() > 1e-12)
+                        .then(|| -o.z / d.z)
+                        .filter(|t| *t >= -1e-9)
+                        .map(|t| (t, face.negative_medium))
+                })
+                .min_by(|a, b| a.0.total_cmp(&b.0))
+                .map_or(air, |(_, m)| m);
+            if let Role::Objective { exit_medium, .. } = &mut system.faces[i].role {
+                *exit_medium = medium;
             }
         }
 
@@ -911,6 +1056,8 @@ impl Scene {
                     let clear = match &e.kind {
                         ElementKind::Lens { clear_aperture, .. }
                         | ElementKind::Mirror { clear_aperture, .. } => clear_aperture / 2.0,
+                        ElementKind::Objective { objective, .. } => objective.pupil_radius(),
+                        ElementKind::Sample { diameter, .. } => diameter / 2.0,
                     };
                     let axis = e.frame.axes()[2];
                     let reach = points

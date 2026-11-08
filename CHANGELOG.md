@@ -5,6 +5,15 @@ with the release that introduced them.
 
 ## Unreleased
 
+- M9a ideal objective and immersion: layout elements `objective` (focal length, NA,
+  pupil distance, working distance, design immersion, cover glass and sample medium; the
+  Abbe sine condition, rays stopped beyond f · NA) and `sample` (flat layers with the
+  medium above and below). Design rays are traced backwards from the design focus and
+  forwards through the layers actually present, so focal shift, spherical aberration and
+  loss of aperture from index mismatch come from the trace; optical path is set for the
+  PSF. New command `focus`: axial crossings by ray height, paraxial, marginal and best
+  focus. Checked per ray for matched, dry-into-water, oil-into-water, dipping and
+  well-plate cases.
 - Fixed: on strongly curved exact faces (a torus patch 180° round its tube) the inside
   test accepted points across the surface from the face, so a lone curved face could
   block rays it should not. Such points are now decided in the face's parameter plane
