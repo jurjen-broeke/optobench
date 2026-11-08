@@ -175,6 +175,12 @@ struct LocalHit {
 
 impl Face {
     fn intersect(&self, origin: Vec3, direction: Vec3) -> Option<LocalHit> {
+        self.intersect_within(origin, direction, f64::INFINITY)
+    }
+
+    /// As `intersect`, for hits nearer than `maximum` only (a nearer hit is known; the
+    /// placement is rigid, so distances are the same in the face's frame).
+    fn intersect_within(&self, origin: Vec3, direction: Vec3, maximum: f64) -> Option<LocalHit> {
         let to_local = self.placement.inverse();
         let p = to_local.apply_point(origin);
         let d = to_local.apply_vector(direction);
@@ -188,11 +194,14 @@ impl Face {
                         normal: hit.normal,
                     })
             }
-            Shape::Brep(face) => face.intersect(p, d, MINIMUM_DISTANCE).map(|hit| LocalHit {
-                distance: hit.distance,
-                point: hit.point,
-                normal: hit.normal,
-            }),
+            Shape::Brep(face) => {
+                face.intersect_within(p, d, MINIMUM_DISTANCE, maximum)
+                    .map(|hit| LocalHit {
+                        distance: hit.distance,
+                        point: hit.point,
+                        normal: hit.normal,
+                    })
+            }
             Shape::Cylinder { radius, length } => {
                 // (px + t dx)² + (py + t dy)² = r².
                 let a = d.x * d.x + d.y * d.y;
@@ -482,8 +491,14 @@ impl NonSequentialSystem {
         let skipped = |i: usize, hit: &LocalHit| skip.contains(&i) && hit.distance < COINCIDENT;
         if let Some(index) = self.current_index() {
             let mut found: Option<LocalHit> = None;
-            let best = index.nearest(ray.position, ray.direction, |i| {
-                let hit = self.faces[i].intersect(ray.position, ray.direction)?;
+            let best = index.nearest_within(ray.position, ray.direction, |i, limit| {
+                // A hit that could only be skipped must still be seen (its face is
+                // ignored there), so the limit never drops below COINCIDENT.
+                let hit = self.faces[i].intersect_within(
+                    ray.position,
+                    ray.direction,
+                    limit.max(COINCIDENT),
+                )?;
                 if skipped(i, &hit) {
                     return None;
                 }

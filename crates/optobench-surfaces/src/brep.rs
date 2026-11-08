@@ -589,6 +589,8 @@ pub struct BrepFace {
     pub loops: Vec<Vec<Vec3>>,
     bounds: Aabb,
     domain: Option<Domain>,
+    segments: crate::segments::Segments,
+    plane_grid: Option<crate::segments::PlaneGrid>,
 }
 
 const NEWTON_TOLERANCE: f64 = 1e-12;
@@ -802,7 +804,13 @@ impl BrepFace {
             loops,
             bounds: Aabb::EMPTY,
             domain: None,
+            segments: crate::segments::Segments::default(),
+            plane_grid: None,
         };
+        face.segments = crate::segments::Segments::new(&face.loops);
+        if let FaceSurface::Plane(frame) = &face.surface {
+            face.plane_grid = crate::segments::PlaneGrid::new(*frame, &face.loops);
+        }
         face.domain = face.parameter_domain();
         face.bounds = face.compute_bounds();
         face
@@ -973,45 +981,73 @@ impl BrepFace {
         if self.loops.is_empty() {
             return true;
         }
-        let mut best = f64::INFINITY;
-        let mut side = 0.0;
-        for polyline in &self.loops {
+        // A flat face: count crossings, unless the point is next to an edge.
+        let unchanged = self.segments.matches(&self.loops);
+        if let (true, Some(grid)) = (unchanged, &self.plane_grid) {
+            if let Some(inside) = grid.classify(point) {
+                return inside;
+            }
+        }
+        // The nearest segment from the tree, or by a scan if the loops were changed
+        // after the face was made.
+        let nearest = if unchanged {
+            self.segments
+                .nearest(&self.loops, point)
+                .map(|n| (n.polyline, n.k, n.s, n.distance))
+        } else {
+            self.nearest_by_scan(point)
+        };
+        let Some((l, k, s, distance)) = nearest else {
+            return false;
+        };
+        self.lean(l, k, s, point, normal) > 0.0 || distance < 1e-20
+    }
+
+    /// The nearest boundary segment by a scan in loop order: (loop, first point, position
+    /// along it, squared distance).
+    fn nearest_by_scan(&self, point: Vec3) -> Option<(usize, usize, f64, f64)> {
+        let mut best: Option<(usize, usize, f64, f64)> = None;
+        for (l, polyline) in self.loops.iter().enumerate() {
             let n = polyline.len();
             if n < 2 {
                 continue;
             }
             for k in 0..n {
                 let a = polyline[k];
-                let b = polyline[(k + 1) % n];
-                let ab = b - a;
+                let ab = polyline[(k + 1) % n] - a;
                 let length2 = ab.length_squared();
                 if length2 == 0.0 {
                     continue;
                 }
                 let s = ((point - a).dot(ab) / length2).clamp(0.0, 1.0);
-                let q = a + ab * s;
-                let distance = (point - q).length_squared();
-                // Left of the segment: (n × ab)·(p − q) > 0. At a shared vertex use both
-                // neighbouring segments, so corners classify correctly.
-                let left = |from: Vec3, to: Vec3| {
-                    normal.cross(to - from).normalized().unwrap_or(Vec3::ZERO)
-                };
-                let lean = if s <= 0.0 {
-                    let previous = polyline[(k + n - 1) % n];
-                    (left(previous, a) + left(a, b)).dot(point - q)
-                } else if s >= 1.0 {
-                    let next = polyline[(k + 2) % n];
-                    (left(a, b) + left(b, next)).dot(point - q)
-                } else {
-                    left(a, b).dot(point - q)
-                };
-                if distance < best - 1e-24 {
-                    best = distance;
-                    side = lean;
+                let distance = (point - (a + ab * s)).length_squared();
+                if best.is_none_or(|b| distance < b.3 - 1e-24) {
+                    best = Some((l, k, s, distance));
                 }
             }
         }
-        side > 0.0 || best < 1e-20
+        best
+    }
+
+    /// How far the point leans to the left of segment `k` of loop `l` (positive: inside),
+    /// seen along the face normal. At a shared vertex both neighbouring segments count,
+    /// so corners classify correctly.
+    fn lean(&self, l: usize, k: usize, s: f64, point: Vec3, normal: Vec3) -> f64 {
+        let polyline = &self.loops[l];
+        let n = polyline.len();
+        let (a, b) = (polyline[k], polyline[(k + 1) % n]);
+        let q = a + (b - a) * s;
+        let left =
+            |from: Vec3, to: Vec3| normal.cross(to - from).normalized().unwrap_or(Vec3::ZERO);
+        if s <= 0.0 {
+            let previous = polyline[(k + n - 1) % n];
+            (left(previous, a) + left(a, b)).dot(point - q)
+        } else if s >= 1.0 {
+            let next = polyline[(k + 2) % n];
+            (left(a, b) + left(b, next)).dot(point - q)
+        } else {
+            left(a, b).dot(point - q)
+        }
     }
 
     /// Every intersection of the ray with the surface (not yet trimmed), as hits.
@@ -1115,23 +1151,36 @@ impl BrepFace {
 
     /// The nearest hit on the face with distance greater than `minimum`.
     pub fn intersect(&self, origin: Vec3, direction: Vec3, minimum: f64) -> Option<FaceHit> {
+        self.intersect_within(origin, direction, minimum, f64::INFINITY)
+    }
+
+    /// As [`BrepFace::intersect`], ignoring hits at `maximum` or beyond (a nearer hit on
+    /// another face is already known): the boundary test, the costly part, runs only on
+    /// hits that could win, nearest first.
+    pub fn intersect_within(
+        &self,
+        origin: Vec3,
+        direction: Vec3,
+        minimum: f64,
+        maximum: f64,
+    ) -> Option<FaceHit> {
         if self
             .bounds
             .ray_interval(origin, direction)
-            .is_none_or(|(_, exit)| exit < minimum)
+            .is_none_or(|(enter, exit)| exit < minimum || enter >= maximum)
         {
             return None;
         }
-        self.surface_hits(origin, direction)
+        let mut hits: Vec<FaceHit> = self
+            .surface_hits(origin, direction)
             .into_iter()
-            // The side test of `contains` holds near the face; far along an unbounded
-            // surface (a cylinder beyond the face's end) the bounding box decides first.
-            .filter(|h| {
-                h.distance > minimum
-                    && self.bounds.contains(h.point)
-                    && self.contains(h.point, h.normal)
-            })
-            .min_by(|a, b| a.distance.total_cmp(&b.distance))
+            .filter(|h| h.distance > minimum && h.distance < maximum)
+            .collect();
+        hits.sort_by(|a, b| a.distance.total_cmp(&b.distance));
+        // The side test of `contains` holds near the face; far along an unbounded
+        // surface (a cylinder beyond the face's end) the bounding box decides first.
+        hits.into_iter()
+            .find(|h| self.bounds.contains(h.point) && self.contains(h.point, h.normal))
     }
 }
 

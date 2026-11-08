@@ -150,6 +150,17 @@ impl Bvh {
         direction: Vec3,
         mut test: impl FnMut(usize) -> Option<f64>,
     ) -> Option<(usize, f64)> {
+        self.nearest_within(origin, direction, |i, _| test(i))
+    }
+
+    /// As [`Bvh::nearest`], telling `test` the distance of the nearest hit so far, so it
+    /// can skip work on hits that cannot be nearer.
+    pub fn nearest_within(
+        &self,
+        origin: Vec3,
+        direction: Vec3,
+        mut test: impl FnMut(usize, f64) -> Option<f64>,
+    ) -> Option<(usize, f64)> {
         let mut best: Option<(usize, f64)> = None;
         let mut stack = Vec::with_capacity(64);
         if !self.nodes.is_empty() {
@@ -164,7 +175,7 @@ impl Bvh {
             match &self.nodes[node] {
                 Node::Leaf { start, count, .. } => {
                     for &i in &self.order[*start..start + count] {
-                        if let Some(d) = test(i) {
+                        if let Some(d) = test(i, best.map_or(f64::INFINITY, |(_, b)| b)) {
                             if d < best.map_or(f64::INFINITY, |(_, b)| b) {
                                 best = Some((i, d));
                             }
