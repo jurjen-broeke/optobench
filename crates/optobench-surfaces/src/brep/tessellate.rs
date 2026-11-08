@@ -14,7 +14,7 @@ use std::collections::HashMap;
 use std::f64::consts::{PI, TAU};
 
 use optobench_math::Vec3;
-use spade::{ConstrainedDelaunayTriangulation, Point2, Triangulation};
+use spade::{ConstrainedDelaunayTriangulation, Point2, Triangulation as _};
 
 use super::{BrepFace, Curve, FaceSurface};
 
@@ -96,13 +96,126 @@ struct Node {
     exact: Option<Vec3>,
 }
 
+/// A face's parameter plane triangulated with its boundary loops as constraints, the
+/// regions between them, and which regions are the face's.
+pub(super) struct Triangulation {
+    cdt: ConstrainedDelaunayTriangulation<Point2<f64>>,
+    /// The exact 3D point of each boundary vertex, by vertex index.
+    exact: HashMap<usize, Vec3>,
+    /// Parameters to the plane of the triangulation.
+    scale: (f64, f64),
+    /// Region of each triangle, by face index.
+    region: HashMap<usize, usize>,
+    /// Per region: inside, outside, or not decided by the boundary.
+    decided: Vec<Option<bool>>,
+    /// The parameter ranges triangulated (a whole period on periodic directions).
+    ranges: [(f64, f64); 2],
+    /// For deciding points quickly: a grid over the plane whose cells the boundary does
+    /// not cross hold their answer.
+    cells: Option<Cells>,
+}
+
+/// A coarse grid over the triangulated plane: per cell inside, outside, or "look it up"
+/// (the boundary crosses it, or no region decides it).
+struct Cells {
+    low: (f64, f64),
+    size: (f64, f64),
+    n: usize,
+    /// 0 outside, 1 inside, 2 look up.
+    state: Vec<u8>,
+}
+
+impl Cells {
+    const N: usize = 64;
+
+    fn index(&self, p: Point2<f64>) -> Option<usize> {
+        let i = ((p.x - self.low.0) / self.size.0).floor();
+        let j = ((p.y - self.low.1) / self.size.1).floor();
+        let n = self.n as f64;
+        (i >= 0.0 && j >= 0.0 && i < n && j < n).then(|| j as usize * self.n + i as usize)
+    }
+}
+
+impl core::fmt::Debug for Triangulation {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("Triangulation")
+            .field("vertices", &self.cdt.num_vertices())
+            .field("regions", &self.decided.len())
+            .finish()
+    }
+}
+
+impl Triangulation {
+    /// The grid of answers: cells any boundary segment's box touches are looked up,
+    /// the rest hold the decision at their centre.
+    fn cells(&self, segments: &[(Point2<f64>, Point2<f64>)]) -> Cells {
+        let low = (
+            self.ranges[0].0 * self.scale.0,
+            self.ranges[1].0 * self.scale.1,
+        );
+        let high = (
+            self.ranges[0].1 * self.scale.0,
+            self.ranges[1].1 * self.scale.1,
+        );
+        let n = Cells::N;
+        let size = (
+            ((high.0 - low.0) / n as f64).max(1e-12),
+            ((high.1 - low.1) / n as f64).max(1e-12),
+        );
+        let mut cells = Cells {
+            low,
+            size,
+            n,
+            state: vec![3; n * n],
+        };
+        let cell =
+            |x: f64, lo: f64, step: f64| (((x - lo) / step).floor().max(0.0) as usize).min(n - 1);
+        for (a, b) in segments {
+            let (i0, i1) = (
+                cell(a.x.min(b.x) - 1e-9, low.0, size.0),
+                cell(a.x.max(b.x) + 1e-9, low.0, size.0),
+            );
+            let (j0, j1) = (
+                cell(a.y.min(b.y) - 1e-9, low.1, size.1),
+                cell(a.y.max(b.y) + 1e-9, low.1, size.1),
+            );
+            for j in j0..=j1 {
+                for i in i0..=i1 {
+                    cells.state[j * n + i] = 2;
+                }
+            }
+        }
+        for j in 0..n {
+            for i in 0..n {
+                if cells.state[j * n + i] == 3 {
+                    let centre = Point2::new(
+                        low.0 + (i as f64 + 0.5) * size.0,
+                        low.1 + (j as f64 + 0.5) * size.1,
+                    );
+                    cells.state[j * n + i] = match BrepFace::decide(self, centre) {
+                        Some(false) => 0,
+                        Some(true) => 1,
+                        None => 2,
+                    };
+                }
+            }
+        }
+        cells
+    }
+}
+
 impl BrepFace {
-    /// The face as triangles for drawing; empty for an unbounded face (a plane, cylinder
-    /// or cone without boundary loops).
-    pub fn tessellate(&self, fineness: Fineness) -> Mesh {
+    /// The face's parameter plane triangulated: loops thinned to the chord tolerance
+    /// and a grid fine enough for drawing (`for_drawing`), or the loops as sampled and
+    /// only the corners of the range (for deciding whether a point is on the face).
+    pub(super) fn triangulate(
+        &self,
+        fineness: Fineness,
+        for_drawing: bool,
+    ) -> Option<Triangulation> {
         let map = Parameters::new(self);
         if self.loops.is_empty() && !map.closed_without_loops() {
-            return Mesh::default();
+            return None;
         }
 
         // Boundary loops in the parameter plane, each continuous (periodic parameters
@@ -111,7 +224,11 @@ impl BrepFace {
         for polyline in self.loops.iter().filter(|l| l.len() >= 2) {
             // The loops are sampled finely for tracing; drawing needs only the chord
             // tolerance.
-            let polyline = thin(polyline, fineness.chord);
+            let polyline = if for_drawing {
+                thin(polyline, fineness.chord)
+            } else {
+                polyline.clone()
+            };
             let mut nodes: Vec<Node> = Vec::with_capacity(polyline.len() + 1);
             let mut hint = None;
             for &p in &polyline {
@@ -203,7 +320,14 @@ impl BrepFace {
                 }
             }
         };
-        let (us, vs) = (lines(0), lines(1));
+        let (us, vs) = if for_drawing {
+            (lines(0), lines(1))
+        } else {
+            (
+                vec![ranges[0].0, ranges[0].1],
+                vec![ranges[1].0, ranges[1].1],
+            )
+        };
         for &u in &us {
             for &v in &vs {
                 let _ = cdt.insert(to_plane((u, v)));
@@ -293,8 +417,85 @@ impl BrepFace {
                 votes[r] -= 1;
             }
         }
-        let mut decided: Vec<Option<bool>> =
-            votes.iter().map(|&v| (v != 0).then_some(v > 0)).collect();
+        let decided: Vec<Option<bool>> = votes.iter().map(|&v| (v != 0).then_some(v > 0)).collect();
+        let mut triangulation = Triangulation {
+            cdt,
+            exact,
+            scale,
+            region,
+            decided,
+            ranges,
+            cells: None,
+        };
+        if !for_drawing {
+            triangulation.cells = Some(triangulation.cells(&segments));
+        }
+        Some(triangulation)
+    }
+
+    /// The decision at a point of the plane, by locating it among the triangles.
+    fn decide(t: &Triangulation, at: Point2<f64>) -> Option<bool> {
+        let face = match t.cdt.locate(at) {
+            spade::PositionInTriangulation::OnFace(face) => face.index(),
+            spade::PositionInTriangulation::OnEdge(edge) => {
+                let edge = t.cdt.directed_edge(edge);
+                match (edge.face().as_inner(), edge.rev().face().as_inner()) {
+                    (Some(f), _) | (None, Some(f)) => f.fix().index(),
+                    (None, None) => return None,
+                }
+            }
+            spade::PositionInTriangulation::OutsideOfConvexHull(_) => return Some(false),
+            _ => return None,
+        };
+        t.decided[*t.region.get(&face)?]
+    }
+
+    /// Whether a point of the surface is on the face, decided in the parameter plane:
+    /// `None` where the boundary does not decide (a region it does not touch).
+    pub(super) fn contains_by_parameters(&self, point: Vec3) -> Option<bool> {
+        let t = self
+            .parameter_regions
+            .get_or_init(|| {
+                self.triangulate(Fineness::default(), false)
+                    .map(std::sync::Arc::new)
+            })
+            .as_ref()?;
+        let map = Parameters::new(self);
+        let mut uv = map.uv(point, None);
+        for axis in 0..2 {
+            if map.periodic[axis] {
+                let (lo, _) = t.ranges[axis];
+                let wrapped = lo + (get(uv, axis) - lo).rem_euclid(TAU);
+                set(&mut uv, axis, wrapped);
+            }
+        }
+        let at = Point2::new(uv.0 * t.scale.0, uv.1 * t.scale.1);
+        if let Some(cells) = &t.cells {
+            match cells.index(at).map(|i| cells.state[i]) {
+                Some(0) => return Some(false),
+                Some(1) => return Some(true),
+                _ => {}
+            }
+        }
+        Self::decide(t, at)
+    }
+
+    /// The face as triangles for drawing; empty for an unbounded face (a plane, cylinder
+    /// or cone without boundary loops).
+    pub fn tessellate(&self, fineness: Fineness) -> Mesh {
+        let Some(Triangulation {
+            cdt,
+            exact,
+            scale,
+            region,
+            mut decided,
+            ..
+        }) = self.triangulate(fineness, true)
+        else {
+            return Mesh::default();
+        };
+        let map = Parameters::new(self);
+        let unscale = |p: Point2<f64>| (p.x / scale.0, p.y / scale.1);
 
         // Keep the triangles inside the face.
         let mut mesh = Mesh::default();

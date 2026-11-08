@@ -233,3 +233,37 @@ fn corpus_golden_assembly_hits_are_exact() {
         assert!(worst.contains_key(k), "no hit on any {k} face");
     }
 }
+
+#[test]
+fn each_point_of_a_split_torus_belongs_to_one_face() {
+    // torus.step: major radius 20, minor 4, as two faces, a patch 120° round the axis by
+    // 180° across the tube and the rest. Faces split a surface: where a ray meets the
+    // outer wall (24 mm from the axis), exactly one of them may report the hit. The
+    // patch's far side lies across the tube from its boundary, where the nearest boundary
+    // segment in 3D is on the other side of the surface.
+    let faces = load("torus");
+    assert_eq!(faces.faces.len(), 2);
+    for degrees in [-170.0_f64, -100.0, -60.0, -10.0, 30.0, 90.0, 150.0] {
+        for height in [-2.0, 0.0, 2.0] {
+            let a = degrees.to_radians();
+            let toward = Vec3::new(-a.cos(), -a.sin(), 0.0);
+            let origin = Vec3::new(50.0 * a.cos(), 50.0 * a.sin(), height);
+            let outer = 50.0 - (20.0 + (16.0_f64 - height * height).sqrt());
+            let reporting = faces
+                .faces
+                .iter()
+                .filter(|f| {
+                    let to_local = f.placement.inverse();
+                    f.geometry
+                        .intersect(
+                            to_local.apply_point(origin),
+                            to_local.apply_vector(toward),
+                            1e-9,
+                        )
+                        .is_some_and(|h| (h.distance - outer).abs() < 1e-6)
+                })
+                .count();
+            assert_eq!(reporting, 1, "at {degrees}°, height {height}");
+        }
+    }
+}

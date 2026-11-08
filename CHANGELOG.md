@@ -5,6 +5,11 @@ with the release that introduced them.
 
 ## Unreleased
 
+- Fixed: on strongly curved exact faces (a torus patch 180° round its tube) the inside
+  test accepted points across the surface from the face, so a lone curved face could
+  block rays it should not. Such points are now decided in the face's parameter plane
+  (the tessellation's boundary regions, with a grid for speed). The corpus assemblies
+  trace exactly as before, within 3 % of the time.
 - M8c3 icons and exit test: optobench's own icon set in SolidCraft's icon language
   (40 icons, drawn with egui's painter; an optics `beam` role), on every ribbon button and
   workspace tile; DOF buttons name their frame (a layout item's own axes, a sidecar's

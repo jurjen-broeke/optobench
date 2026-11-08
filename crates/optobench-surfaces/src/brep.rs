@@ -594,6 +594,39 @@ pub struct BrepFace {
     domain: Option<Domain>,
     segments: crate::segments::Segments,
     plane_grid: Option<crate::segments::PlaneGrid>,
+    /// For curved faces, the parameter-plane regions, made the first time a point far
+    /// from the boundary is tested.
+    parameter_regions: ParameterRegions,
+}
+
+/// A face's parameter regions, made once when first needed. Two faces compare equal
+/// whatever has been made: it follows from the rest of the face.
+#[derive(Default, Clone)]
+struct ParameterRegions(std::sync::OnceLock<Option<std::sync::Arc<tessellate::Triangulation>>>);
+
+impl ParameterRegions {
+    fn get_or_init(
+        &self,
+        make: impl FnOnce() -> Option<std::sync::Arc<tessellate::Triangulation>>,
+    ) -> &Option<std::sync::Arc<tessellate::Triangulation>> {
+        self.0.get_or_init(make)
+    }
+}
+
+impl PartialEq for ParameterRegions {
+    fn eq(&self, _: &Self) -> bool {
+        true
+    }
+}
+
+impl core::fmt::Debug for ParameterRegions {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str(if self.0.get().is_some() {
+            "made"
+        } else {
+            "not made"
+        })
+    }
 }
 
 const NEWTON_TOLERANCE: f64 = 1e-12;
@@ -809,6 +842,7 @@ impl BrepFace {
             domain: None,
             segments: crate::segments::Segments::default(),
             plane_grid: None,
+            parameter_regions: ParameterRegions::default(),
         };
         face.segments = crate::segments::Segments::new(&face.loops);
         if let FaceSurface::Plane(frame) = &face.surface {
@@ -1003,6 +1037,17 @@ impl BrepFace {
         let Some((l, k, s, distance)) = nearest else {
             return false;
         };
+        // On a curved face the nearest boundary segment can lie across the surface (the
+        // far side of a torus tube), where its side says nothing about the point: then the
+        // parameter plane decides, where the boundary has no such ambiguity. Across the
+        // surface shows as a normal at the nearest boundary point turned more than 60°
+        // from the point's (analytic surfaces), or, on free-form ones, as a distance from
+        // the boundary beyond a tenth of the face's bending radius.
+        if self.across_surface(l, k, s, point, normal, distance) {
+            if let Some(inside) = self.contains_by_parameters(point) {
+                return inside;
+            }
+        }
         self.lean(l, k, s, point, normal) > 0.0 || distance < 1e-20
     }
 
@@ -1030,6 +1075,52 @@ impl BrepFace {
             }
         }
         best
+    }
+
+    /// Whether the nearest boundary point (segment `k` of loop `l` at `s`, squared
+    /// distance `distance`) may lie across the surface from `point`.
+    fn across_surface(
+        &self,
+        l: usize,
+        k: usize,
+        s: f64,
+        point: Vec3,
+        normal: Vec3,
+        distance: f64,
+    ) -> bool {
+        if matches!(self.surface, FaceSurface::Plane(_)) {
+            return false;
+        }
+        let polyline = &self.loops[l];
+        let (a, b) = (polyline[k], polyline[(k + 1) % polyline.len()]);
+        let q = a + (b - a) * s;
+        match self.surface.analytic_normal(q) {
+            Some(n) => {
+                let n = if self.reversed { -n } else { n };
+                n.dot(normal) < 0.0
+            }
+            None => self
+                .bending_radius(point)
+                .is_some_and(|radius| distance > (0.1 * radius).powi(2)),
+        }
+    }
+
+    /// The smallest radius of curvature of a curved face near a point (for a free-form
+    /// surface, a quarter of the face's size); `None` for a plane.
+    fn bending_radius(&self, point: Vec3) -> Option<f64> {
+        match &self.surface {
+            FaceSurface::Plane(_) => None,
+            FaceSurface::Cylinder { radius, .. } => Some(radius.abs()),
+            FaceSurface::Cone {
+                frame, semi_angle, ..
+            } => {
+                let q = frame.to_local_point(point);
+                Some(q.x.hypot(q.y) / semi_angle.cos().abs().max(1e-12))
+            }
+            FaceSurface::Sphere { radius, .. } => Some(radius.abs()),
+            FaceSurface::Torus { major, minor, .. } => Some(minor.abs().min(major.abs())),
+            _ => Some(0.25 * self.bounds.size()),
+        }
     }
 
     /// How far the point leans to the left of segment `k` of loop `l` (positive: inside),
