@@ -17,6 +17,7 @@
 
 mod embed;
 mod materials;
+mod optimize;
 mod parts;
 mod trace;
 
@@ -154,6 +155,11 @@ const STANDARD: &[Command] = &[
         id: "embed",
         summary: "embed the library parts, curves and materials a design uses, so it traces without them",
         handler: embed::embed,
+    },
+    Command {
+        id: "optimize",
+        summary: "the DOF values that best meet a design's merit (focus, centring, pointing, collimation, power)",
+        handler: optimize::optimize,
     },
 ];
 

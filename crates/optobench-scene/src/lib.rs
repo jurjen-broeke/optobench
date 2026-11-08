@@ -949,6 +949,12 @@ pub struct DetectorResult {
     pub direct_centroid: (f64, f64),
     /// Power-weighted RMS distance of the direct light from its centroid (mm).
     pub direct_rms_radius: f64,
+    /// Power-weighted mean slope (dx/dz, dy/dz) of the direct light's directions in the
+    /// detector's frame: where the beam points (radians, small angles).
+    pub direct_mean_slope: (f64, f64),
+    /// Power-weighted RMS spread of the direct light's slopes about their mean: zero for
+    /// a collimated beam (radians).
+    pub direct_rms_slope: f64,
     /// Rays received.
     pub rays: usize,
     /// Power-weighted centroid in the detector's local (x, y) (mm).
@@ -978,6 +984,17 @@ impl DetectorResult {
             .collect();
         let direct_power: f64 = direct.iter().map(|h| h.1).sum();
         let (direct_centroid, direct_rms_radius) = centroid_and_rms(&direct);
+        // Slopes of the direct rays in the detector's frame.
+        let slopes: Vec<((f64, f64), f64)> = records
+            .iter()
+            .filter(|r| r.generation == 0)
+            .filter(|r| matches!(r.end, End::Detected { detector, .. } if detector == index))
+            .filter_map(|r| {
+                let d = detector.frame.to_local_vector(r.ray.direction);
+                (d.z.abs() > 1e-12).then(|| ((d.x / d.z, d.y / d.z), r.ray.power))
+            })
+            .collect();
+        let (direct_mean_slope, direct_rms_slope) = centroid_and_rms(&slopes);
         let bins = (90.0 / ANGULAR_BIN_DEGREES).round() as usize;
         let mut angular = vec![0.0; bins];
         let normal = detector.frame.axes()[2];
@@ -1024,6 +1041,8 @@ impl DetectorResult {
             direct_power,
             direct_centroid,
             direct_rms_radius,
+            direct_mean_slope,
+            direct_rms_slope,
             angular,
             rays: hits.len(),
             centroid,

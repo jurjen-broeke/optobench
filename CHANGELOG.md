@@ -5,6 +5,14 @@ with the release that introduced them.
 
 ## Unreleased
 
+- M6b optimiser: damped least squares (Levenberg–Marquardt with bounds,
+  `optobench_optimize::lm`) over a scene's free DOFs; merit terms focus, centring,
+  pointing, collimation and power (`[[merit]]` in layout and sidecar files, or the
+  command's `merit`); the `optimize` command returns each DOF's start and suggested value
+  and every term before and after. Detectors report the direct beam's mean slope and RMS
+  slope spread (`direct_mean_slope_mrad`, `direct_rms_slope_mrad`). Fixed: a scene's poses
+  now always match its DOF values (`Scene::placed` at reading, `moved` by the change), so
+  moving twice no longer adds the offsets twice.
 - M6a degrees of freedom (`optobench_scene::dof`): `dof = [...]` on elements, sources and
   detectors in layout and sidecar files: slides and tilts about a pivot, with ranges,
   `locked`, and coupled DOFs (`follows`, `ratio`). In a sidecar a DOF moves the element's

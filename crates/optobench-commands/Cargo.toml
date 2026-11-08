@@ -14,6 +14,7 @@ layer = "L5"
 [dependencies]
 optobench-io.workspace = true
 optobench-library.workspace = true
+optobench-optimize.workspace = true
 optobench-materials.workspace = true
 optobench-scene.workspace = true
 serde_json.workspace = true

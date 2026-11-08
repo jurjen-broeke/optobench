@@ -93,6 +93,50 @@ pub(crate) fn dofs_json(scene: &optobench_scene::Scene) -> Value {
     )
 }
 
+/// A design file read with the user's data: its scene, the library parts it matched,
+/// its text and the data directory used (the `data_directory` parameter or the
+/// platform's).
+pub(crate) fn load(
+    path: &str,
+    parameters: &Parameters,
+) -> Result<
+    (
+        optobench_scene::Scene,
+        Vec<optobench_io::sidecar::PartMatch>,
+        String,
+        Option<PathBuf>,
+    ),
+    CommandError,
+> {
+    let data: Option<PathBuf> = text(parameters, "data_directory")?
+        .map(PathBuf::from)
+        .or_else(default_data_directory);
+
+    let source = std::fs::read_to_string(path).map_err(|e| failed(format!("{path}: {e}")))?;
+    let lookup = |name: &str| material(data.as_deref(), name);
+    let library = match &data {
+        Some(root) => optobench_io::library::load(root).map_err(failed)?,
+        None => optobench_library::Library::default(),
+    };
+    let curves = |name: &str| match &data {
+        Some(root) => optobench_io::curves::load(root, name),
+        None => optobench_io::coatings::no_curves(name),
+    };
+    let lookups = scene_file::Lookups {
+        materials: &lookup,
+        curves: &curves,
+        library: &library,
+    };
+    let (scene, parts) = match sidecar::kind_of(&source).as_deref() {
+        Some("sidecar") => {
+            sidecar::read(&source, Path::new(path), &lookups).map(|read| (read.scene, read.parts))
+        }
+        _ => scene_file::parse_with(&source, &lookups).map(|scene| (scene, Vec::new())),
+    }
+    .map_err(|e| failed(format!("{path}: {e}")))?;
+    Ok((scene, parts, source, data))
+}
+
 /// `trace`: parameters `path` (a `.optobench` layout, or a sidecar next to its STEP file),
 /// and optionally `data_directory`
 /// (for imported materials), `svg` (where to write the layout view), `view` (`top` or
@@ -132,32 +176,7 @@ pub(crate) fn trace(parameters: &Parameters) -> Result<Value, CommandError> {
             )
         })? as usize,
     };
-    let data: Option<PathBuf> = text(parameters, "data_directory")?
-        .map(PathBuf::from)
-        .or_else(default_data_directory);
-
-    let source = std::fs::read_to_string(path).map_err(|e| failed(format!("{path}: {e}")))?;
-    let lookup = |name: &str| material(data.as_deref(), name);
-    let library = match &data {
-        Some(root) => optobench_io::library::load(root).map_err(failed)?,
-        None => optobench_library::Library::default(),
-    };
-    let curves = |name: &str| match &data {
-        Some(root) => optobench_io::curves::load(root, name),
-        None => optobench_io::coatings::no_curves(name),
-    };
-    let lookups = scene_file::Lookups {
-        materials: &lookup,
-        curves: &curves,
-        library: &library,
-    };
-    let (scene, parts) = match sidecar::kind_of(&source).as_deref() {
-        Some("sidecar") => {
-            sidecar::read(&source, Path::new(path), &lookups).map(|read| (read.scene, read.parts))
-        }
-        _ => scene_file::parse_with(&source, &lookups).map(|scene| (scene, Vec::new())),
-    }
-    .map_err(|e| failed(format!("{path}: {e}")))?;
+    let (scene, parts, source, data) = load(path, parameters)?;
     let overrides = dof_values(parameters, &scene)?;
     let scene = scene
         .moved(&overrides)
@@ -177,6 +196,9 @@ pub(crate) fn trace(parameters: &Parameters) -> Result<Value, CommandError> {
                 "direct_power_w": d.direct_power,
                 "direct_centroid_mm": [d.direct_centroid.0, d.direct_centroid.1],
                 "direct_rms_radius_mm": d.direct_rms_radius,
+                // Where the direct beam points, and how far it is from collimated (mrad).
+                "direct_mean_slope_mrad": [d.direct_mean_slope.0 * 1e3, d.direct_mean_slope.1 * 1e3],
+                "direct_rms_slope_mrad": d.direct_rms_slope * 1e3,
                 "rays": d.rays,
                 "centroid_mm": [d.centroid.0, d.centroid.1],
                 "rms_radius_mm": d.rms_radius,

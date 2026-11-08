@@ -61,6 +61,10 @@
 //! size = [10, 10]
 //! pixels = [100, 100]
 //!
+//! [[merit]]                         # what `optimize` aligns for, as in layout files
+//! kind = "centring"
+//! detector = "image"
+//!
 //! # [resolved] ...                  # written by `embed`, always last: see `resolved`
 //! ```
 //!
@@ -703,6 +707,7 @@ pub fn read(text: &str, sidecar: &Path, lookups: &Lookups) -> Result<Read, FileE
             "detector",
             "trace",
             "resolved",
+            "merit",
             "library",
         ],
         "top level",
@@ -1066,6 +1071,7 @@ pub fn read(text: &str, sidecar: &Path, lookups: &Lookups) -> Result<Read, FileE
             .extend(dofs(&item, &target, &frame, false, frame.origin())?);
     }
     crate::scene_file::check_dofs(&scene)?;
+    let scene = scene.placed().map_err(|e| error(e.to_string()))?;
     Ok(Read { scene, parts })
 }
 
