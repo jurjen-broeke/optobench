@@ -361,11 +361,12 @@ pub fn draw(painter: &Painter, rect: Rect, id: &str, enabled: bool) {
             c.dot(start, 6.0, r.beam);
         }
         "view" => {
-            let upper = c.arc(pos2(32.0, 52.0), 30.0, 215.0, 325.0);
-            let lower = c.arc(pos2(32.0, 12.0), 30.0, 35.0, 145.0);
+            // An eye 48 wide and 28 tall with pointed corners; the pupil under the lids.
+            c.dot(pos2(32.0, 32.0), 12.0, r.a2);
+            let upper = c.arc(pos2(32.0, 46.0), 28.0, 210.0, 330.0);
+            let lower = c.arc(pos2(32.0, 18.0), 28.0, 30.0, 150.0);
             c.line(&upper, NAVIGATION, r.line);
             c.line(&lower, NAVIGATION, r.line);
-            c.dot(pos2(32.0, 32.0), 8.0, r.a2);
         }
         "list" => {
             for y in [16.0, 32.0, 48.0] {
