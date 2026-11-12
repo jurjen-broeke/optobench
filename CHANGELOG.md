@@ -5,6 +5,12 @@ with the release that introduced them.
 
 ## Unreleased
 
+- Roadmap: new milestone M10 Field propagation and graphs, before the sample. Fields are
+  propagated between chosen planes where diffraction matters (apertures, pinholes, fibre
+  coupling): rays are turned into a sampled field, propagated, and turned back into rays.
+  Every result can be drawn as a graph and compared with theory, another design or an
+  earlier run. The sample, fluorescence and heating milestone and those after it are now
+  M11–M15; roadmap figure redrawn. docs/milestones/M10-field-propagation-and-graphs.md.
 - M9c2 vectorial PSF and the exit check: new command `psf` gives the Richards–Wolf
   vectorial PSF behind an objective through the layers in front of it (stratified media),
   fed by the traced pupil field: peak irradiance, Strehl ratio, widths, axial and lateral

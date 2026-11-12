@@ -61,6 +61,8 @@ committed test is cited there. See `corpus/README.md` on a machine that has one.
 | rays and interactions | `optobench-trace` (L2) |
 | scene, DOFs, proxies, sample / library lookup | `optobench-scene`, `optobench-library` (L3) |
 | analyses / optimizer, tolerancing | `optobench-analysis`, `optobench-optimize` (L4) |
-| file formats, STEP, reports, fetch / SolidCraft control channel | `optobench-io`, `optobench-bridge` (L5) |
+| graphs as data (built from results, no rendering) | `optobench-analysis` (L4) |
+| sampled fields, propagation, rays to fields and back | `optobench-field` (L4, from M10) |
+| file formats, STEP, reports, graphs as SVG and CSV / SolidCraft control channel | `optobench-io`, `optobench-bridge` (L5) |
 | command registry (JSON in, JSON out) | `optobench-commands` (L5) |
 | command line | `apps/optobench-cli` |

@@ -1,6 +1,6 @@
 [package]
 name = "optobench-bridge"
-description = "SolidCraft control-channel adapter (Phase B, milestones M9-M10)"
+description = "SolidCraft control-channel adapter (Phase B, milestones M12-M13)"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
