@@ -421,6 +421,78 @@ mod tests {
         );
     }
 
+    /// Star's diffuse fluence rate under a wide collimated beam on a half-space, for unit
+    /// irradiance entering the medium: φs = 2 (F₊ + F₋) with F± from W. M. Star, "Diffusion
+    /// theory of light transport", ch. 6 of Welch and van Gemert (2nd ed., 2011), Eqs.
+    /// (6.72), (6.73), (6.77) and (6.82a, b), boundary F₊(0) = r₂₁ F₋(0). Taken with g = 0,
+    /// where his source terms and ours (first scattering isotropic) are the same.
+    fn star_half_space(mu_a: f64, mu_s: f64, r21: f64, z: f64) -> f64 {
+        let mu_t = mu_a + mu_s;
+        let mu_eff = (3.0 * mu_a * mu_t).sqrt();
+        let s_plus = mu_s / 4.0 * (5.0 * mu_a + 5.0 * mu_s);
+        let s_minus = mu_s / 4.0 * (mu_a + mu_s);
+        let q = (mu_eff - 2.0 * mu_a) / (mu_eff + 2.0 * mu_a);
+        let k = mu_t * mu_t - mu_eff * mu_eff;
+        let homogeneous = (s_plus - r21 * s_minus) / (k * (1.0 - r21 * q));
+        let f_plus = homogeneous * (-mu_eff * z).exp() - s_plus / k * (-mu_t * z).exp();
+        let f_minus = q * homogeneous * (-mu_eff * z).exp() - s_minus / k * (-mu_t * z).exp();
+        2.0 * (f_plus + f_minus)
+    }
+
+    #[test]
+    fn a_collimated_beam_on_a_half_space() {
+        // µa 0.1, µs 1 /mm, g = 0: µ_eff ≈ 0.574 /mm. A beam of 1 W/mm² over the whole
+        // grid (radius ~8.6/µ_eff, so the dark side is far from the axis), scattered out of
+        // the direct beam at µs e^{−µt z}; the diffuse fluence on the axis against Star's
+        // closed form (above), index matched (r₂₁ ≈ 0) and for n = 1.4 against air, with
+        // r₂₁ = (A − 1)/(A + 1) from the A the solver uses.
+        let (mu_a, mu_s): (f64, f64) = (0.1, 1.0);
+        let mu_t = mu_a + mu_s;
+        let d = 1.0 / (3.0 * mu_t);
+        let grid = RzGrid {
+            radius: 15.0,
+            rings: 60,
+            z: (0.0, 15.0),
+            slices: 300,
+        };
+        let mut source = vec![0.0; grid.cells()];
+        for j in 0..grid.slices {
+            let (za, zb) = (
+                grid.z.0 + j as f64 * grid.dz(),
+                grid.z.0 + (j + 1) as f64 * grid.dz(),
+            );
+            let per_area = mu_s / mu_t * ((-mu_t * za).exp() - (-mu_t * zb).exp());
+            for i in 0..grid.rings {
+                source[grid.index(i, j)] = per_area * grid.volume(i) / grid.dz();
+            }
+        }
+        let scattered: f64 = source.iter().sum();
+        for inside in [1.0, 1.4] {
+            let surface = Boundary::between(inside, 1.0);
+            let Boundary::Partial { a } = surface else {
+                panic!("partial")
+            };
+            let r21 = (a - 1.0) / (a + 1.0);
+            let problem =
+                Diffusion::layered(grid, &vec![(mu_a, d); grid.slices], surface, Boundary::Zero);
+            let light = problem.solve(&source).expect("solves");
+            for j in (0..grid.slices).step_by(10).take(14) {
+                let z = grid.z_at(j);
+                let expected = star_half_space(mu_a, mu_s, r21, z);
+                let got = light.fluence[grid.index(0, j)];
+                assert!(
+                    (got / expected - 1.0).abs() < 0.01,
+                    "n = {inside}, z = {z}: {got} vs {expected}"
+                );
+            }
+            let total = light.absorbed + light.top + light.bottom + light.side;
+            assert!(
+                (total / scattered - 1.0).abs() < 1e-9,
+                "{total} vs {scattered}"
+            );
+        }
+    }
+
     #[test]
     fn the_effective_reflection_of_an_index_mismatch() {
         // R_eff for n = 1.4 is about 0.53, so A ≈ 3.25 (Haskell et al. 1994, table 1 range);

@@ -59,8 +59,14 @@ the diffusion approximation here; photon transport by Monte Carlo replaces it in
       traced slab, the scattered and directly absorbed power on the grid equal the
       trace's own accounts to 10⁻⁹ and the diffuse light's absorbed and escaping power
       add up to the scattered power to 10⁻⁹
-- [ ] A collimated beam on a half-space against a published closed form, once a source
-      is in the corpus (Welch and van Gemert, or Farrell et al. 1992)
+- [x] A collimated beam on a half-space against a published closed form: W. M. Star,
+      "Diffusion theory of light transport", ch. 6 of A. J. Welch and M. J. C. van Gemert,
+      Optical-Thermal Response of Laser-Irradiated Tissue, 2nd ed. (Springer, 2011)
+      (local corpus), Eqs. (6.72), (6.73), (6.77), (6.82a, b), boundary F₊(0) = r₂₁ F₋(0),
+      which is our partial-current face with A = (1 + r₂₁)/(1 − r₂₁) (his h = 2D(1 + r₂₁)/
+      (1 − r₂₁), Eq. (6.83)). Taken with g = 0, where his source terms and our isotropic
+      first scattering coincide; matched and n = 1.4, to 1 % on the axis
+      (`diffusion::tests::a_collimated_beam_on_a_half_space`)
 
 ## M11b Excitation
 
@@ -157,13 +163,52 @@ the diffusion approximation here; photon transport by Monte Carlo replaces it in
       bioheat with the light as source, ρc ∂T/∂t = ∇·(k∇T) + ρ_b c_b w_b (T_A − T) + q_m
       + φ µa, baseline 37 °C, arterial blood 36.7 °C) but put their thermal and perfusion
       values in Supplementary Table S1, and take µa, µs and g from J. D. Johansson,
-      J. Biomed. Opt. 15, 057005 (2010). Both are needed next (corpus). It
+      J. Biomed. Opt. 15, 057005 (2010). Both are now in the corpus; what they give is
+      under "Brain properties from the sources" below. It
       models light by Monte Carlo transport; at the millimetre scale of this heating the
       diffusion approximation should do, so the check is our steady-state heating per
       100 mW at 250 µm against 1.86 ± 0.25 (within its stated error), the ratio of 500 to
       150 µm, and the field-size dependence; a larger gap is reported, and the light
       transport part of it moves to M15. Their code (available on request, no licence) is
       not used
+
+## Brain properties from the sources
+
+Read from the local corpus on 2026-11-13; each value cited where a test uses it.
+
+- **Stujenske, Spellman and Gordon, Cell Rep. 12, 525 (2015), Supplemental Table 1**
+  (Pennes model): brain ρ = 1.04 × 10⁻⁶ kg/mm³, c = 3.65 × 10⁶ mJ/(kg °C),
+  k = 0.527 (printed "mW m⁻¹ °C⁻¹"; it must be W m⁻¹ °C⁻¹ = mW mm⁻¹ °C⁻¹: their
+  Eq. (10), Δt = (Δx)² ρc / (6k) = 1.1 ms with Δx = 30 µm, holds only with that unit);
+  blood ρ_b = 1.06 × 10⁻⁶ kg/mm³, c_b = 3.6 × 10⁶ mJ/(kg °C); perfusion
+  w_b = 8.5 × 10⁻³ s⁻¹ (≈ 51 mL/100 g/min); metabolic heat q_m = 9.7 × 10⁻³ mW/mm³;
+  arterial 36.7 °C, initial brain 37 °C. Main text: brain n = 1.36; µa, µs, g "linearly
+  interpolated" from Johansson (2010); Henyey–Greenstein Monte Carlo; tissue a
+  cylinder 6 mm in radius, 10 mm thick
+- **Johansson, J. Biomed. Opt. 15, 057005 (2010), Table 1** (from human ex vivo data,
+  his ref. 17), µs (1/mm), g, n:
+  - gray matter, n 1.36: 480 nm 11, 0.89; 580 nm 9.7, 0.89; 640 nm 9.0, 0.89;
+    700 nm 8.2, 0.9; 780 nm 7.8, 0.90; 900 nm 6.6, 0.9 (µs′ 1.21 … 0.66)
+  - white matter, n 1.38: 480 nm 43, 0.80; 580 nm 41, 0.83; 640 nm 41, 0.84;
+    700 nm 40, 0.86; 780 nm 38, 0.87; 900 nm 33, 0.88 (µs′ 8.60 … 3.96)
+  - µs′ fits ∝ λ^−0.96 (gray), λ^−1.16 (white), Sect. 3.1
+  - µa is given only as measured spectra (Figs. 6b, 7b, 480–900 nm), not as numbers.
+    Read off the figure, at 900 nm gray matter is ~0.015–0.02 /mm and white matter
+    ~0.06 /mm; figure readings, not reference values. Chromophore fits in the text:
+    gray matter 0.54 % deoxygenated blood, 0.08 % melanosomes, reduced cytochromes c and
+    aa3 2.2 and 4.0 µM; white matter 0.12 % oxygenated and 0.14 % deoxygenated blood,
+    0.11 % melanosomes, oxidised cytochrome aa3 2.4 µM
+  - 920 nm (Podgorski and Ranganathan) lies outside Table 1: µs and g must be
+    extrapolated (e.g. by the λ^−0.96 fit: gray-matter µs′ ≈ 0.646 /mm), and Podgorski and
+    Ranganathan do not say how they did it. The benchmark states the values it uses and
+    reports its sensitivity to µa over the figure's range
+- **Welch and van Gemert (2011)**, beyond Star's chapter: J. W. Valvano, ch. 12, Table 12.9
+  (water, k 6.233 mW/(cm °C) at 310 K, 5.818 … 6.797 from 280 to 370 K) and Table 12.12
+  (perfusion, mL/100 g/min: e.g. rat frontal cortex 106 ± 6, baboon gray matter
+  56.2 ± 7.7); K. R. Diller, ch. 10, Table 10.2 gives water at 37 °C k = 9.49 × 10⁻² W/(m K),
+  which disagrees with Table 12.9 (0.623) and must be a misprint, and ρ = 993 kg/m³,
+  c = 4.178 kJ/(kg K). Star's Table 6.2: r₂₁ for n = 1.4 is 0.49 (step) or 0.53 (Fresnel),
+  as our A ≈ 3.25 gives (r₂₁ = 0.529)
 
 ## Open questions
 
