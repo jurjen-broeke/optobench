@@ -5,6 +5,14 @@ with the release that introduced them.
 
 ## Unreleased
 
+- M10b fields and propagation: new engine crate `optobench-field` (L4). Sampled fields
+  with a spherical reference; propagation by the angular spectrum or Fresnel's integral
+  in one transform, chosen from the grid's Fresnel number, through foci and past them;
+  apertures with exact edges, thin lenses, Zernike phase maps; exact Gaussian beams;
+  irradiance and phase maps. Checked against the q law, Fresnel's on-axis formula for a
+  circular aperture, the Airy pattern, a truncated Gaussian, the Talbot effect and
+  Maréchal's approximation. New dependency `rustfft` (MIT OR Apache-2.0), behind the
+  crate's own transform interface.
 - M10a2 more graphs, and graphs in the window: `graph` draws a Gaussian beam along its
   path, sweeps over a DOF, the wavefront error at the PSF peak and the optimiser's
   progress (`optimize` now returns its `history`). The window's Graph button (CAD,

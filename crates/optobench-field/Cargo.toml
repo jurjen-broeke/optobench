@@ -1,0 +1,20 @@
+[package]
+name = "optobench-field"
+description = "Sampled optical fields: propagation (angular spectrum, Fresnel), masks and phase screens, conversion to and from rays"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[package.metadata.optobench]
+layer = "L4"
+
+[dependencies]
+optobench-math.workspace = true
+optobench-analysis.workspace = true
+rustfft.workspace = true
+
+[lints]
+workspace = true

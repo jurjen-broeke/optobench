@@ -81,7 +81,7 @@ jobs:
           -p optobench-surfaces -p optobench-materials
           -p optobench-trace
           -p optobench-scene -p optobench-library
-          -p optobench-analysis -p optobench-optimize
+          -p optobench-analysis -p optobench-optimize -p optobench-field
 
   deny:
     name: cargo-deny (licences, advisories, sources)

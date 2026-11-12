@@ -71,26 +71,40 @@ Graphs come first: the field work is inspected with them.
 
 ## M10b Fields and propagation
 
-- [ ] `optobench-field` (L4): a sampled complex field per polarization component on a
-      square grid across a plane, with wavelength, medium and an optional spherical
-      reference (curvature carried analytically); power Σ n |E|² dA checked at every
-      step
-- [ ] FFT: `rustfft` (MIT OR Apache-2.0, builds for wasm32; decided 2026-11-12) behind a
-      transform interface in `optobench-field`, with a row in the licence checks; an own
-      transform stays open for later performance work
-- [ ] Propagation: angular spectrum for short distances, Fresnel transfer or
-      single-transform for long ones, chosen from the grid's Fresnel number; zero padding;
-      sampling rules enforced with a clear message when the grid is too coarse; tilted
-      planes by rotating the angular spectrum
-- [ ] Masks and screens: apertures and mechanics cut by the plane (proxy plates and
-      tubes, STEP bodies) as amplitude masks with exact edges; ideal thin lenses, the
-      ideal objective's pupil and Zernike phase maps as phase screens
-- [ ] A Gaussian source as its exact field
-- [ ] Checks: FFT against a direct DFT; a Gaussian's w(z), R(z) and Gouy phase against the
-      q law (Siegman ch. 17); a circular aperture's on-axis irradiance
-      4 I₀ sin²(π a² / (2 λ z)) (Goodman §4.5); its far field the Airy pattern; a
-      truncated Gaussian's transmitted power 1 − exp(−2a²/w²); a grating's Talbot
-      self-image at 2d²/λ; power conserved by every propagator
+- [x] `optobench-field` (L4): a sampled complex field per polarization component on a
+      square grid across a plane, with wavelength, medium and a spherical reference (its
+      curvature carried analytically); power Σ n |E|² dA conserved by every step
+- [x] FFT: `rustfft` 6.4 (MIT OR Apache-2.0, builds for wasm32; decided 2026-11-12) behind
+      `optobench_field::transform`, the only module that knows it; `cargo deny` passes.
+      An own transform stays open for later performance work
+- [x] Propagation: through expanding coordinates (a field of curvature c over z is its
+      flat samples over z / M, M = 1 + z c, scaled by M), then the angular spectrum on
+      the same grid while the grid's Fresnel number N Δ² / (λ z) is at least 1, else
+      Fresnel's integral in one transform onto a grid of λ z / (N Δ) with the outgoing
+      sphere as the new reference; at a focus the incoming sphere and the chirp cancel
+      (a lens and its focal distance give the far field); past a focus the grid inverts.
+      Fields whose phase steps by more than π/2 between samples are refused with a
+      message; the report gives the method, the Fresnel number and the power at the
+      grid's edge (wrap-around); `padded` widens the grid; the angular spectrum can be
+      forced for periodic fields
+- [x] Masks and screens: apertures (circle, annulus, rectangle, stop) with exact edges
+      (a cell an edge crosses keeps its open fraction of the field); ideal thin lenses as
+      a change of the reference sphere (nothing to sample); Zernike phase maps (ANSI);
+      any amplitude or phase by `modulate`
+- [x] A Gaussian beam as its exact field anywhere along it (radius, curvature, Gouy
+      phase, carrier)
+- [x] Field maps: irradiance and phase (relative to the reference sphere, blank where
+      dark), cropped to the lit region
+- [x] Checks (`optobench-field` `tests/propagation.rs`, unit tests): FFT against the direct
+      DFT; a Gaussian beam at 50 mm, z_R and 4 z_R from its waist and through a 100 mm
+      lens before, at and past its focus, against the q law, every sample to 10⁻⁶ of the
+      peak, radius w(z) to 10⁻⁴; a circular aperture's on-axis irradiance
+      4 I₀ sin²(π a² / (2 λ z)) at Fresnel numbers 1 to 4 to 0.2 %; its far field the Airy
+      pattern (peak and seven samples out) to 0.2 %; a truncated Gaussian's transmitted
+      power 1 − exp(−2a²/w²) to 0.2 % and its focal peak to 0.1 %; a grating's Talbot
+      self-image at 2d²/λ and its half-period shift at half that, to 10⁻⁶; Maréchal's
+      exp(−(2πσ)²) for 0.05 waves of spherical aberration to 0.01; power conserved by
+      every propagation to 10⁻⁹; a field too coarse for its phase refused
 
 ## M10c Rays to fields and back
 
@@ -101,6 +115,10 @@ Graphs come first: the field work is inspected with them.
 - [ ] Field to rays: one ray per cell above a power threshold, along the local phase
       gradient, with the cell's power and optical path; rays from rough phase (near a
       dark ring) marked
+- [ ] Masks from the scene: proxy plates and tubes and STEP bodies cut by a field's plane,
+      as apertures with exact edges (moved from M10b: it needs the scene)
+- [ ] Tilted planes, by rotating the angular spectrum (moved from M10b: needed where a
+      field meets a tilted element)
 - [ ] Field detectors: irradiance n |E|² and the field itself, as graphs
 - [ ] Mode overlap: coupling into a single-mode fibre (Gaussian of its mode-field
       diameter) or any field, |∫ E₁* E₂ dA|² / (∫ |E₁|² dA ∫ |E₂|² dA)

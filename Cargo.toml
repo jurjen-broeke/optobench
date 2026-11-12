@@ -21,6 +21,7 @@ optobench-scene = { path = "crates/optobench-scene" }             # L3
 optobench-library = { path = "crates/optobench-library" }         # L3
 optobench-analysis = { path = "crates/optobench-analysis" }       # L4
 optobench-optimize = { path = "crates/optobench-optimize" }       # L4
+optobench-field = { path = "crates/optobench-field" }             # L4
 optobench-io = { path = "crates/optobench-io" }                   # L5
 optobench-bridge = { path = "crates/optobench-bridge" }           # L5
 optobench-commands = { path = "crates/optobench-commands" }       # L5
@@ -32,6 +33,7 @@ spade = { version = "2.15", default-features = false, features = ["std"] }  # MI
 egui = "0.37"                                                     # MIT OR Apache-2.0
 eframe = { version = "0.37", default-features = false, features = ["default_fonts", "wgpu", "accesskit", "wayland", "x11"] }  # MIT OR Apache-2.0; default_fonts: OFL-1.1, Ubuntu-font-1.0 (allowed for fonts, deny.toml)
 serde_json = { version = "1.0.154", features = ["float_roundtrip"] }  # MIT OR Apache-2.0; exact float parsing, so saved results read back bit for bit
+rustfft = "6.4"                                                   # MIT OR Apache-2.0; FFT for fields, behind optobench-field's `transform` (design.md, Field propagation)
 toml = { version = "1.2.1", default-features = false, features = ["std", "parse", "serde", "display"] }  # MIT OR Apache-2.0 (display: toml_writer, MIT OR Apache-2.0)
 toml_edit = { version = "0.25", default-features = false, features = ["parse", "display"] }  # MIT OR Apache-2.0; format-preserving edits
 
