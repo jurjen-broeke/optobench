@@ -85,6 +85,17 @@ impl Transform {
     }
 }
 
+/// The inverse transform of one line, without the 1/N: x_j = Σ_k X_k e^{+2πi jk/N}.
+pub fn inverse_line(data: &mut [Complex]) {
+    let n = data.len();
+    let plan = FftPlanner::new().plan_fft_inverse(n);
+    let mut buffer: Vec<Number<f64>> = data.iter().map(|c| Number::new(c.re, c.im)).collect();
+    plan.process(&mut buffer);
+    for (d, v) in data.iter_mut().zip(buffer) {
+        *d = Complex::new(v.re, v.im);
+    }
+}
+
 /// Swaps the halves of a grid along both axes (even N), so the sample at index N/2
 /// moves to index 0 and back: between centred grids and the transform's order.
 pub fn shift(data: &mut [Complex], n: usize) {

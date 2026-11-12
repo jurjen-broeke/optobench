@@ -141,9 +141,28 @@ Graphs come first: the field work is inspected with them.
       1 − e⁻² to 0.3 %, a lens tube's bore beyond clips nothing, and the axis at 1 m is lit
       as Fresnel's integral over the clipped beam says, to 1 %; the difference from the
       rays is drawn
-- [ ] Masks from STEP bodies cut by the field's plane (proxies are done); open
-- [ ] Tilted field planes, by rotating the angular spectrum; open. In the hybrid the
-      field is turned back into rays before anything tilted, which the trace handles
+- [x] Masks from STEP bodies: every absorbing body on the way is cut at nine planes
+      through its depth; four lines per grid row, their crossings with the body's own
+      faces (`Face::crossings` in the trace) telling inside from outside, so a cell keeps
+      its open fraction exactly along x and to a quarter cell along y. A lens or mirror
+      body on the way is the trace's and refused. Checks: the STEP fixtures' cylinder
+      (Ø12) in a 20 mm beam passes 1 − (6/10)², the block a quadrant less (3/4), each to
+      0.3 % at the first cutting plane, the later planes taking the light diffracted into
+      the shadow
+- [x] Tilted field planes (`Field::tilted`): a plane tilted about the field's x or y,
+      every sample the angular spectrum summed exactly at its point on the tilted plane
+      (each plane wave propagated to its height there; N³ operations, nothing
+      interpolated), the oblique incidence carried as a tilt (direction cosines) so the
+      samples stay smooth, irradiance and power with the obliquity factor; a tilted field
+      is an end point. Targets tilted about the start plane's x or y. Checks: a Gaussian
+      beam on planes tilted 30° about y and −20° about x equals the q-law beam at every
+      point of the plane to 10⁻⁶ of the peak, the same power crosses, the footprint
+      stretches by 1 / cos α; in a layout, a screen tilted 30° by its DOF takes all the
+      power, footprint w(z) / cos 30° by w(z), and the rays from it reach a further screen
+      as those from an untilted one (power to 10⁻³, RMS radius to 1 %)
+- [x] Sampling: a field is refused when more than 2 % of its lit power sits at phase
+      steps beyond π/2 between neighbours; a hard edge's diffraction (a few coarse steps
+      by the edge) passes, a smooth phase too steep for the grid does not
 
 M10's exit criterion is met: each closed form and the rays → field → rays and PSF
-comparisons above.
+comparisons above. M10 Field propagation and graphs is complete.

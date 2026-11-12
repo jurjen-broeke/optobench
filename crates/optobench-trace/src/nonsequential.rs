@@ -262,6 +262,29 @@ impl Face {
 }
 
 impl Face {
+    /// Every distance along the line from `origin` in the unit `direction` at which it
+    /// crosses the face, nearest first, up to `length` (scene frame, mm): for telling
+    /// inside from outside of a closed body by counting crossings.
+    pub fn crossings(&self, origin: Vec3, direction: Vec3, length: f64) -> Vec<f64> {
+        let mut out = Vec::new();
+        let mut travelled = 0.0;
+        // Each search starts just past the last crossing (beyond MINIMUM_DISTANCE).
+        for _ in 0..64 {
+            match self.intersect_within(
+                origin + direction * travelled,
+                direction,
+                length - travelled,
+            ) {
+                Some(hit) if travelled + hit.distance <= length => {
+                    travelled += hit.distance;
+                    out.push(travelled);
+                }
+                _ => break,
+            }
+        }
+        out
+    }
+
     /// A bounding box of the face in the scene frame.
     pub fn bounds(&self) -> Aabb {
         let local = match &self.shape {

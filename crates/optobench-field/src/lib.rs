@@ -66,6 +66,15 @@ impl core::fmt::Display for FieldError {
 
 impl std::error::Error for FieldError {}
 
+/// Which of a field's own axes a plane is tilted about.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TiltAxis {
+    /// About x: y′ leans towards z.
+    X,
+    /// About y: x′ leans towards z.
+    Y,
+}
+
 /// How a propagation was done.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Method {
@@ -97,6 +106,7 @@ pub struct Field {
     wavelength: f64,
     index: f64,
     curvature: f64,
+    tilt: (f64, f64),
     components: [Vec<Complex>; 2],
 }
 
@@ -123,6 +133,7 @@ impl Field {
             wavelength,
             index,
             curvature: 0.0,
+            tilt: (0.0, 0.0),
             components: [vec![Complex::ZERO; n * n], vec![Complex::ZERO; n * n]],
         })
     }
@@ -206,6 +217,13 @@ impl Field {
         self.curvature
     }
 
+    /// The direction cosines (x, y) of the plane wave carried with the samples: the field
+    /// is the samples times exp(i k (sₓ x + s_y y)) besides the sphere. Zero but on a
+    /// tilted plane ([`Field::tilted`]), where a beam meets the plane obliquely.
+    pub fn tilt(&self) -> (f64, f64) {
+        self.tilt
+    }
+
     /// The wavelength in the medium (mm).
     pub fn medium_wavelength(&self) -> f64 {
         self.wavelength * 1e-3 / self.index
@@ -230,22 +248,34 @@ impl Field {
     /// The field itself, sphere included, at row `r`, column `c`.
     pub fn value(&self, component: usize, r: usize, c: usize) -> Complex {
         let (x, y) = (self.position(c), self.position(r));
-        let phase = self.k() * (x * x + y * y) * self.curvature / 2.0;
+        let phase =
+            self.k() * ((x * x + y * y) * self.curvature / 2.0 + self.tilt.0 * x + self.tilt.1 * y);
         self.components[component][r * self.n + c] * Complex::new(phase.cos(), phase.sin())
     }
 
-    /// n |E|² at row `r`, column `c` (W/mm²).
+    /// The irradiance on the plane at row `r`, column `c` (W/mm²): n |E|², times the
+    /// obliquity √(1 − sₓ² − s_y²) on a tilted plane, where the beam meets it at an angle
+    /// and its power spreads over more of it.
     pub fn irradiance(&self, r: usize, c: usize) -> f64 {
         let i = r * self.n + c;
-        self.index * (self.components[0][i].norm_squared() + self.components[1][i].norm_squared())
+        self.index
+            * self.obliquity()
+            * (self.components[0][i].norm_squared() + self.components[1][i].norm_squared())
     }
 
-    /// Σ n |E|² Δ² (W).
+    /// √(1 − sₓ² − s_y²): 1 but on a tilted plane.
+    fn obliquity(&self) -> f64 {
+        (1.0 - self.tilt.0 * self.tilt.0 - self.tilt.1 * self.tilt.1)
+            .max(0.0)
+            .sqrt()
+    }
+
+    /// The power through the plane, Σ irradiance Δ² (W).
     pub fn power(&self) -> f64 {
         let sum: f64 = (0..self.n * self.n)
             .map(|i| self.components[0][i].norm_squared() + self.components[1][i].norm_squared())
             .sum();
-        self.index * sum * self.spacing * self.spacing
+        self.index * self.obliquity() * sum * self.spacing * self.spacing
     }
 
     /// The beam's radius per axis from its second moments, 2σ (mm): the 1/e² radius of a
@@ -341,20 +371,19 @@ impl Field {
         out
     }
 
-    /// The largest phase step between neighbouring stored samples that are both clearly
-    /// lit (a hundredth of the peak irradiance or more), in radians. Between dimmer samples
-    /// the phase may jump by π across a zero of the field (a dark ring): that is the
-    /// field, not under-sampling.
-    pub fn largest_phase_step(&self) -> f64 {
+    /// The phase steps between neighbouring stored samples that are both clearly lit (a
+    /// hundredth of the peak irradiance or more): the largest (radians), and the share of
+    /// the lit power at steps beyond π/2. Between dimmer samples the phase may jump by π
+    /// across a zero of the field (a dark ring), and by a hard edge a little light reaches
+    /// the grid's finest frequencies: that is the field. A smooth phase too steep for the
+    /// grid (a lens written into the samples) makes most steps coarse.
+    pub fn phase_steps(&self) -> (f64, f64) {
         let n = self.n;
-        let peak = (0..n * n)
-            .map(|i| self.components[0][i].norm_squared() + self.components[1][i].norm_squared())
-            .fold(0.0, f64::max);
-        let lit = |i: usize| {
-            self.components[0][i].norm_squared() + self.components[1][i].norm_squared()
-                >= 1e-2 * peak
-        };
-        let mut largest: f64 = 0.0;
+        let weight =
+            |i: usize| self.components[0][i].norm_squared() + self.components[1][i].norm_squared();
+        let peak = (0..n * n).map(weight).fold(0.0, f64::max);
+        let lit = |i: usize| weight(i) >= 1e-2 * peak;
+        let (mut largest, mut coarse, mut total) = (0.0f64, 0.0, 0.0);
         for k in 0..2 {
             let s = &self.components[k];
             for r in 0..n {
@@ -368,13 +397,33 @@ impl Field {
                         if let Some(j) = neighbour.filter(|&j| lit(j) && s[j].norm_squared() > 0.0)
                         {
                             let step = s[i] * s[j].conjugate();
-                            largest = largest.max(step.im.atan2(step.re).abs());
+                            let size = step.im.atan2(step.re).abs();
+                            largest = largest.max(size);
+                            let w = weight(i) + weight(j);
+                            total += w;
+                            if size > COARSEST {
+                                coarse += w;
+                            }
                         }
                     }
                 }
             }
         }
-        largest
+        (largest, if total > 0.0 { coarse / total } else { 0.0 })
+    }
+
+    /// Refuses a field whose phase is too steep for its grid (see [`Field::phase_steps`]).
+    fn check_sampling(&self, what: &str) -> Result<(), FieldError> {
+        let (largest, share) = self.phase_steps();
+        if share > 0.02 {
+            return Err(FieldError::Undersampled(format!(
+                "{what}: the phase steps by up to {largest:.2} rad between neighbouring samples, \
+                 beyond {COARSEST:.2} for {:.0} % of the lit field; use a finer grid, or carry the \
+                 curvature as a reference sphere",
+                share * 100.0
+            )));
+        }
+        Ok(())
     }
 
     /// Propagates the field over `z` (mm, either way), choosing the method from the grid's
@@ -387,13 +436,12 @@ impl Field {
     /// (`None`: chosen). Forcing the angular spectrum suits periodic fields (a grating)
     /// whose spectrum has only a few lines, whatever the distance.
     pub fn propagate_with(&mut self, z: f64, method: Option<Method>) -> Result<Report, FieldError> {
-        let step = self.largest_phase_step();
-        if step > COARSEST {
-            return Err(FieldError::Undersampled(format!(
-                "the field's phase changes by {step:.2} rad between neighbouring samples \
-                 (at most {COARSEST:.2}); use a finer grid, or carry the curvature as a reference sphere"
-            )));
+        if self.tilt != (0.0, 0.0) {
+            return Err(FieldError::Grid(
+                "a field on a tilted plane is an end point: graph it, couple it or turn it into rays".into(),
+            ));
         }
+        self.check_sampling("the field")?;
         if z == 0.0 {
             return Ok(Report {
                 method: Method::AngularSpectrum,
@@ -572,6 +620,113 @@ impl Field {
         if total > 0.0 { edge / total } else { 0.0 }
     }
 
+    /// The field on a plane through the grid's centre tilted by `angle` (radians) about
+    /// the field's own `axis` (x or y): the target plane's x′ (or y′) runs along
+    /// (cos α, 0, sin α) (or (0, cos α, sin α)). Every sample is the angular spectrum summed
+    /// exactly at its point on the tilted plane (each plane wave propagated to its height
+    /// there), so nothing is interpolated: the plane-wave rotation of K. Matsushima,
+    /// H. Schimmel and F. Wyrowski (J. Opt. Soc. Am. A 20, 1755 (2003)) evaluated directly,
+    /// N³ operations. The oblique incidence becomes the field's tilt carrier, so the samples
+    /// stay smooth. Components keep their x and y (scalar diffraction). The sphere must be
+    /// sampled on the grid: tilt near a waist, or on a finer grid.
+    pub fn tilted(&self, angle: f64, axis: TiltAxis) -> Result<Field, FieldError> {
+        if self.tilt != (0.0, 0.0) {
+            return Err(FieldError::Grid(
+                "the field is already on a tilted plane".into(),
+            ));
+        }
+        // About x: the same as about y with x and y swapped.
+        if axis == TiltAxis::X {
+            let mut swapped = self.transposed();
+            swapped = swapped.tilted(angle, TiltAxis::Y)?;
+            return Ok(swapped.transposed());
+        }
+        let n = self.n;
+        let k = self.k();
+        let dx = self.spacing;
+        // The whole field, sphere included, sampled.
+        let mut full = self.clone();
+        full.curvature = 0.0;
+        for comp in 0..2 {
+            for r in 0..n {
+                for c in 0..n {
+                    full.components[comp][r * n + c] = self.value(comp, r, c);
+                }
+            }
+        }
+        full.check_sampling(
+            "with its sphere, to tilt it (tilt nearer a waist, or on a finer grid)",
+        )?;
+        let transform = Transform::new(n);
+        let frequency = |p: usize| {
+            let p = if p < n / 2 {
+                p as f64
+            } else {
+                p as f64 - n as f64
+            };
+            2.0 * core::f64::consts::PI * p / (n as f64 * dx)
+        };
+        let x0 = self.position(0);
+        let (cos, sin) = (angle.cos(), angle.sin());
+        let mut out = Self {
+            curvature: 0.0,
+            tilt: (sin, 0.0),
+            components: [vec![Complex::ZERO; n * n], vec![Complex::ZERO; n * n]],
+            ..self.clone()
+        };
+        for comp in 0..2 {
+            let mut spectrum = full.components[comp].clone();
+            if spectrum.iter().all(|v| *v == Complex::ZERO) {
+                continue;
+            }
+            transform.apply(&mut spectrum, Direction::Forward);
+            for c in 0..n {
+                let xp = self.position(c);
+                let (x, z) = (xp * cos, xp * sin);
+                // Over kx for this column, then over ky by one 1-D transform.
+                let mut column = vec![Complex::ZERO; n];
+                for (q, b) in column.iter_mut().enumerate() {
+                    let ky = frequency(q);
+                    let mut sum = Complex::ZERO;
+                    for p in 0..n {
+                        let kx = frequency(p);
+                        let kz2 = k * k - kx * kx - ky * ky;
+                        if kz2 <= 0.0 {
+                            continue;
+                        }
+                        let phase = kx * (x - x0) + kz2.sqrt() * z;
+                        sum = sum + spectrum[q * n + p] * Complex::new(phase.cos(), phase.sin());
+                    }
+                    *b = sum;
+                }
+                transform::inverse_line(&mut column);
+                // Less the tilt carrier along x′, and the inverse DFT's 1/N².
+                let carrier = -k * sin * xp;
+                let factor = Complex::new(carrier.cos(), carrier.sin()) * (1.0 / (n * n) as f64);
+                for (r, v) in column.iter().enumerate() {
+                    out.components[comp][r * n + c] = *v * factor;
+                }
+            }
+        }
+        Ok(out)
+    }
+
+    /// The field with x and y swapped (rows for columns).
+    fn transposed(&self) -> Self {
+        let n = self.n;
+        let mut out = self.clone();
+        out.tilt = (self.tilt.1, self.tilt.0);
+        out.components = [self.components[1].clone(), self.components[0].clone()];
+        for comp in 0..2 {
+            for r in 0..n {
+                for c in 0..n {
+                    out.components[comp][c * n + r] = self.components[1 - comp][r * n + c];
+                }
+            }
+        }
+        out
+    }
+
     /// The rows and columns worth drawing: a square about the lit region (a thousandth
     /// of the peak irradiance and up) with a quarter of its size spare each side.
     fn lit(&self) -> (usize, usize) {
@@ -656,11 +811,17 @@ impl Field {
                 v.im.atan2(v.re)
             }
         };
-        let radius = if self.curvature == 0.0 {
+        let mut radius = if self.curvature == 0.0 {
             "flat".to_owned()
         } else {
             format!("R = {:.4} mm", 1.0 / self.curvature)
         };
+        if self.tilt != (0.0, 0.0) {
+            radius.push_str(&format!(
+                ", tilted plane wave of direction cosines ({:.4}, {:.4})",
+                self.tilt.0, self.tilt.1
+            ));
+        }
         Graph {
             title: title.into(),
             x: Axis::new("x", Unit::Length),

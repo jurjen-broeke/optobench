@@ -17,7 +17,7 @@
 //!
 //! Every propagation also conserves power, Σ n |E|² dA.
 
-use optobench_field::{Aperture, Field, FieldError, Method};
+use optobench_field::{Aperture, Field, FieldError, Method, TiltAxis};
 use optobench_math::Complex;
 
 const X: (Complex, Complex) = (Complex::ONE, Complex::ZERO);
@@ -324,4 +324,62 @@ fn light_reaching_the_grid_edge_is_reported_and_padding_keeps_the_field() {
     let mut beam = Field::gaussian(256, 0.04, 0.633, 1.0, 0.5, 0.0, 1.0, X).expect("field");
     let report = beam.propagate(100.0).expect("propagates");
     assert!(report.edge_fraction < 1e-9, "{report:?}");
+}
+
+#[test]
+fn a_tilted_plane_sees_the_beam_where_it_crosses_it() {
+    // A Gaussian beam (w₀ = 0.1 mm, λ = 0.633 µm) at its waist, on planes tilted by 30°
+    // about y and by −20° about x: each sample is the beam at its point of the tilted plane,
+    // (x′ cos α, y′, x′ sin α), with the q law's amplitude, curvature, Gouy phase and carrier
+    // for that z.
+    let (lambda, w0, power) = (0.633, 0.1, 1e-3);
+    let rayleigh = core::f64::consts::PI * w0 * w0 / (lambda * 1e-3);
+    let peak = (2.0 * power / (core::f64::consts::PI * w0 * w0)).sqrt();
+    let field = Field::gaussian(128, 0.01, lambda, 1.0, w0, 0.0, power, X).expect("field");
+    for (angle, axis) in [
+        (30f64.to_radians(), TiltAxis::Y),
+        ((-20f64).to_radians(), TiltAxis::X),
+    ] {
+        let tilted = field.tilted(angle, axis).expect("tilts");
+        let n = tilted.size();
+        let mut worst: f64 = 0.0;
+        for r in (0..n).step_by(2) {
+            for c in (0..n).step_by(2) {
+                let (u, v) = (tilted.position(c), tilted.position(r));
+                let (x, y, z) = match axis {
+                    TiltAxis::Y => (u * angle.cos(), v, u * angle.sin()),
+                    TiltAxis::X => (u, v * angle.cos(), v * angle.sin()),
+                };
+                let beam = Beam::at_waist(rayleigh).propagate(z);
+                let expected = beam.value(x * x + y * y, tilted.k(), peak);
+                worst = worst.max((tilted.value(0, r, c) - expected).abs() / peak);
+            }
+        }
+        assert!(worst < 1e-6, "{axis:?}: {worst}");
+        // The oblique incidence is carried as the tilt, not sampled.
+        let tilt = tilted.tilt();
+        match axis {
+            TiltAxis::Y => assert!((tilt.0 - angle.sin()).abs() < 1e-12 && tilt.1 == 0.0),
+            TiltAxis::X => assert!((tilt.1 - angle.sin()).abs() < 1e-12 && tilt.0 == 0.0),
+        }
+        // Its footprint is stretched by 1 / cos α along the tilted axis.
+        let (wx, wy) = tilted.second_moment_radius();
+        let stretched = w0 / angle.cos();
+        match axis {
+            TiltAxis::Y => {
+                assert!((wx / stretched - 1.0).abs() < 1e-3 && (wy / w0 - 1.0).abs() < 1e-3)
+            }
+            TiltAxis::X => {
+                assert!((wy / stretched - 1.0).abs() < 1e-3 && (wx / w0 - 1.0).abs() < 1e-3)
+            }
+        }
+        // The same power crosses the tilted plane.
+        assert!(
+            (tilted.power() / field.power() - 1.0).abs() < 1e-6,
+            "{}",
+            tilted.power()
+        );
+        // An end point: it cannot be propagated further.
+        assert!(tilted.clone().propagate(10.0).is_err());
+    }
 }

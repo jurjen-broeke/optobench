@@ -9,25 +9,31 @@
 //!   an aperture;
 //! - mechanics: a plate (an iris on its mount) as an aperture at its plane; a tube as
 //!   apertures of its bore at its two ends and seven planes between, so light spreading
-//!   onto the wall is absorbed (reflection off the wall is not followed).
+//!   onto the wall is absorbed (reflection off the wall is not followed);
+//! - bodies from CAD that absorb (every untagged body): cut at nine planes through their
+//!   depth, each grid row crossed by four lines whose crossings with the body's faces
+//!   tell inside from outside (`Face::crossings`), so the mask follows the body's own
+//!   surfaces.
 //!
-//! Anything else on the axis (a real lens, a mirror, an objective, a sample) is the ray
-//! trace's: start the field after it, or end it before. At the target the field can be
-//! coupled into a single-mode fibre (`rays::coupling`), and turned back into rays that
-//! the trace carries on through the rest of the scene from just past the target plane:
-//! the detectors they reach are summarised.
+//! Anything else on the axis (a real lens, a mirror, an objective, a sample, a tagged
+//! lens or mirror body) is the ray trace's: start the field after it, or end it before.
+//!
+//! The target may be parallel to the start plane or tilted about its x or its y
+//! ([`Field::tilted`]); a tilted field is an end point. There the field can be coupled
+//! into a single-mode fibre (`rays::coupling`; on a tilted face, the tilt costs coupling),
+//! and turned back into rays that the trace carries on through the rest of the scene from
+//! just past the target plane: the detectors they reach are summarised.
 //!
 //! Detectors between the start and the target do not stop the field: they are planes
-//! to look at, not obstacles. Planes are taken across the start plane's axis; the target
-//! must be parallel to it, on the axis, with the same x and y.
+//! to look at, not obstacles.
 
-use optobench_math::{Complex, Frame};
-use optobench_scene::{ElementKind, ProxyKind, Scene, SourceKind};
+use optobench_math::{Complex, Frame, Vec3};
+use optobench_scene::{Built, ElementKind, Owner, ProxyKind, Scene, SolidRole, SourceKind};
 use optobench_trace::Ray;
 use optobench_trace::nonsequential::End;
 
 use crate::rays::{RaySample, coupling, field_from_rays, rays_from_field};
-use crate::{Aperture, Field, Report};
+use crate::{Aperture, Field, Report, TiltAxis};
 
 /// Where the field starts.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -132,11 +138,7 @@ type Launched = ((usize, usize), Ray);
 
 /// A square grid of rays over a source's beam: (launch cell, ray), each ray the power of
 /// its cell.
-fn launch(
-    scene: &Scene,
-    source: usize,
-    samples: usize,
-) -> Result<Vec<Launched>, String> {
+fn launch(scene: &Scene, source: usize, samples: usize) -> Result<Vec<Launched>, String> {
     let src = &scene.sources[source];
     let (half, profile): (f64, Box<dyn Fn(f64) -> f64>) = match src.kind {
         SourceKind::Collimated { diameter } => {
@@ -189,9 +191,100 @@ fn launch(
 enum Event {
     Lens(f64),
     Mask(Aperture),
+    /// A body from CAD that absorbs, cut by the plane: `scene.solids[i]`.
+    Solid(usize),
 }
 
-fn events(scene: &Scene, frame: &Frame, end: f64) -> Result<Vec<(f64, Event, String)>, String> {
+/// The faces of `scene.solids[solid]` in the built system.
+fn solid_faces(built: &Built, solid: usize) -> Vec<usize> {
+    (0..built.system.faces.len())
+        .filter(|&f| built.owners.get(built.system.faces[f].owner) == Some(&Owner::Solid(solid)))
+        .collect()
+}
+
+/// A solid's extent along the axis and across it (x and y ranges), from its faces' boxes.
+fn extent(built: &Built, faces: &[usize], frame: &Frame) -> ((f64, f64), (f64, f64), (f64, f64)) {
+    let [ex, ey, axis] = frame.axes();
+    let origin = frame.origin();
+    let mut along = (f64::INFINITY, f64::NEG_INFINITY);
+    let mut x = along;
+    let mut y = along;
+    for &f in faces {
+        let b = built.system.faces[f].bounds();
+        for i in 0..8 {
+            let corner = Vec3::new(
+                if i & 1 == 0 { b.min.x } else { b.max.x },
+                if i & 2 == 0 { b.min.y } else { b.max.y },
+                if i & 4 == 0 { b.min.z } else { b.max.z },
+            ) - origin;
+            let (s, u, v) = (corner.dot(axis), corner.dot(ex), corner.dot(ey));
+            along = (along.0.min(s), along.1.max(s));
+            x = (x.0.min(u), x.1.max(u));
+            y = (y.0.min(v), y.1.max(v));
+        }
+    }
+    (along, x, y)
+}
+
+/// Blocks what of the field lies inside an absorbing body at distance `at` along the
+/// axis. Each grid row is crossed by four lines across the plane; counting a line's
+/// crossings with the body's faces tells inside from outside exactly along it, so a cell
+/// keeps the open fraction of its four lines (exact along x, sampled four times in y).
+fn solid_mask(field: &mut Field, built: &Built, faces: &[usize], frame: &Frame, at: f64) {
+    let [ex, ey, axis] = frame.axes();
+    let n = field.size();
+    let dx = field.spacing();
+    let (_, x_range, y_range) = extent(built, faces, frame);
+    let start = field.position(0).min(x_range.0) - dx - 1.0;
+    let length = field.position(n - 1).max(x_range.1) + dx + 1.0 - start;
+    let base = frame.origin() + axis * at;
+    let mut open = vec![1.0; n * n];
+    let lines = 4;
+    for r in 0..n {
+        let y_row = field.position(r);
+        if y_row + dx < y_range.0 || y_row - dx > y_range.1 {
+            continue;
+        }
+        let mut blocked = vec![0.0; n];
+        for k in 0..lines {
+            let y = y_row - dx / 2.0 + (f64::from(k) + 0.5) * dx / f64::from(lines);
+            let origin = base + ey * y + ex * start;
+            let mut crossings: Vec<f64> = faces
+                .iter()
+                .flat_map(|&f| built.system.faces[f].crossings(origin, ex, length))
+                .collect();
+            crossings.sort_by(f64::total_cmp);
+            crossings.dedup_by(|a, b| (*a - *b).abs() < 1e-9);
+            // Inside between the first and second crossing, the third and fourth, …
+            for pair in crossings.chunks_exact(2) {
+                let (a, b) = (start + pair[0], start + pair[1]);
+                for (c, cell) in blocked.iter_mut().enumerate() {
+                    let x = field.position(c);
+                    let overlap = (b.min(x + dx / 2.0) - a.max(x - dx / 2.0)).max(0.0);
+                    *cell += overlap / dx / f64::from(lines);
+                }
+            }
+        }
+        for (c, b) in blocked.iter().enumerate() {
+            open[r * n + c] = (1.0 - b).clamp(0.0, 1.0);
+        }
+    }
+    let spacing = dx;
+    let half = n as f64 / 2.0;
+    field.modulate(|x, y| {
+        let c = (x / spacing + half).round() as usize;
+        let r = (y / spacing + half).round() as usize;
+        Complex::real(open[r.min(n - 1) * n + c.min(n - 1)])
+    });
+}
+
+fn events(
+    scene: &Scene,
+    built: &Built,
+    frame: &Frame,
+    end: f64,
+    reach: f64,
+) -> Result<Vec<(f64, Event, String)>, String> {
     let [ex, ey, axis] = frame.axes();
     let origin = frame.origin();
     let place = |f: &Frame| -> (f64, (f64, f64), bool) {
@@ -278,6 +371,31 @@ fn events(scene: &Scene, frame: &Frame, end: f64) -> Result<Vec<(f64, Event, Str
                     }
                 }
             }
+        }
+    }
+    // Bodies from CAD: absorbers are cut at nine planes across their depth (from their
+    // faces' boxes, which may reach a little beyond the body: a plane there cuts nothing);
+    // a lens or a mirror in the way is the trace's.
+    for (i, solid) in scene.solids.iter().enumerate() {
+        let faces = solid_faces(built, i);
+        if faces.is_empty() {
+            continue;
+        }
+        let (along, x, y) = extent(built, &faces, frame);
+        let across = x.1 >= -reach && x.0 <= reach && y.1 >= -reach && y.0 <= reach;
+        if along.1 <= 1e-9 || along.0 >= end - 1e-9 || !across {
+            continue;
+        }
+        if !matches!(solid.role, SolidRole::Absorber) {
+            return Err(format!(
+                "body `{}` lies between the field's start and its target: fields pass ideal lenses and absorbing mechanics; start the field after it or end it before",
+                solid.id
+            ));
+        }
+        let (from, to) = (along.0.max(1e-6), along.1.min(end - 1e-6));
+        for k in 0..=8 {
+            let at = from + (to - from) * f64::from(k) / 8.0;
+            out.push((at, Event::Solid(i), solid.id.clone()));
         }
     }
     out.sort_by(|a, b| a.0.total_cmp(&b.0));
@@ -409,17 +527,25 @@ pub fn run(scene: &Scene, request: &Request) -> Result<Outcome, String> {
     };
     let start_power = field.power();
 
-    // The target: parallel, on the axis, the same x and y.
+    // The target: on the axis; parallel to the start plane with the same x and y, or
+    // tilted about its x or its y.
     let [ex, ey, axis] = frame.axes();
     let [tx, ty, tz] = target.frame.axes();
     let rel = target.frame.origin() - frame.origin();
     let end = rel.dot(axis);
-    if tz.dot(axis) < 1.0 - 1e-9 || tx.dot(ex) < 1.0 - 1e-9 || ty.dot(ey) < 1.0 - 1e-9 {
+    let level = 1.0 - 1e-9;
+    let tilt = if tz.dot(axis) > level && tx.dot(ex) > level && ty.dot(ey) > level {
+        None
+    } else if ty.dot(ey) > level && tx.dot(ey).abs() < 1e-9 {
+        Some((tx.dot(axis).atan2(tx.dot(ex)), TiltAxis::Y))
+    } else if tx.dot(ex) > level && ty.dot(ex).abs() < 1e-9 {
+        Some((ty.dot(axis).atan2(ty.dot(ey)), TiltAxis::X))
+    } else {
         return Err(format!(
-            "the target `{}` must be parallel to the start plane, with the same x and y",
+            "the target `{}` must share the start plane's x and y, or be tilted about one of them",
             target.id
         ));
-    }
+    };
     if (rel - axis * end).length() > 1e-6 || end <= 0.0 {
         return Err(format!(
             "the target `{}` must lie ahead on the field's axis",
@@ -430,7 +556,9 @@ pub fn run(scene: &Scene, request: &Request) -> Result<Outcome, String> {
     // Along the axis.
     let mut steps = Vec::new();
     let mut here = 0.0;
-    for (at, event, id) in events(scene, &frame, end)? {
+    let built = scene.build().map_err(|e| e.to_string())?;
+    let reach = 4.0 * field.size() as f64 * field.spacing();
+    for (at, event, id) in events(scene, &built, &frame, end, reach)? {
         if at > here {
             let report = field
                 .propagate(at - here)
@@ -452,6 +580,10 @@ pub fn run(scene: &Scene, request: &Request) -> Result<Outcome, String> {
                 field.apply(&aperture);
                 format!("{id}: aperture")
             }
+            Event::Solid(i) => {
+                solid_mask(&mut field, &built, &solid_faces(&built, i), &frame, at);
+                format!("{id}: body")
+            }
         };
         steps.push(Step {
             at,
@@ -472,14 +604,31 @@ pub fn run(scene: &Scene, request: &Request) -> Result<Outcome, String> {
         });
     }
 
+    if let Some((angle, about)) = tilt {
+        field = field
+            .tilted(angle, about)
+            .map_err(|e| format!("onto `{}`: {e}", target.id))?;
+        steps.push(Step {
+            at: end,
+            what: format!(
+                "{}: tilted {:.4}° about {}",
+                target.id,
+                angle.to_degrees(),
+                if about == TiltAxis::X { "x" } else { "y" }
+            ),
+            report: None,
+            power: field.power(),
+        });
+    }
+
     let coupling = request.fibre.map(|r| coupling(&field, r, (0.0, 0.0)));
 
     // On as rays.
     let mut delivered: Vec<Delivered> = Vec::new();
     let mut launched = (0, 0);
     if request.rays {
-        let built = scene.build().map_err(|e| e.to_string())?;
-        let origin = target.frame.origin() + axis * 1e-6;
+        // In the target's own frame (tilted or not).
+        let origin = target.frame.origin() + tz * 1e-6;
         let mut sums: Vec<(f64, usize, f64, f64, f64)> =
             vec![(0.0, 0, 0.0, 0.0, 0.0); scene.detectors.len()];
         for sample in rays_from_field(&field, request.threshold, reference) {
@@ -487,8 +636,8 @@ pub fn run(scene: &Scene, request: &Request) -> Result<Outcome, String> {
             launched.1 += usize::from(sample.rough);
             let d = sample.direction;
             let Some(mut ray) = Ray::new(
-                origin + ex * sample.point.0 + ey * sample.point.1,
-                ex * d.x + ey * d.y + axis * d.z,
+                origin + tx * sample.point.0 + ty * sample.point.1,
+                tx * d.x + ty * d.y + tz * d.z,
                 wavelength,
                 sample.power,
             ) else {

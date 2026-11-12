@@ -314,3 +314,154 @@ fn a_field_will_not_pass_a_real_lens() {
         .expect_err("refused");
     assert!(error.message.contains("`L1`"), "{}", error.message);
 }
+
+/// A sidecar beside a copy of the STEP fixture `step` (from `optobench-io`): a uniform
+/// 20 mm beam from z = −10 along +z to a screen at z = 40, plus `extra`.
+fn sidecar(label: &str, step: &str, extra: &str) -> PathBuf {
+    let dir = scratch(label);
+    let fixtures =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../optobench-io/tests/step");
+    std::fs::copy(fixtures.join(step), dir.join(step)).expect("copied");
+    let path = dir.join(format!("{label}.optobench"));
+    std::fs::write(
+        &path,
+        format!(
+            "format = \"optobench/1\"\nkind = \"sidecar\"\nstep = \"{step}\"\n\n{extra}\
+             [[source]]\nid = \"beam\"\nkind = \"collimated\"\nwavelength_um = 0.55\npower_w = 1.0\ndiameter = 20.0\nrings = 8\n\
+             position = [0, 0, -10]\naxis = [0, 0, 1]\n\n\
+             [[detector]]\nid = \"screen\"\nposition = [0, 0, 40]\naxis = [0, 0, 1]\nsize = [30, 30]\npixels = [30, 30]\n"
+        ),
+    )
+    .expect("written");
+    path
+}
+
+/// The field's power around the first plane that cuts the body (before, after), and
+/// after the last of its planes.
+fn through_body(result: &Value) -> (f64, f64, f64) {
+    let steps = result["steps"].as_array().expect("steps");
+    let body = |s: &Value| s["what"].as_str().is_some_and(|w| w.ends_with(": body"));
+    let power = |k: usize| number(&steps[k]["power_w"]);
+    let cut = (1..steps.len())
+        .find(|&k| body(&steps[k]) && power(k) < 0.99 * power(k - 1))
+        .unwrap_or_else(|| panic!("no plane cuts the body: {result}"));
+    let last = (0..steps.len())
+        .rev()
+        .find(|&k| body(&steps[k]))
+        .expect("a body step");
+    (power(cut - 1), power(cut), power(last))
+}
+
+#[test]
+fn bodies_from_cad_cut_the_field_where_they_stand() {
+    // Fixtures (crates/optobench-io/tests/step/README.md): a cylinder Ø12 along z from the
+    // origin, and a block 10 × 20 × 30 from the origin. Untagged, they absorb. In a uniform
+    // beam of radius 10 the cylinder blocks the middle (passing 1 − (6/10)²), the block
+    // the quadrant x, y > 0 (passing 3/4).
+    for (step, passed) in [("cylinder.step", 1.0 - 0.36), ("block.step", 0.75)] {
+        let path = sidecar(step.trim_end_matches(".step"), step, "");
+        let result = run(
+            "field",
+            json!({ "path": path.to_string_lossy(), "target": "screen", "grid": 512 }),
+        );
+        // The first cut passes the geometric fraction (to the edge cells' sampling, as for
+        // an aperture: 0.3 %); the later planes take a little more, the light diffracted
+        // into the body's shadow on the way.
+        let (before, after, end) = through_body(&result);
+        assert!(
+            (after / before - passed).abs() < 3e-3,
+            "{step}: {}",
+            after / before
+        );
+        assert!(
+            end <= after && end / before > passed - 0.01,
+            "{step}: {}",
+            end / before
+        );
+        let planes = result["steps"]
+            .as_array()
+            .expect("steps")
+            .iter()
+            .filter(|s| s["what"].as_str().is_some_and(|w| w.ends_with(": body")))
+            .count();
+        assert_eq!(planes, 9, "{step}: cut at nine planes through its depth");
+    }
+    // Tagged as a lens, the body is the trace's: the field will not pass it.
+    let path = sidecar(
+        "tagged",
+        "cylinder.step",
+        "[[element]]\nid = \"L\"\nkind = \"lens\"\nbody = { product = \"cylinder\" }\nmaterial = 1.5\n\n",
+    );
+    let error = Registry::standard()
+        .run(
+            "field",
+            &json!({ "path": path.to_string_lossy(), "target": "screen",
+                     "data_directory": scratch("empty").to_string_lossy() }),
+        )
+        .expect_err("refused");
+    assert!(error.message.contains("body `L`"), "{}", error.message);
+}
+
+#[test]
+fn a_field_meets_a_tilted_screen_and_goes_on_as_rays() {
+    // A Gaussian beam (w₀ = 0.5 mm, λ = 0.633 µm) onto a screen 100 mm on, tilted 30° about
+    // its y (a DOF set to 30°): the same power crosses it, the footprint is w(z)/cos 30°
+    // across x and w(z) along y, and rays from it reach a screen at 200 mm as they do from
+    // an untilted plane.
+    let (w0, lambda) = (0.5, 0.633e-3);
+    let layout = |tilt: f64| {
+        write(
+            &format!("tilted-{tilt}"),
+            &format!(
+                "[[source]]\nid = \"laser\"\nkind = \"gaussian\"\nwavelength_um = 0.633\npower_w = 0.001\nwaist_diameter = {}\nat = 0\n\n\
+                 [[detector]]\nid = \"tilted\"\nat = 100\nsize = [6, 6]\npixels = [30, 30]\n\
+                 dof = [ {{ name = \"tip\", kind = \"tilt\", axis = \"y\", value = {tilt} }} ]\n\n\
+                 [[detector]]\nid = \"far\"\nat = 200\nsize = [6, 6]\npixels = [30, 30]\n",
+                2.0 * w0
+            ),
+        )
+    };
+    let run_at = |tilt: f64| {
+        run(
+            "field",
+            json!({ "path": layout(tilt).to_string_lossy(), "target": "tilted", "rays": true }),
+        )
+    };
+    let (flat, tilted) = (run_at(0.0), run_at(30.0));
+    let rayleigh = core::f64::consts::PI * w0 * w0 / lambda;
+    let w = w0 * (1.0 + (100.0 / rayleigh).powi(2)).sqrt();
+    assert!(
+        (number(&tilted["power_w"]) / 0.001 - 1.0).abs() < 1e-6,
+        "{tilted}"
+    );
+    let radius = (
+        number(&tilted["radius_mm"][0]),
+        number(&tilted["radius_mm"][1]),
+    );
+    let cos = 30f64.to_radians().cos();
+    assert!((radius.0 * cos / w - 1.0).abs() < 1e-3, "{radius:?} vs {w}");
+    assert!((radius.1 / w - 1.0).abs() < 1e-3, "{radius:?} vs {w}");
+    assert!(
+        (number(&tilted["tilt"][0]).abs() - 0.5).abs() < 1e-9,
+        "{tilted}"
+    );
+    let far = |result: &Value| -> Value {
+        result["delivered"]
+            .as_array()
+            .and_then(|d| d.iter().find(|d| d["id"] == "far"))
+            .cloned()
+            .unwrap_or_else(|| panic!("{result}"))
+    };
+    let (a, b) = (far(&flat), far(&tilted));
+    assert!(
+        (number(&b["power_w"]) / number(&a["power_w"]) - 1.0).abs() < 1e-3,
+        "{a} {b}"
+    );
+    assert!(
+        (number(&b["rms_radius_mm"]) / number(&a["rms_radius_mm"]) - 1.0).abs() < 1e-2,
+        "{a} {b}"
+    );
+    for k in 0..2 {
+        assert!(number(&b["centroid_mm"][k]).abs() < 1e-3, "{b}");
+    }
+}

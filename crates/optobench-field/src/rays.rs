@@ -271,9 +271,9 @@ pub fn rays_from_field(field: &Field, threshold: f64, reference: f64) -> Vec<Ray
             };
             let (x, y) = (field.position(c), field.position(r));
             let gx = along((c + 1 < n).then(|| i + 1), (c > 0).then(|| i - 1), dx)
-                + k * field.curvature * x;
+                + k * (field.curvature * x + field.tilt.0);
             let gy = along((r + 1 < n).then(|| i + n), (r > 0).then(|| i - n), dx)
-                + k * field.curvature * y;
+                + k * (field.curvature * y + field.tilt.1);
             let (tx, ty) = (gx / k, gy / k);
             let tz2 = 1.0 - tx * tx - ty * ty;
             if tz2 <= 0.0 {
@@ -284,7 +284,12 @@ pub fn rays_from_field(field: &Field, threshold: f64, reference: f64) -> Vec<Ray
                 point: (x, y),
                 direction: Vec3::new(tx, ty, tz2.sqrt()),
                 power: field.irradiance(r, c) * dx * dx,
-                path: reference + (phase[i] + k * field.curvature * (x * x + y * y) / 2.0) / k0,
+                path: reference
+                    + (phase[i]
+                        + k * (field.curvature * (x * x + y * y) / 2.0
+                            + field.tilt.0 * x
+                            + field.tilt.1 * y))
+                        / k0,
                 rough: rough[i],
             });
         }

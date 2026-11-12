@@ -146,10 +146,13 @@ pub(crate) fn field(parameters: &Parameters) -> Result<Value, CommandError> {
         .trace()
         .map_err(|e| CommandError::new(ErrorCode::Failed, e.to_string()))?;
     let f = &outcome.field;
+    let radius = f.second_moment_radius();
     Ok(json!({
         "target": target.id,
         "start_power_w": outcome.start_power,
         "power_w": f.power(),
+        "radius_mm": [radius.0, radius.1],
+        "tilt": [f.tilt().0, f.tilt().1],
         "grid": { "samples": f.size(), "spacing_mm": f.spacing(), "curvature_per_mm": f.curvature() },
         "steps": outcome.steps.iter().map(|s| {
             let mut v = json!({ "at_mm": s.at, "what": s.what, "power_w": s.power });

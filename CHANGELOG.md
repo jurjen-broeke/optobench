@@ -11,8 +11,14 @@ with the release that introduced them.
   target and rays on from it through the rest of the scene. New `graph` kinds `field`,
   `field-phase` and `field-difference` (field minus rays on the target's pixels). Fixed:
   an ideal lens now adds the optical path of a perfect lens (rays unchanged); it is
-  recorded twice in ray records, like an objective. M10's exit criterion is met; masks
-  from STEP bodies and tilted field planes remain open.
+  recorded twice in ray records, like an objective. M10's exit criterion is met.
+- M10c (completed): absorbing bodies from CAD cut the field at nine planes through their
+  depth, by counting crossings with their own faces; a lens or mirror body on the way is
+  refused. Fields onto planes tilted about x or y, exactly (no interpolation), with the
+  oblique incidence carried as a tilt and the obliquity in irradiance and power; `field`
+  targets may be tilted. The sampling check now looks at the share of the lit field at
+  coarse phase steps, so a hard edge's diffraction passes. M10 Field propagation and
+  graphs is complete.
 - M10b fields and propagation: new engine crate `optobench-field` (L4). Sampled fields
   with a spherical reference; propagation by the angular spectrum or Fresnel's integral
   in one transform, chosen from the grid's Fresnel number, through foci and past them;
