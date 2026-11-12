@@ -15,9 +15,9 @@ the diffusion approximation here; photon transport by Monte Carlo replaces it in
 - [ ] Sample layers gain absorption µa(λ), scattering µs(λ) and anisotropy g (each a
       number or a curve, with provenance); a layer of `water` takes its absorption from
       the bundled data (Hale & Querry 1973) at the trace's wavelength
-- [ ] Water verified against its sources: the bundled index (Daimon & Masumura 2007) and
-      absorption (Hale & Querry, Appl. Opt. 12, 555 (1973), in the local corpus) checked
-      value by value against the papers' tables; closes M2c's open item
+- [ ] Water verified against its sources: the bundled absorption against Hale & Querry,
+      Appl. Opt. 12, 555 (1973) (local corpus), value by value; the index against Daimon &
+      Masumura 2007 once that paper is available (not yet: M2c's item stays open for it)
 - [ ] The ballistic beam: power along traced rays falls as exp(−(µa + µs) z) in each
       layer; the power ledger gains, per layer, the power absorbed and the power scattered
       out of the ballistic beam
@@ -39,6 +39,14 @@ the diffusion approximation here; photon transport by Monte Carlo replaces it in
 - [ ] Fluorophores (user data, with provenance): excitation and emission spectra,
       extinction coefficient or one-photon cross-section, two-photon cross-section
       spectrum, quantum yield, lifetime, concentration; placed in a sample layer
+- [ ] Import from FPbase (fpbase.org; T. J. Lambert, Nat. Methods 16, 277 (2019)) through
+      its documented REST API: spectra, extinction coefficient, quantum yield, two-photon
+      cross-section where given. Imported by the user like refractiveindex.info data,
+      never bundled: FPbase states CC BY-SA 4.0 for the site and also that its data are
+      "free of all copyright restrictions", and asks that each protein's original authors
+      be credited, so the import shows that notice and stores the protein's references
+      with the data (licence review entry first). FPbase's source code is GPL-3.0 and is
+      not read; only the API documentation is
 - [ ] Lasers: continuous, or pulsed with repetition rate and pulse width (sech² or
       Gaussian)
 - [ ] One-photon excitation rate per molecule σ₁ I / (h ν) from the local irradiance;
@@ -100,24 +108,38 @@ the diffusion approximation here; photon transport by Monte Carlo replaces it in
 
 - [ ] Excitation rates match the closed forms above (one- and two-photon)
 - [ ] The temperature rise matches the analytic Gaussian-source solution
-- [ ] A published multiphoton heating benchmark, reproduced from its stated conditions.
-      Candidate: A. Podgorski and G. Ranganathan, "Brain heating induced by near-infrared
-      lasers during multiphoton microscopy", J. Neurophysiol. 116, 1012 (2016). To do
-      first: obtain the paper (corpus/sources), take its conditions (wavelength, power,
-      objective, depth, tissue optical and thermal properties, perfusion) and its
-      reported temperature rises from its text and tables (not read off figures), and
-      check that the comparison does not hinge on scattering beyond the diffusion
-      approximation. If it does (the paper models light by Monte Carlo), compare the
-      parts that do not (heating at shallow depth, or in water), say so, and move the
-      rest to M15
+- [ ] A published multiphoton heating benchmark: K. Podgorski and G. Ranganathan, "Brain
+      heating induced by near-infrared lasers during multiphoton microscopy",
+      J. Neurophysiol. 116, 1012 (2016) (local corpus). Values from its text only:
+      - conditions: 920 nm, 80 MHz, ~120 fs; a 1 mm² field raster-scanned at 30 Hz (70 %
+        duty cycle), focal plane 250 µm below the dura, NA 0.8 or 0.08 (no difference in
+        heating); a cranial window with immersion water at room temperature (in their
+        model a 350 µm glass window, the water held at 25 °C 1.5 mm above the glass),
+        body at 37 °C, perfusion
+      - measured: steady-state heating 1.86 ± 0.25 °C per 100 mW at 250 µm (quantum-dot
+        thermometry, N = 4); after 180 s, 1.50 ± 0.02 °C per 100 mW at 150 µm and
+        1.73 ± 0.04 at 500 µm (thermocouple), steady state ~6 % above the 180 s value;
+        linear in power
+      - their simulation: the largest rise ~500 µm below the surface; a field 4× smaller
+        heats 20.7 % more, 4× larger 23.6 % less
+      The brain's optical and thermal properties are not in the paper: its model is
+      adapted from J. M. Stujenske, T. Spellman and J. A. Gordon, Cell Rep. 12, 525 (2015),
+      with constants "from published tables". That paper is needed first (corpus), for
+      µa, µs, g of brain at 920 nm, thermal properties, perfusion and metabolic heat. It
+      models light by Monte Carlo transport; at the millimetre scale of this heating the
+      diffusion approximation should do, so the check is our steady-state heating per
+      100 mW at 250 µm against 1.86 ± 0.25 (within its stated error), the ratio of 500 to
+      150 µm, and the field-size dependence; a larger gap is reported, and the light
+      transport part of it moves to M15. Their code (available on request, no licence) is
+      not used
 
 ## Open questions
 
 - Which water thermal property values to adopt and how to cite them (IAPWS formulations
   are published for free use; check their terms against the bundling rules before
   bundling any table).
-- Fluorophore data: which open spectra databases have licences that allow fetching
-  (shown at import, like refractiveindex.info).
+- Fluorophore data: FPbase (decided 2026-11-12: imported by the user, notice shown,
+  never bundled). Other dye databases to be reviewed the same way when needed.
 - The diffusion approximation fails close to sources and boundaries and at shallow
   depth for strongly forward-scattering tissue (g ≈ 0.9); report where it is used and
   how far it can be trusted, until M15.
