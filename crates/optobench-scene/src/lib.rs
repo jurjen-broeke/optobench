@@ -179,6 +179,15 @@ pub enum SourceKind {
         /// Sampling of directions: rings of the direction-cosine grid.
         angle_rings: usize,
     },
+    /// A point emitting the same power into every solid angle (a fluorophore, M11c),
+    /// traced within `half_angle` of local +z (π for every direction). `power` is the
+    /// total over all directions; the rays carry the cone's share, (1 − cos θ) / 2 of it.
+    /// Directions are equal solid angles: the disk samples mapped onto the cap by
+    /// cos θ = 1 − ρ² (1 − cos θ_max), which keeps areas in proportion.
+    Isotropic {
+        /// The traced cone's half-angle (radians, up to π).
+        half_angle: f64,
+    },
     /// A Lambertian emitter: a square of side `size` across local +z, radiance the same
     /// in every direction of the forward hemisphere (directions uniform in direction
     /// cosines, which is exactly Lambertian for rays of equal power).
@@ -241,6 +250,16 @@ pub struct Proxy {
     pub kind: ProxyKind,
 }
 
+/// A detector's quantum efficiency: the fraction of arriving photons it counts, as a
+/// number or over wavelength, and where it comes from (a datasheet, a measurement).
+#[derive(Debug, Clone, PartialEq)]
+pub struct QuantumEfficiency {
+    /// From 0 to 1.
+    pub curve: optobench_materials::Spectrum,
+    /// Where the values come from.
+    pub source: String,
+}
+
 /// A detector: a rectangle across the axis that absorbs and records.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Detector {
@@ -252,6 +271,8 @@ pub struct Detector {
     pub size: (f64, f64),
     /// Pixels along local x and y.
     pub pixels: (usize, usize),
+    /// What fraction of the photons it counts (M11c); `None` where only power matters.
+    pub quantum_efficiency: Option<QuantumEfficiency>,
 }
 
 /// What a solid from CAD (STEP) does.
@@ -610,6 +631,25 @@ impl Scene {
                         positive_medium: air,
                         owner,
                     });
+                    // Its front plane, for light coming back from the sample (M11c).
+                    system.faces.push(Face {
+                        shape: Shape::Profile(flat.shape()),
+                        placement: transform
+                            * optobench_math::Transform::from_translation(Vec3::new(
+                                0.0,
+                                0.0,
+                                objective.pupil_distance,
+                            )),
+                        region: Region::Disk {
+                            radius: diameter / 2.0,
+                        },
+                        role: Role::ObjectiveFront {
+                            objective: std::sync::Arc::new(objective.clone()),
+                        },
+                        negative_medium: air,
+                        positive_medium: air,
+                        owner,
+                    });
                 }
                 ElementKind::Sample {
                     layers,
@@ -888,6 +928,28 @@ impl Scene {
                         })
                         .collect()
                 }
+                SourceKind::Isotropic { half_angle } => {
+                    let cap = 1.0 - half_angle.min(core::f64::consts::PI).cos();
+                    disk_samples(source.rings)
+                        .into_iter()
+                        .map(|(u, v, a)| {
+                            let rho2 = u * u + v * v;
+                            let cos = 1.0 - rho2 * cap;
+                            let sin = (1.0 - cos * cos).max(0.0).sqrt();
+                            let (cu, su) = if rho2 > 0.0 {
+                                let rho = rho2.sqrt();
+                                (u / rho, v / rho)
+                            } else {
+                                (1.0, 0.0)
+                            };
+                            (
+                                Vec3::ZERO,
+                                Vec3::new(sin * cu, sin * su, cos),
+                                a * cap / 2.0,
+                            )
+                        })
+                        .collect()
+                }
                 SourceKind::Gaussian {
                     waist_diameter,
                     m_squared,
@@ -966,11 +1028,59 @@ impl Scene {
         rays
     }
 
+    /// The medium a source's rays start in: a sample layer's, if the source sits inside
+    /// one (an emitter in the sample, M11c), else the system's start medium. The media
+    /// above and below a sample reach without end in the model, so a source there is
+    /// taken to be in the surroundings.
+    pub fn start_medium(&self, built: &Built, source: &Source) -> usize {
+        let origin = source.frame.origin();
+        for (index, element) in self.elements.iter().enumerate() {
+            let ElementKind::Sample {
+                layers, diameter, ..
+            } = &element.kind
+            else {
+                continue;
+            };
+            let local = element.frame.to_local_point(origin);
+            if local.x.hypot(local.y) > diameter / 2.0 {
+                continue;
+            }
+            let mut z = 0.0;
+            for (k, (thickness, _)) in layers.iter().enumerate() {
+                if local.z > z && local.z < z + thickness {
+                    let part = format!("layer {}", k + 1);
+                    if let Some((_, _, medium)) = built
+                        .sample_media
+                        .iter()
+                        .find(|(e, p, _)| *e == index && *p == part)
+                    {
+                        return *medium;
+                    }
+                }
+                z += thickness;
+            }
+        }
+        built.system.start_medium
+    }
+
     /// Builds the scene, traces every source and collects the results.
     pub fn trace(&self) -> Result<SceneTrace, SceneError> {
         let built = self.build()?;
-        let rays: Vec<Ray> = self.sources.iter().flat_map(Self::launch).collect();
-        let (records, ledger) = built.system.trace_all(rays);
+        Ok(self.trace_built(&built))
+    }
+
+    /// Traces every source through `built` (this scene's [`Scene::build`]) and collects
+    /// the results.
+    pub fn trace_built(&self, built: &Built) -> SceneTrace {
+        let rays: Vec<(Ray, usize)> = self
+            .sources
+            .iter()
+            .flat_map(|s| {
+                let medium = self.start_medium(built, s);
+                Self::launch(s).into_iter().map(move |r| (r, medium))
+            })
+            .collect();
+        let (records, ledger) = built.system.trace_all_from(rays);
 
         let detectors = self
             .detectors
@@ -1004,7 +1114,7 @@ impl Scene {
                 }),
             }
         }
-        let footprints = self.footprints(&built, &records);
+        let footprints = self.footprints(built, &records);
         let layers = built
             .sample_media
             .iter()
@@ -1024,14 +1134,14 @@ impl Scene {
                 }
             })
             .collect();
-        Ok(SceneTrace {
+        SceneTrace {
             records,
             ledger,
             detectors,
             clipping,
             footprints,
             layers,
-        })
+        }
     }
 }
 

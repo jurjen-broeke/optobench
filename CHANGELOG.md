@@ -5,6 +5,17 @@ with the release that introduced them.
 
 ## Unreleased
 
+- M11c emission and photon budget: new command `emission` traces an emitter in a sample
+  on its own and gives its photon budget in watts and photons per second: emitted,
+  collected by the objective, lost in each part of the sample, at each element's faces
+  (Fresnel, filter rejection) and clipped by each item, arriving at and counted by each
+  detector, and where the rest ended; it closes. New source kind `isotropic` (equal
+  solid angles into a cone of up to 180°; `power_w` is the total over all directions);
+  layout sources may be `reversed`; detectors take an optional `quantum_efficiency`
+  (number or table, with its source). An ideal objective now also takes light back from
+  the sample through its front plane within its NA (sine condition reversed), where it
+  used to clip it; a source inside a sample layer starts in that layer's medium. Ray
+  records gain `face_losses`.
 - M11a2 diffuse light: new command `fluence` gives the light in a sample, the direct beam
   from the traced rays and the diffuse light it scatters (diffusion approximation on rings
   about the axis, partial-current faces from the index step), with the absorbed power by

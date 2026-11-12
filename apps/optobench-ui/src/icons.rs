@@ -582,6 +582,16 @@ pub fn draw(painter: &Painter, rect: Rect, id: &str, enabled: bool) {
             }
             c.line(&[pos2(32.0, 2.0), pos2(32.0, 30.0)], ACTION, r.beam);
         }
+        "emission" => {
+            // A point in the sample glowing back up into a cone towards the objective.
+            c.line(&[pos2(6.0, 40.0), pos2(58.0, 40.0)], 1.8, r.a3);
+            let tip = pos2(32.0, 48.0);
+            c.line(&[tip, pos2(14.0, 10.0)], ACTION, r.beam);
+            c.line(&[tip, pos2(50.0, 10.0)], ACTION, r.beam);
+            c.line(&[tip, pos2(32.0, 6.0)], 1.8, r.beam);
+            let arc = c.arc(tip, 6.0, 0.0, 360.0);
+            c.line(&arc, ACTION, r.beam);
+        }
         "psf" => {
             // The focal intensity: a central peak and its first rings (sinc²).
             let profile: Vec<_> = (0..=48)
@@ -830,6 +840,7 @@ pub const ALL: &[&str] = &[
     "psf",
     "field",
     "fluence",
+    "emission",
     "graph",
     "sweep",
     "check-moves",

@@ -160,6 +160,57 @@ impl IdealObjective {
             optical_path: axial - optical_path,
         })
     }
+
+    /// The other way (M11c, light from the sample): the ray leaving the pupil plane for a
+    /// ray arriving at the front plane at local `point` with local `direction` (towards
+    /// −z) from a medium of index `entry_index`. It is [`Self::pass`] reversed: the
+    /// invariant p = n sin θ is the arriving ray's, the objective takes it if |p| ≤ NA,
+    /// the design layers carry it back to its field point in the design focal plane,
+    /// and it leaves the pupil at ρ = −f p along the reverse of that field's direction,
+    /// with the same optical path added. A point at the design focus thus leaves as a
+    /// collimated beam, and an emitter in the design medium is collected over
+    /// n sin θ ≤ NA.
+    pub fn pass_back(
+        &self,
+        point: Vec3,
+        direction: Vec3,
+        wavelength: f64,
+        entry_index: f64,
+    ) -> Result<Passage, MaterialError> {
+        if direction.z >= 0.0 {
+            return Ok(Passage::Stopped);
+        }
+        // The invariant of the forward ray this one reverses.
+        let p = (-entry_index * direction.x, -entry_index * direction.y);
+        let p_size = p.0.hypot(p.1);
+        if p_size > self.na * (1.0 + 1e-12) {
+            return Ok(Passage::Stopped);
+        }
+        // Forward through the design layers to the design focal plane.
+        let (mut x, mut y) = (point.x, point.y);
+        let mut optical_path = 0.0;
+        let mut axial = 0.0;
+        for layer in &self.design_layers {
+            let n = layer.medium.material().refractive_index(wavelength)?;
+            if p_size >= n {
+                return Ok(Passage::Stopped);
+            }
+            let cos_n = (n * n - p_size * p_size).sqrt();
+            x += layer.thickness * p.0 / cos_n;
+            y += layer.thickness * p.1 / cos_n;
+            optical_path += layer.thickness * n * n / cos_n;
+            axial += n * layer.thickness;
+        }
+        let f = self.focal_length;
+        let Some(direction) = Vec3::new(-x / f, -y / f, -1.0).normalized() else {
+            return Ok(Passage::Stopped);
+        };
+        Ok(Passage::Leaves {
+            position: Vec3::new(-f * p.0, -f * p.1, 0.0),
+            direction,
+            optical_path: axial - optical_path,
+        })
+    }
 }
 
 #[cfg(test)]
@@ -230,6 +281,57 @@ mod tests {
             assert!((x - fx).abs() < 1e-12 && (y - fy).abs() < 1e-12, "{x} {y}");
             assert!((path - reached[0].2).abs() < 1e-12, "{path}");
         }
+    }
+
+    #[test]
+    fn passing_back_reverses_passing_forward() {
+        // Any ray through the objective, turned round at the front plane, comes back to
+        // the same pupil point along the reverse of its arrival, with the same path added.
+        let o = objective(&[(2.0, 1.33), (0.17, 1.525)], 1.33);
+        for (rho, field) in [
+            ((0.0, 0.0), (0.0, 0.0)),
+            ((3.0, -1.0), (0.01, 0.0)),
+            ((-5.0, 4.5), (-0.02, 0.015)),
+        ] {
+            let arriving = Vec3::new(field.0, field.1, 1.0).normalized().expect("unit");
+            let point = Vec3::new(rho.0, rho.1, 0.0);
+            let Passage::Leaves {
+                position,
+                direction,
+                optical_path,
+            } = o.pass(point, arriving, 0.55, 1.33).expect("indices")
+            else {
+                panic!("passes");
+            };
+            let Passage::Leaves {
+                position: back,
+                direction: back_direction,
+                optical_path: back_path,
+            } = o
+                .pass_back(position, -direction, 0.55, 1.33)
+                .expect("indices")
+            else {
+                panic!("passes back");
+            };
+            assert!((back - point).length() < 1e-12, "{back:?} vs {point:?}");
+            assert!(
+                (back_direction + arriving).length() < 1e-12,
+                "{back_direction:?}"
+            );
+            assert!((back_path - optical_path).abs() < 1e-12);
+        }
+        // Beyond the NA, or travelling away from the objective: stopped.
+        let steep = Vec3::new(0.7, 0.0, -0.5).normalized().expect("unit");
+        assert_eq!(
+            o.pass_back(Vec3::new(0.0, 0.0, 40.0), steep, 0.55, 1.33)
+                .expect("ok"),
+            Passage::Stopped
+        );
+        assert_eq!(
+            o.pass_back(Vec3::new(0.0, 0.0, 40.0), Vec3::Z, 0.55, 1.33)
+                .expect("ok"),
+            Passage::Stopped
+        );
     }
 
     #[test]

@@ -16,19 +16,24 @@
 //! [[source]]
 //! id = "laser"
 //! kind = "collimated"               # or "point" with half_angle_deg, or "gaussian",
-//!                                   # "fiber", "led" (below)
+//!                                   # "fiber", "led", "isotropic" (below)
 //! wavelength_um = 0.633             # optional when spectrum is given
 //! spectrum = [[0.488, 1.0], [0.561, 3.0]]  # optional lines [µm, weight]: power shared by weight
 //! power_w = 0.001
 //! diameter = 2.0
 //! rings = 6                         # optional sampling, default 6
 //! offset = [0.0, 2.0]               # optional lateral offset in the source frame (mm)
+//! reversed = false                  # optional: true points it back along the path
+//!                                   # (an emitter in a sample, facing the objective)
 //! at = 0.0                          # planar; table: hole = [0, 0], height = 75, axis = [1, 0, 0]
 //!
 //! # Other kinds (angle_rings: optional angular sampling, default 3; led 4):
 //! #   gaussian: waist_diameter (1/e² diameter at the source, mm), m_squared (≥ 1, default 1)
 //! #   fiber:    core_diameter (mm), na (< 1): uniform over the core, within the NA
 //! #   led:      size (square side, mm): Lambertian over the hemisphere
+//! #   isotropic: a point emitting equally in every direction (a fluorophore); power_w
+//! #             is the total, rays only within half_angle_deg (default 180) of the
+//! #             axis, so aim it at the objective; rings default 30
 //!
 //! [[element]]
 //! id = "L1"
@@ -129,6 +134,9 @@
 //! at = 300.0
 //! size = [10, 10]
 //! pixels = [256, 256]
+//! quantum_efficiency = { value = [[0.45, 0.25], [0.55, 0.40]], source = "…" }
+//!                                   # optional: a number or [[wavelength_um, value], …]
+//!                                   # from 0 to 1, and where it comes from
 //!
 //! [[merit]]                         # what `optimize` aligns for: see `merit`
 //! kind = "focus"                    # or "centring", "pointing", "collimation", "power"
@@ -446,9 +454,10 @@ pub(crate) fn source(
         "gaussian" => (&["waist_diameter", "m_squared", "angle_rings"], 3.0),
         "fiber" => (&["core_diameter", "na", "angle_rings"], 3.0),
         "led" => (&["size", "angle_rings"], 3.0),
+        "isotropic" => (&["half_angle_deg"], 30.0),
         other => {
             return Err(error(format!(
-                "{}: source kind `{other}` is not known; use \"collimated\", \"point\", \"gaussian\", \"fiber\" or \"led\"",
+                "{}: source kind `{other}` is not known; use \"collimated\", \"point\", \"gaussian\", \"fiber\", \"led\" or \"isotropic\"",
                 item.context
             )));
         }
@@ -485,6 +494,18 @@ pub(crate) fn source(
         },
         "point" => SourceKind::Point {
             half_angle: radians_from_degrees(item.positive("half_angle_deg")?),
+        },
+        "isotropic" => SourceKind::Isotropic {
+            half_angle: {
+                let degrees = item.optional_number("half_angle_deg", 180.0)?;
+                if !(degrees > 0.0 && degrees <= 180.0) {
+                    return Err(error(format!(
+                        "{}: `half_angle_deg` lies above 0 and up to 180",
+                        item.context
+                    )));
+                }
+                radians_from_degrees(degrees)
+            },
         },
         "gaussian" => SourceKind::Gaussian {
             waist_diameter: item.positive("waist_diameter")?,
@@ -1015,6 +1036,43 @@ fn spectrum(layer: &Item, key: &str) -> Result<Option<Spectrum>, FileError> {
     }
 }
 
+/// A detector's `quantum_efficiency = { value = …, source = "…" }` (layouts and sidecars
+/// alike): a number or a table over wavelength, every value from 0 to 1.
+pub(crate) fn quantum_efficiency(
+    item: &Item,
+) -> Result<Option<optobench_scene::QuantumEfficiency>, FileError> {
+    let Some(value) = item.table.get("quantum_efficiency") else {
+        return Ok(None);
+    };
+    let context = format!("{} `quantum_efficiency`", item.context);
+    let table = value
+        .as_table()
+        .ok_or_else(|| error(format!("{context}: write {{ value = …, source = \"…\" }}")))?;
+    check_keys(table, &["value", "source"], &context)?;
+    let inner = Item {
+        table,
+        context: context.clone(),
+    };
+    let curve = spectrum(&inner, "value")?
+        .ok_or_else(|| error(format!("{context}: `value` is required")))?;
+    let values: Vec<f64> = match &curve {
+        Spectrum::Constant(v) => vec![*v],
+        Spectrum::Table(rows) => rows.iter().map(|r| r.1).collect(),
+    };
+    if values.iter().any(|v| *v > 1.0) {
+        return Err(error(format!("{context}: values lie from 0 to 1")));
+    }
+    let source = match table.get("source") {
+        Some(Value::String(s)) if !s.trim().is_empty() => s.clone(),
+        _ => {
+            return Err(error(format!(
+                "{context}: say where the values come from (`source`, text)"
+            )));
+        }
+    };
+    Ok(Some(optobench_scene::QuantumEfficiency { curve, source }))
+}
+
 /// A `sample` entry's layers (layouts and sidecars alike).
 pub(crate) fn sample_kind(item: &Item, lookup: &MaterialLookup) -> Result<ElementKind, FileError> {
     let layers = item
@@ -1274,9 +1332,26 @@ pub fn parse_with(text: &str, lookups: &Lookups) -> Result<Scene, FileError> {
             frame = Frame::new(origin, z, x)
                 .ok_or_else(|| error(format!("{}: degenerate frame", item.context)))?;
         }
-        scene
-            .sources
-            .push(source(&item, &with(position, &["offset"]), frame)?);
+        let reversed = match item.table.get("reversed") {
+            None => false,
+            Some(Value::Boolean(b)) => *b,
+            Some(_) => {
+                return Err(error(format!(
+                    "{}: `reversed` is true or false",
+                    item.context
+                )));
+            }
+        };
+        if reversed {
+            let [x, _, z] = frame.axes();
+            frame = Frame::new(frame.origin(), -z, x)
+                .ok_or_else(|| error(format!("{}: degenerate frame", item.context)))?;
+        }
+        scene.sources.push(source(
+            &item,
+            &with(position, &["offset", "reversed"]),
+            frame,
+        )?);
         let target = Target::Source(item.text("id")?.to_owned());
         scene
             .dofs
@@ -1583,7 +1658,10 @@ pub fn parse_with(text: &str, lookups: &Lookups) -> Result<Scene, FileError> {
     for item in items(&root, "detector")? {
         check_keys(
             item.table,
-            &with(position, &["id", "size", "pixels", "dof"]),
+            &with(
+                position,
+                &["id", "size", "pixels", "quantum_efficiency", "dof"],
+            ),
             &item.context,
         )?;
         let size = item.pair("size")?;
@@ -1595,6 +1673,7 @@ pub fn parse_with(text: &str, lookups: &Lookups) -> Result<Scene, FileError> {
             frame: placement.frame(&item)?,
             size,
             pixels: item.count_pair("pixels")?,
+            quantum_efficiency: quantum_efficiency(&item)?,
         });
         let frame = scene.detectors[scene.detectors.len() - 1].frame;
         let target = Target::Detector(item.text("id")?.to_owned());

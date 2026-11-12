@@ -17,6 +17,7 @@
 
 mod edit;
 mod embed;
+mod emission;
 mod field;
 mod fluence;
 mod graph;
@@ -279,6 +280,14 @@ const STANDARD: &[Command] = &[
         effect: Effect::Read,
         summary: "the light in a sample: the direct beam and the diffuse light it scatters (diffusion approximation), absorbed power by layer and its density",
         handler: fluence::fluence,
+    },
+    Command {
+        id: "emission",
+        label: "Emission",
+        icon: "emission",
+        effect: Effect::Read,
+        summary: "the photon budget of an emitter in a sample: collected by the objective, lost in the sample and at each element and filter, counted by the detectors",
+        handler: emission::emission,
     },
     Command {
         id: "sweep",

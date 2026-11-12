@@ -73,6 +73,7 @@ fn step_lens_traces_like_the_same_lens_defined_inline() {
             frame: frame(-56.666666666667),
             size: (2.0, 2.0),
             pixels: (40, 40),
+            quantum_efficiency: None,
         }],
         solids: vec![],
         // As the sidecar has it by default.

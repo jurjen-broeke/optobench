@@ -161,6 +161,14 @@ pub enum Role {
         /// The medium in front of the front plane.
         exit_medium: usize,
     },
+    /// The front plane of an ideal objective, for light coming back from the sample
+    /// (M11c): a ray arriving from the local +z side within the NA leaves from the
+    /// objective's pupil (`IdealObjective::pass_back`), `pupil_distance` behind, into the
+    /// face's −z medium; other rays are clipped.
+    ObjectiveFront {
+        /// The objective.
+        objective: Arc<crate::objective::IdealObjective>,
+    },
     /// Absorbs and records a detection, for detector `detector`.
     Detector {
         /// The detector's index (meaning set by the caller).
@@ -173,7 +181,10 @@ impl Role {
     /// optical path the face adds (an ideal objective, an ideal lens). Readers that walk
     /// a record's faces skip the second entry.
     pub fn records_twice(&self) -> bool {
-        matches!(self, Role::Objective { .. } | Role::IdealLens { .. })
+        matches!(
+            self,
+            Role::Objective { .. } | Role::ObjectiveFront { .. } | Role::IdealLens { .. }
+        )
     }
 }
 
@@ -409,6 +420,9 @@ pub struct RayRecord {
     pub faces: Vec<usize>,
     /// The power arriving at each hit (W), in the order of `points[1..]`.
     pub powers: Vec<f64>,
+    /// At each refracting face crossed: (face, power not transmitted there), that is
+    /// reflected (followed as a child ray or not) and absorbed in its coating (W).
+    pub face_losses: Vec<(usize, f64)>,
     /// 0 for a launched ray, 1 for a ray split off a launched ray, and so on.
     pub generation: usize,
 }
@@ -634,6 +648,7 @@ impl NonSequentialSystem {
             detector_point: None,
             faces: Vec::new(),
             powers: Vec::new(),
+            face_losses: Vec::new(),
             generation: branch.generation,
         };
         let mut medium = branch.medium;
@@ -786,6 +801,48 @@ impl NonSequentialSystem {
                         }
                     }
                 }
+                Role::ObjectiveFront { objective } => {
+                    let to_local = face.placement.inverse();
+                    let local = to_local.apply_point(ray.position);
+                    let passage = objective.pass_back(
+                        local,
+                        to_local.apply_vector(ray.direction),
+                        launched.wavelength,
+                        index_here,
+                    );
+                    match passage {
+                        Ok(crate::objective::Passage::Leaves {
+                            position,
+                            direction,
+                            optical_path,
+                        }) => {
+                            // `position` is on the pupil plane, `pupil_distance` behind
+                            // this face's plane.
+                            let pupil = Vec3::new(
+                                position.x,
+                                position.y,
+                                local.z - objective.pupil_distance,
+                            );
+                            ray.position = face.placement.apply_point(pupil);
+                            ray.direction = face.placement.apply_vector(direction);
+                            ray.optical_path += optical_path;
+                            record.points.push(ray.position);
+                            record.faces.push(face_index);
+                            record.powers.push(ray.power);
+                            record.optical_paths.push(ray.optical_path);
+                            medium = face.negative_medium;
+                            skip.clear();
+                        }
+                        Ok(_) => {
+                            record.end = End::Clipped { face: face_index };
+                            return record;
+                        }
+                        Err(error) => {
+                            record.end = End::MaterialUndefined { medium, error };
+                            return record;
+                        }
+                    }
+                }
                 Role::Mirror { clear_radius } => {
                     if outside_clear(*clear_radius) {
                         record.end = End::Clipped { face: face_index };
@@ -850,6 +907,9 @@ impl NonSequentialSystem {
                                 }
                             };
                             let reflected = ray.power * response.reflectance;
+                            record
+                                .face_losses
+                                .push((face_index, ray.power * (1.0 - response.transmittance)));
                             record.absorbed_power += ray.power * response.absorptance();
                             match self.split_cutoff {
                                 Some(cutoff) if reflected > 0.0 && reflected >= cutoff => {
@@ -889,10 +949,24 @@ impl NonSequentialSystem {
     /// Traces many rays, and with splitting every ray split off them, and totals their
     /// power.
     pub fn trace_all(&self, rays: impl IntoIterator<Item = Ray>) -> (Vec<RayRecord>, Ledger) {
+        self.trace_all_from(rays.into_iter().map(|r| (r, self.start_medium)))
+    }
+
+    /// As [`Self::trace_all`], each ray starting in its own medium (a source inside a
+    /// sample's layer).
+    pub fn trace_all_from(
+        &self,
+        rays: impl IntoIterator<Item = (Ray, usize)>,
+    ) -> (Vec<RayRecord>, Ledger) {
         let mut ledger = Ledger::default();
         let mut records = Vec::new();
-        for ray in rays {
-            for record in self.trace_tree(ray) {
+        for (ray, medium) in rays {
+            let mut pending = vec![Branch::root(ray, medium)];
+            let mut tree = Vec::new();
+            while let Some(branch) = pending.pop() {
+                tree.push(self.trace_branch(branch, &mut pending));
+            }
+            for record in tree {
                 ledger.add(&record);
                 records.push(record);
             }

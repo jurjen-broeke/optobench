@@ -45,7 +45,7 @@
 //!
 //! [[source]]
 //! id = "fiber"
-//! kind = "point"                    # or "collimated", "gaussian", "fiber", "led": the keys
+//! kind = "point"                    # or "collimated", "gaussian", "fiber", "led", "isotropic": the keys
 //!                                   # and `spectrum` as in layout files (scene_file)
 //! wavelength_um = 0.633
 //! power_w = 0.001
@@ -60,6 +60,7 @@
 //! axis = [0, -1, 0]
 //! size = [10, 10]
 //! pixels = [100, 100]
+//! # quantum_efficiency = { value = 0.3, source = "…" }   # optional, as in layout files
 //!
 //! [[merit]]                         # what `optimize` aligns for, as in layout files
 //! kind = "centring"
@@ -1112,7 +1113,10 @@ pub fn read(text: &str, sidecar: &Path, lookups: &Lookups) -> Result<Read, FileE
     for item in items(&root, "detector")? {
         check_keys(
             item.table,
-            &with(&position, &["id", "size", "pixels", "dof"]),
+            &with(
+                &position,
+                &["id", "size", "pixels", "quantum_efficiency", "dof"],
+            ),
             &item.context,
         )?;
         let size = item.pair("size")?;
@@ -1125,6 +1129,7 @@ pub fn read(text: &str, sidecar: &Path, lookups: &Lookups) -> Result<Read, FileE
             frame,
             size,
             pixels: item.count_pair("pixels")?,
+            quantum_efficiency: crate::scene_file::quantum_efficiency(&item)?,
         });
         let target = Target::Detector(item.text("id")?.to_owned());
         scene

@@ -24,6 +24,7 @@ fn detector(id: &str, frame: Frame) -> Detector {
         frame,
         size: (20.0, 20.0),
         pixels: (40, 40),
+        quantum_efficiency: None,
     }
 }
 
@@ -258,6 +259,7 @@ fn free_space(source: Source, detector_z: f64, size: f64) -> SceneTrace {
             frame: frame(detector_z),
             size: (size, size),
             pixels: (10, 10),
+            quantum_efficiency: None,
         }],
         ..empty()
     };
@@ -451,4 +453,32 @@ fn poses_follow_dof_values_however_they_are_reached() {
     assert!((origin(&back) - frame.origin()).length() < 1e-12);
     assert!((axis(&back) - frame.axes()[2]).length() < 1e-12);
     assert_eq!(back.dofs[0].value, 0.0);
+}
+
+#[test]
+fn an_isotropic_emitter_samples_equal_solid_angles() {
+    // Into a cone of θ_max the rays carry (1 − cos θ_max) / 2 of the power, and their
+    // power-weighted mean cos θ is that of a uniform cap, (1 + cos θ_max) / 2; over the
+    // whole sphere the mean direction is zero.
+    for degrees in [60.0_f64, 180.0] {
+        let theta = degrees.to_radians();
+        let emitter = Source {
+            kind: SourceKind::Isotropic { half_angle: theta },
+            rings: 60,
+            ..beam(Frame::PARENT, 1.0)
+        };
+        let rays = Scene::launch(&emitter);
+        let power: f64 = rays.iter().map(|r| r.power).sum();
+        assert!((power - (1.0 - theta.cos()) / 2.0).abs() < 1e-12, "{power}");
+        let mean = rays.iter().map(|r| r.power * r.direction.z).sum::<f64>() / power;
+        assert!(
+            (mean - (1.0 + theta.cos()) / 2.0).abs() < 1e-3,
+            "{degrees}°: {mean}"
+        );
+        assert!(
+            rays.iter()
+                .all(|r| (r.direction.length() - 1.0).abs() < 1e-12)
+        );
+        assert!(rays.iter().all(|r| r.direction.z >= theta.cos() - 1e-12));
+    }
 }

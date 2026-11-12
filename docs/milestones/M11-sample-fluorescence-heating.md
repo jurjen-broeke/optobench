@@ -105,16 +105,39 @@ the diffusion approximation here; photon transport by Monte Carlo replaces it in
 
 ## M11c Emission and the photon budget
 
-- [ ] Emission from the excited volume as isotropic point emitters (the volume's
-      centroid, or sampled through it), traced back through the sample's layers, the
-      objective and the emission path, through filters (measured curves) to a detector
-      with a quantum-efficiency curve
-- [ ] Photon budget: photons per second emitted, collected by the objective, through the
-      emission path, detected; and each loss on the way (Fresnel, filters, clipping,
-      absorption and scattering in the sample)
-- [ ] Checks: an emitter in a uniform medium under an aperture of half-angle θ collects
-      (1 − cos θ) / 2 of its light (before Fresnel losses); the ledger closes to 10⁻⁹; a
-      filter curve's transmission folded with an emission spectrum by hand
+Built ahead of M11b: the emitter's power (its emission over all directions) is given
+by the user for now; M11b will give it from the excitation rate and the quantum yield.
+
+- [x] An isotropic point emitter (source kind `isotropic`: equal solid angles, the disk
+      samples mapped onto the cap by cos θ = 1 − ρ² (1 − cos θ_max); `power_w` the total
+      over 4π, rays only in the cone, which `reversed = true` turns to face the
+      objective), placed by the user at the excited volume's centroid; a source inside a
+      sample layer starts in that layer's medium. Traced back through the sample's
+      layers, the objective and the emission path, through filters (measured curves), to
+      detectors with a quantum efficiency (`quantum_efficiency = { value, source }`, a
+      number or a table)
+- [x] The ideal objective takes light back from the sample: a face on its front plane
+      (`Role::ObjectiveFront`, `IdealObjective::pass_back`) accepts rays with
+      n sin θ ≤ NA and sends them from the pupil at ρ = −f p along the reverse of their
+      field's direction, the same optical path added (forward and back are each other's
+      inverse to 10⁻¹²). Light reflected back into the objective in forward traces now
+      passes back too, where it was clipped
+- [ ] Emitters sampled through the excited volume (with M11b's excitation volume)
+- [x] Photon budget (`optobench_analysis::emission`, command `emission`), in W and
+      photons per second (P λ / (h c)): emitted, outside the traced cone, traced,
+      collected by the objective; per sample part absorbed and scattered; per item the
+      power not transmitted at its faces (Fresnel, a filter's rejection; ray records gain
+      `face_losses`) and clipped; per detector arriving and counted (× QE(λ)); where the
+      rest ended (the trace's ledger, absorption split into samples, other media and
+      coatings); the imbalance
+- [x] Checks (commands `tests/emission.rs`): an emitter in a matched medium (n 1.33)
+      under an NA 1.0 objective collects (1 − cos θ) / 2, n sin θ = NA, within the one
+      ring of the sampling the cut falls in (2.4 % at 100 rings; 1.1 % found), and all of
+      it reaches the camera; the budget closes to 10⁻⁹ and the cone's share is exact;
+      a filter curve folded with a five-line spectrum by hand (camera and filter loss to
+      10⁻¹⁰, counted photons with a QE table likewise); an emitter 0.5 mm deep in a turbid
+      layer loses ½ ∫ (1 − e^{−µt d/u}) du over the cone (to 10⁻³) in the ratio µa : µs
+      (10⁻¹²); missing sources, values above 1 and wavelengths off the QE table refused
 
 ## M11d Heating
 

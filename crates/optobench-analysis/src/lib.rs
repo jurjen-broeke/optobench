@@ -20,6 +20,7 @@
 
 pub mod colour;
 pub mod diffusion;
+pub mod emission;
 mod focus;
 mod gaussian;
 pub mod graph;
