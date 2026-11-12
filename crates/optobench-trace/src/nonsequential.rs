@@ -142,6 +142,10 @@ pub enum Role {
     /// An ideal thin lens of focal length `focal_length` (mm) in the local z = 0 plane: a
     /// ray at local height (x, y) has its direction's slopes (taken along its own sense
     /// of travel) changed by −(x, y) / f, exactly. Hits beyond `clear_radius` are clipped.
+    /// It adds the optical path of a perfect lens, so a plane wave of slopes u meets in
+    /// its focal plane in phase: n [f √(1 + |u|²) − h·u / √(1 + |u|²) − f √(1 + |u − h/f|²)]
+    /// at height h (Fermat; the chief ray gets nothing). Like an objective it is recorded
+    /// twice, the second entry carrying that path (a step of no length).
     IdealLens {
         /// Focal length (mm); negative for a diverging lens.
         focal_length: f64,
@@ -162,6 +166,15 @@ pub enum Role {
         /// The detector's index (meaning set by the caller).
         detector: usize,
     },
+}
+
+impl Role {
+    /// Whether a hit on such a face is recorded twice: arrival, then departure with the
+    /// optical path the face adds (an ideal objective, an ideal lens). Readers that walk
+    /// a record's faces skip the second entry.
+    pub fn records_twice(&self) -> bool {
+        matches!(self, Role::Objective { .. } | Role::IdealLens { .. })
+    }
 }
 
 /// One face of the scene.
@@ -249,6 +262,29 @@ impl Face {
 }
 
 impl Face {
+    /// Every distance along the line from `origin` in the unit `direction` at which it
+    /// crosses the face, nearest first, up to `length` (scene frame, mm): for telling
+    /// inside from outside of a closed body by counting crossings.
+    pub fn crossings(&self, origin: Vec3, direction: Vec3, length: f64) -> Vec<f64> {
+        let mut out = Vec::new();
+        let mut travelled = 0.0;
+        // Each search starts just past the last crossing (beyond MINIMUM_DISTANCE).
+        for _ in 0..64 {
+            match self.intersect_within(
+                origin + direction * travelled,
+                direction,
+                length - travelled,
+            ) {
+                Some(hit) if travelled + hit.distance <= length => {
+                    travelled += hit.distance;
+                    out.push(travelled);
+                }
+                _ => break,
+            }
+        }
+        out
+    }
+
     /// A bounding box of the face in the scene frame.
     pub fn bounds(&self) -> Aabb {
         let local = match &self.shape {
@@ -639,13 +675,22 @@ impl NonSequentialSystem {
                     let d = to_local.apply_vector(ray.direction);
                     if d.z.abs() > 1e-15 {
                         let sense = d.z.signum();
-                        let (tx, ty) = (
-                            d.x / d.z.abs() - hit.point.x / focal_length,
-                            d.y / d.z.abs() - hit.point.y / focal_length,
-                        );
+                        let (ux, uy) = (d.x / d.z.abs(), d.y / d.z.abs());
+                        let f = *focal_length;
+                        let (hx, hy) = (hit.point.x, hit.point.y);
+                        let (tx, ty) = (ux - hx / f, uy - hy / f);
                         if let Some(new) = Vec3::new(tx, ty, sense).normalized() {
                             ray.direction = face.placement.apply_vector(new);
                         }
+                        let incoming = (1.0 + ux * ux + uy * uy).sqrt();
+                        let added = f * incoming
+                            - (hx * ux + hy * uy) / incoming
+                            - f * (1.0 + tx * tx + ty * ty).sqrt();
+                        ray.optical_path += index_here * added;
+                        record.points.push(ray.position);
+                        record.faces.push(face_index);
+                        record.powers.push(ray.power);
+                        record.optical_paths.push(ray.optical_path);
                     }
                 }
                 Role::Objective {

@@ -71,6 +71,8 @@ pub struct Outcome {
     pub converged: bool,
     /// Which variables end at a bound.
     pub at_bound: Vec<bool>,
+    /// The cost at the start and after each accepted step.
+    pub history: Vec<f64>,
 }
 
 fn cost(r: &[f64]) -> f64 {
@@ -89,6 +91,7 @@ pub fn minimise<E>(
     let mut evaluations = 1;
     let start_cost = cost(&r);
     let mut current = start_cost;
+    let mut history = vec![start_cost];
     let mut lambda: f64 = 1e-3;
     let mut iterations = 0;
     let mut converged = n == 0 || current <= options.cost_floor;
@@ -171,6 +174,7 @@ pub fn minimise<E>(
                     x = trial;
                     r = tr;
                     current = new_cost;
+                    history.push(new_cost);
                     lambda = (lambda / 10.0).max(1e-15);
                     if gain < options.cost_tolerance || current <= options.cost_floor || resolved {
                         converged = true;
@@ -204,6 +208,7 @@ pub fn minimise<E>(
         evaluations,
         converged,
         at_bound,
+        history,
     })
 }
 

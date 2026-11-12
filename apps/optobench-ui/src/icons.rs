@@ -538,6 +538,41 @@ pub fn draw(painter: &Painter, rect: Rect, id: &str, enabled: bool) {
             c.line(&lower, ACTION, r.beam);
             c.line(&[pos2(32.0, 20.0), pos2(32.0, 44.0)], 2.0, r.guide);
         }
+        "graph" => {
+            // Axes, a hairline grid and a curve rising and settling.
+            for y in [18.0, 32.0, 46.0] {
+                c.line(&[pos2(10.0, y), pos2(58.0, y)], 1.5, r.guide);
+            }
+            c.line(
+                &[pos2(10.0, 8.0), pos2(10.0, 56.0), pos2(58.0, 56.0)],
+                2.4,
+                r.a3,
+            );
+            let curve: Vec<_> = (0..=32)
+                .map(|k| {
+                    let x = 12.0 + 44.0 * k as f32 / 32.0;
+                    let t = (x - 12.0) / 44.0;
+                    pos2(
+                        x,
+                        52.0 - 36.0 * (1.0 - (-4.0 * t).exp())
+                            - 6.0 * (9.0 * t).sin() * (-3.0 * t).exp(),
+                    )
+                })
+                .collect();
+            c.line(&curve, ACTION, r.beam);
+        }
+        "field" => {
+            // A wavefront through a slit, spreading in circles beyond it.
+            c.line(&[pos2(18.0, 6.0), pos2(18.0, 26.0)], 3.0, r.a3);
+            c.line(&[pos2(18.0, 38.0), pos2(18.0, 58.0)], 3.0, r.a3);
+            for x in [6.0, 11.0] {
+                c.line(&[pos2(x, 10.0), pos2(x, 54.0)], 1.8, r.beam);
+            }
+            for radius in [10.0, 20.0, 30.0] {
+                let arc = c.arc(pos2(18.0, 32.0), radius, -60.0, 60.0);
+                c.line(&arc, if radius < 15.0 { ACTION } else { 1.8 }, r.beam);
+            }
+        }
         "psf" => {
             // The focal intensity: a central peak and its first rings (sinc²).
             let profile: Vec<_> = (0..=48)
@@ -784,6 +819,8 @@ pub const ALL: &[&str] = &[
     "focus",
     "gaussian",
     "psf",
+    "field",
+    "graph",
     "sweep",
     "check-moves",
     "bodies",

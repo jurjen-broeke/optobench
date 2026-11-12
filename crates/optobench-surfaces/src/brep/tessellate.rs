@@ -801,8 +801,8 @@ impl<'a> Parameters<'a> {
     /// The periodic parameters moved by whole turns to lie nearest `near`.
     fn unwrap_near(&self, uv: (f64, f64), near: (f64, f64)) -> (f64, f64) {
         let mut out = uv;
-        for axis in 0..2 {
-            if self.periodic[axis] {
+        for (axis, &periodic) in self.periodic.iter().enumerate() {
+            if periodic {
                 let x = get(uv, axis);
                 let n = get(near, axis);
                 set(&mut out, axis, x - ((x - n) / TAU).round() * TAU);

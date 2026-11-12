@@ -5,6 +5,43 @@ with the release that introduced them.
 
 ## Unreleased
 
+- M10c rays to fields and back: new command `field` carries a beam as a field from the
+  source (its exact field) or a detector (from the traced rays) to a target detector,
+  through ideal lenses and mechanics (plates, tube bores), with fibre coupling at the
+  target and rays on from it through the rest of the scene. New `graph` kinds `field`,
+  `field-phase` and `field-difference` (field minus rays on the target's pixels). Fixed:
+  an ideal lens now adds the optical path of a perfect lens (rays unchanged); it is
+  recorded twice in ray records, like an objective. M10's exit criterion is met.
+- M10c (completed): absorbing bodies from CAD cut the field at nine planes through their
+  depth, by counting crossings with their own faces; a lens or mirror body on the way is
+  refused. Fields onto planes tilted about x or y, exactly (no interpolation), with the
+  oblique incidence carried as a tilt and the obliquity in irradiance and power; `field`
+  targets may be tilted. The sampling check now looks at the share of the lit field at
+  coarse phase steps, so a hard edge's diffraction passes. M10 Field propagation and
+  graphs is complete.
+- M10b fields and propagation: new engine crate `optobench-field` (L4). Sampled fields
+  with a spherical reference; propagation by the angular spectrum or Fresnel's integral
+  in one transform, chosen from the grid's Fresnel number, through foci and past them;
+  apertures with exact edges, thin lenses, Zernike phase maps; exact Gaussian beams;
+  irradiance and phase maps. Checked against the q law, Fresnel's on-axis formula for a
+  circular aperture, the Airy pattern, a truncated Gaussian, the Talbot effect and
+  Maréchal's approximation. New dependency `rustfft` (MIT OR Apache-2.0), behind the
+  crate's own transform interface.
+- M10a2 more graphs, and graphs in the window: `graph` draws a Gaussian beam along its
+  path, sweeps over a DOF, the wavefront error at the PSF peak and the optimiser's
+  progress (`optimize` now returns its `history`). The window's Graph button (CAD,
+  Layout, Simulate) draws the kind chosen in the results strip, with readouts, zoom, pan,
+  map cursors with row and column profiles, and cursors linked across graphs. The
+  `graph` command's saved-graph parameter is `saved`.
+- M10a1 graphs: any result as a graph, built as data in the engine
+  (`optobench_analysis::graph`, colours in `optobench_analysis::colour`) and written by
+  the new command `graph` as SVG, CSV and JSON: PSF along the focus line, across the peak
+  and as an x–z section, axial crossings by ray height, spot diagrams and irradiance
+  maps. Graphs compare with saved graphs on shared axes, with a reference curve, or as
+  a difference. Units are chosen for reading (nm, µm, mm; powers of ten taken out),
+  colours have one job each (series, magnitude, difference, phase) and keep neighbours
+  apart for colour-blind readers. Saved JSON now reads back bit for bit (`serde_json`
+  exact float parsing).
 - Roadmap: new milestone M10 Field propagation and graphs, before the sample. Fields are
   propagated between chosen planes where diffraction matters (apertures, pinholes, fibre
   coupling): rays are turned into a sampled field, propagated, and turned back into rays.

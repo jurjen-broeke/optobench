@@ -7,7 +7,7 @@
 //! The chief ray is the ray each source launches from its centre along its axis.
 
 use optobench_scene::Owner;
-use optobench_trace::nonsequential::{End, Role};
+use optobench_trace::nonsequential::End;
 use serde_json::{Value, json};
 
 use crate::trace::{load, text};
@@ -130,7 +130,7 @@ pub(crate) fn sweep(parameters: &Parameters) -> Result<Value, CommandError> {
                     // An objective's second entry is where the ray leaves it.
                     if k > 0
                         && record.faces[k - 1] == face
-                        && matches!(role, Role::Objective { .. })
+                        && role.records_twice()
                     {
                         continue;
                     }

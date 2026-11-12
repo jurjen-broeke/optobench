@@ -387,6 +387,10 @@ pub struct Document {
     pub runs: Vec<Run>,
     /// The last optimisation's result, until applied or replaced.
     pub optimised: Option<Value>,
+    /// The graphs drawn so far, newest first (at most three), with their views.
+    pub graphs: Vec<(optobench_analysis::graph::Graph, crate::graphs::GraphView)>,
+    /// The graph the Graph button draws (the `graph` command's `of`).
+    pub graph_kind: &'static str,
     /// What the next run follows (for the runs strip).
     changed: String,
     undoing: bool,
@@ -410,6 +414,8 @@ impl Document {
             trace_version: 0,
             trace: None,
             output: None,
+            graphs: Vec::new(),
+            graph_kind: "spot",
             running: Vec::new(),
             messages: Vec::new(),
             undo: Vec::new(),
@@ -448,6 +454,7 @@ impl Document {
                 | "parts"
                 | "curves"
                 | "materials"
+                | "graph"
         );
         if let (true, Some(data), Some(p)) =
             (uses_data, &self.data_directory, parameters.as_object_mut())
@@ -487,6 +494,7 @@ impl Document {
                 }
             }
             "parts" | "curves" | "materials" => Ok(json!({})),
+            "graph" => Ok(json!({ "path": path, "of": self.graph_kind })),
             "edit" => Ok(json!({ "path": path })),
             "import-part" | "import-curve" | "import-material" => {
                 Err("drop the file on the window to import it (coming with M8c)".into())
@@ -631,6 +639,21 @@ impl Document {
                 self.output = Some(("optimize".into(), value.clone()));
                 self.optimised = Some(value);
             }
+            ("graph", Ok(value)) => match optobench_io::graph::from_json(&value["graph"]) {
+                Ok(graph) => {
+                    self.messages.push(Message {
+                        error: false,
+                        text: format!("Graph: {}", graph.title),
+                    });
+                    self.graphs
+                        .insert(0, (graph, crate::graphs::GraphView::default()));
+                    self.graphs.truncate(3);
+                }
+                Err(e) => self.messages.push(Message {
+                    error: true,
+                    text: format!("graph: {e}"),
+                }),
+            },
             ("trace", Ok(value)) => {
                 let detected = value["ledger"]["detected_w"].as_f64().unwrap_or(0.0);
                 let launched = value["ledger"]["launched_w"].as_f64().unwrap_or(0.0);
@@ -889,6 +912,8 @@ mod tests {
             trace_version: 0,
             trace: None,
             output: None,
+            graphs: Vec::new(),
+            graph_kind: "spot",
             running: Vec::new(),
             messages: Vec::new(),
             undo: Vec::new(),

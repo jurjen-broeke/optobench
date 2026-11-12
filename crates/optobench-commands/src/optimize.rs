@@ -137,6 +137,7 @@ pub(crate) fn optimize(parameters: &Parameters) -> Result<Value, CommandError> {
         "cost": { "start": result.outcome.start_cost, "end": result.outcome.cost },
         "converged": result.outcome.converged,
         "iterations": result.outcome.iterations,
+        "history": result.outcome.history,
         "traces": result.outcome.evaluations,
     }))
 }

@@ -17,6 +17,8 @@
 
 mod edit;
 mod embed;
+mod field;
+mod graph;
 mod materials;
 mod moves;
 mod optimize;
@@ -246,12 +248,28 @@ const STANDARD: &[Command] = &[
         handler: trace::gaussian,
     },
     Command {
+        id: "graph",
+        label: "Graph",
+        icon: "graph",
+        effect: Effect::Write,
+        summary: "a result as a graph (PSF profiles and section, focus, spot diagram, irradiance), compared with saved results or a reference; written as SVG, CSV and JSON",
+        handler: graph::graph,
+    },
+    Command {
         id: "psf",
         label: "PSF",
         icon: "psf",
         effect: Effect::Read,
         summary: "the vectorial point-spread function behind an objective, through the layers in front of it: peak, Strehl ratio, widths, axial and lateral profiles",
         handler: psf::psf,
+    },
+    Command {
+        id: "field",
+        label: "Field",
+        icon: "field",
+        effect: Effect::Read,
+        summary: "carry a beam as a field from a plane to a detector through ideal lenses and mechanics (diffraction), into a fibre and on as rays",
+        handler: field::field,
     },
     Command {
         id: "sweep",
