@@ -31,6 +31,9 @@ const KINDS: &[&str] = &[
     "gaussian",
     "sweep",
     "optimize",
+    "field",
+    "field-phase",
+    "field-difference",
 ];
 
 /// The parameters of `of = "sweep"` and `of = "optimize"`, passed on to those commands.
@@ -296,6 +299,56 @@ fn of_design(parameters: &Parameters, kind: &str) -> Result<Graph, CommandError>
             text(parameters, "element")?,
         );
     }
+    if matches!(kind, "field" | "field-phase" | "field-difference") {
+        let (scene, request, outcome) = crate::field::outcome(parameters)?;
+        let target = &scene.detectors[request.target];
+        return match kind {
+            "field" => Ok(outcome
+                .field
+                .irradiance_graph(format!("Field at `{}`", target.id))),
+            "field-phase" => Ok(outcome
+                .field
+                .phase_graph(format!("Field phase at `{}`", target.id))),
+            _ => {
+                use optobench_analysis::colour::ColourScale;
+                use optobench_analysis::graph::{Axis, Map, Plot, Unit};
+                let traced = scene.trace().map_err(|e| failed(e.to_string()))?;
+                let rays: Vec<f64> = traced.detectors[request.target]
+                    .irradiance
+                    .iter()
+                    .map(|v| v * 1e-6)
+                    .collect();
+                let field =
+                    optobench_field::scene::on_pixels(&outcome.field, target.size, target.pixels);
+                let map = |values: Vec<f64>, title: &str| Graph {
+                    title: title.into(),
+                    x: Axis::new("x", Unit::Length),
+                    y: Axis::new("y", Unit::Length),
+                    plot: Plot::Map(Map {
+                        columns: target.pixels.0,
+                        rows: target.pixels.1,
+                        x: (-target.size.0 / 2.0, target.size.0 / 2.0),
+                        y: (-target.size.1 / 2.0, target.size.1 / 2.0),
+                        values,
+                        value: Axis::new("irradiance", Unit::Irradiance),
+                        colours: ColourScale::Sequential,
+                    }),
+                    equal_aspect: true,
+                    markers: Vec::new(),
+                    notes: Vec::new(),
+                };
+                let mut difference =
+                    graphs::difference(&map(field, "field"), &map(rays, "rays")).map_err(failed)?;
+                difference.title = format!("Field minus rays on `{}`", target.id);
+                difference.notes = vec![format!(
+                    "field {:.6} W, rays {:.6} W on the detector",
+                    outcome.field.power(),
+                    traced.detectors[request.target].power
+                )];
+                Ok(difference)
+            }
+        };
+    }
     if kind == "optimize" {
         let mut keys = base.to_vec();
         keys.extend_from_slice(OPTIMIZE_KEYS);
@@ -413,6 +466,7 @@ pub(crate) fn graph(parameters: &Parameters) -> Result<Value, CommandError> {
     keys.extend_from_slice(PSF_KEYS);
     keys.extend_from_slice(SWEEP_KEYS);
     keys.extend_from_slice(OPTIMIZE_KEYS);
+    keys.extend_from_slice(crate::field::FIELD_KEYS);
     check_keys(parameters, &keys)?;
     let mut graph = match (text(parameters, "saved")?, text(parameters, "of")?) {
         (Some(from), None) => {

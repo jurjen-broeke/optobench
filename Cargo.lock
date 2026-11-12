@@ -2132,6 +2132,8 @@ version = "0.0.1"
 dependencies = [
  "optobench-analysis",
  "optobench-math",
+ "optobench-scene",
+ "optobench-trace",
  "rustfft",
 ]
 

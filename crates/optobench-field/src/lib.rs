@@ -36,6 +36,8 @@
 #![forbid(unsafe_code)]
 
 pub mod aperture;
+pub mod rays;
+pub mod scene;
 pub mod transform;
 
 use optobench_analysis::colour::ColourScale;
@@ -339,8 +341,10 @@ impl Field {
         out
     }
 
-    /// The largest phase step between neighbouring stored samples where the field is not
-    /// dark (radians).
+    /// The largest phase step between neighbouring stored samples that are both clearly
+    /// lit (a hundredth of the peak irradiance or more), in radians. Between dimmer samples
+    /// the phase may jump by π across a zero of the field (a dark ring): that is the
+    /// field, not under-sampling.
     pub fn largest_phase_step(&self) -> f64 {
         let n = self.n;
         let peak = (0..n * n)
@@ -348,7 +352,7 @@ impl Field {
             .fold(0.0, f64::max);
         let lit = |i: usize| {
             self.components[0][i].norm_squared() + self.components[1][i].norm_squared()
-                > 1e-6 * peak
+                >= 1e-2 * peak
         };
         let mut largest: f64 = 0.0;
         for k in 0..2 {
@@ -669,7 +673,7 @@ impl Field {
     }
 }
 
-fn unit(p: (Complex, Complex)) -> (Complex, Complex) {
+pub(crate) fn unit(p: (Complex, Complex)) -> (Complex, Complex) {
     let size = (p.0.norm_squared() + p.1.norm_squared()).sqrt();
     if size > 0.0 {
         (p.0 * (1.0 / size), p.1 * (1.0 / size))

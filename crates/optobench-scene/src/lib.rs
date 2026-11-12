@@ -1046,7 +1046,7 @@ impl Scene {
                 // not a point on its pupil.
                 let departure = k > 0
                     && record.faces[k - 1] == *face
-                    && matches!(built.system.faces[*face].role, Role::Objective { .. });
+                    && built.system.faces[*face].role.records_twice();
                 if departure {
                     continue;
                 }

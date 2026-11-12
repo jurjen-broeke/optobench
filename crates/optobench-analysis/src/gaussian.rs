@@ -91,9 +91,8 @@ fn arrival(record: &RayRecord, face: Option<(usize, usize)>, built: &Built) -> O
         Some((face, occurrence)) => {
             let mut seen = 0;
             for (k, &f) in record.faces.iter().enumerate() {
-                let departure = k > 0
-                    && record.faces[k - 1] == f
-                    && matches!(built.system.faces[f].role, Role::Objective { .. });
+                let departure =
+                    k > 0 && record.faces[k - 1] == f && built.system.faces[f].role.records_twice();
                 if f != face || departure {
                     continue;
                 }
@@ -186,8 +185,7 @@ pub fn gaussian(scene: &Scene, source: usize) -> Result<Vec<BeamAt>, String> {
     let mut counted: Vec<usize> = Vec::new();
     for (k, &f) in chief.faces.iter().enumerate() {
         let face = &built.system.faces[f];
-        let departure =
-            k > 0 && chief.faces[k - 1] == f && matches!(face.role, Role::Objective { .. });
+        let departure = k > 0 && chief.faces[k - 1] == f && face.role.records_twice();
         if departure {
             continue;
         }

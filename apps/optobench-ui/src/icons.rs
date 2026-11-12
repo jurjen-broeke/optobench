@@ -561,6 +561,18 @@ pub fn draw(painter: &Painter, rect: Rect, id: &str, enabled: bool) {
                 .collect();
             c.line(&curve, ACTION, r.beam);
         }
+        "field" => {
+            // A wavefront through a slit, spreading in circles beyond it.
+            c.line(&[pos2(18.0, 6.0), pos2(18.0, 26.0)], 3.0, r.a3);
+            c.line(&[pos2(18.0, 38.0), pos2(18.0, 58.0)], 3.0, r.a3);
+            for x in [6.0, 11.0] {
+                c.line(&[pos2(x, 10.0), pos2(x, 54.0)], 1.8, r.beam);
+            }
+            for radius in [10.0, 20.0, 30.0] {
+                let arc = c.arc(pos2(18.0, 32.0), radius, -60.0, 60.0);
+                c.line(&arc, if radius < 15.0 { ACTION } else { 1.8 }, r.beam);
+            }
+        }
         "psf" => {
             // The focal intensity: a central peak and its first rings (sinc²).
             let profile: Vec<_> = (0..=48)
@@ -807,6 +819,7 @@ pub const ALL: &[&str] = &[
     "focus",
     "gaussian",
     "psf",
+    "field",
     "graph",
     "sweep",
     "check-moves",

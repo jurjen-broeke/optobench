@@ -108,22 +108,42 @@ Graphs come first: the field work is inspected with them.
 
 ## M10c Rays to fields and back
 
-- [ ] Rays to field at a chosen plane (a `field` entry in layouts and sidecars: plane,
-      grid size, spacing or padding): amplitude from each ray's power over the area it
-      stands for, phase from its optical path, as in the M9c2 PSF; sampling checked
-      against the phase gradient
-- [ ] Field to rays: one ray per cell above a power threshold, along the local phase
-      gradient, with the cell's power and optical path; rays from rough phase (near a
-      dark ring) marked
-- [ ] Masks from the scene: proxy plates and tubes and STEP bodies cut by a field's plane,
-      as apertures with exact edges (moved from M10b: it needs the scene)
-- [ ] Tilted planes, by rotating the angular spectrum (moved from M10b: needed where a
-      field meets a tilted element)
-- [ ] Field detectors: irradiance n |E|² and the field itself, as graphs
-- [ ] Mode overlap: coupling into a single-mode fibre (Gaussian of its mode-field
-      diameter) or any field, |∫ E₁* E₂ dA|² / (∫ |E₁|² dA ∫ |E₂|² dA)
-- [ ] Exit check: Gaussian-to-fibre coupling (2 w₁ w₂ / (w₁² + w₂²))² for two waists
-      in the same plane on one axis; rays → field → rays with no aperture reproduces the
-      ray trace to the sampling error; a field focused by an ideal lens reproduces the M9c2 PSF at
-      low NA; a Gaussian beam clipped by an iris in a lens tube, shown as rays and as a
-      field with the difference graphed
+- [x] Rays to a field (`optobench_field::rays`): rays from a regular launch grid, each
+      with its power over the area its launch cell covers on the plane (from its
+      neighbours) and its optical path as phase; spread over the grid by triangles
+      between neighbours (the eikonal field); the rays' mean sphere taken out as the
+      reference; triangles folding over (a caustic) refused
+- [x] A field to rays: one ray per lit cell along the unwrapped phase gradient, with the
+      cell's power and an optical path from the unwrapped phase; rays by a dark cell or a
+      phase jump marked rough
+- [x] In a scene (`optobench_field::scene`, command `field`): the field starts as the
+      source's exact field or from the rays traced to a detector, goes along that plane's
+      axis to a target detector through ideal lenses (a change of the reference sphere,
+      their rim an aperture) and mechanics (a plate as an aperture with exact edges, a
+      tube as apertures of its bore at its ends and seven planes between), anything else
+      on the axis refused; at the target, fibre coupling, and rays on through the rest
+      of the scene from just past it, summarised per detector
+- [x] Field detectors: the field at the target as irradiance and phase maps, and its
+      difference from the rays on the target's pixels (each field cell's power shared by
+      overlap area, no moiré); `graph` kinds `field`, `field-phase`, `field-difference`
+- [x] Mode overlap: coupling into a single-mode fibre (Gaussian of its mode-field
+      diameter), |∫ E* M dA|² / (∫ |E|² dA ∫ |M|² dA), both polarizations
+- [x] Fixed on the way: an ideal lens now adds the optical path of a perfect lens
+      (Fermat: a plane wave of any slope meets in its focal plane in phase) and is
+      recorded twice like an objective (`Role::records_twice`); before, a field after an
+      ideal lens had the wrong phase. Ray positions and slopes are unchanged
+- [x] Exit check (commands `tests/field.rs`): two Gaussian modes overlap by
+      (2 w₁ w₂ / (w₁² + w₂²))² to 10⁻⁷; a Gaussian focused by a 50 mm lens couples into a
+      fibre at its q-law waist as that formula says, to 10⁻⁴; rays → field → rays with
+      nothing in the way give the screen's RMS radius 1/√2 mm to 1 % (the trace's own
+      rings to 1.5 %); a field focused by an ideal lens of NA 0.1 has the M9c2 PSF's peak
+      per watt to 1 %; a Gaussian clipped by an iris (1 mm, at its waist) passes
+      1 − e⁻² to 0.3 %, a lens tube's bore beyond clips nothing, and the axis at 1 m is lit
+      as Fresnel's integral over the clipped beam says, to 1 %; the difference from the
+      rays is drawn
+- [ ] Masks from STEP bodies cut by the field's plane (proxies are done); open
+- [ ] Tilted field planes, by rotating the angular spectrum; open. In the hybrid the
+      field is turned back into rays before anything tilted, which the trace handles
+
+M10's exit criterion is met: each closed form and the rays → field → rays and PSF
+comparisons above.

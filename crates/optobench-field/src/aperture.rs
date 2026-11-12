@@ -29,6 +29,16 @@ pub enum Aperture {
         /// Centre (mm).
         centre: (f64, f64),
     },
+    /// A square plate with a round hole (an iris on its mount): open in the hole and
+    /// outside the plate.
+    Plate {
+        /// Hole radius (mm).
+        hole: f64,
+        /// Half the plate's side (mm).
+        half: f64,
+        /// Centre (mm).
+        centre: (f64, f64),
+    },
     /// Open outside a circle (a stop on the axis, a mirror's hole seen from behind).
     Stop {
         /// Radius (mm).
@@ -65,6 +75,19 @@ fn classify(aperture: &Aperture, x: f64, y: f64, h: f64) -> Option<bool> {
             (Some(true), Some(false)) => Some(true),
             _ => None,
         },
+        Aperture::Plate { hole, half, centre } => {
+            let (dx, dy) = ((x - centre.0).abs(), (y - centre.1).abs());
+            // Wholly outside the plate's square, or wholly in the hole.
+            if dx - h >= half || dy - h >= half {
+                return Some(true);
+            }
+            let inside_square = dx + h <= half && dy + h <= half;
+            match circle(hole, centre) {
+                Some(true) => Some(true),
+                Some(false) if inside_square => Some(false),
+                _ => None,
+            }
+        }
         Aperture::Rectangle { half, centre } => {
             let (dx, dy) = ((x - centre.0).abs(), (y - centre.1).abs());
             if dx + h <= half.0 && dy + h <= half.1 {
@@ -115,7 +138,7 @@ impl Aperture {
             Aperture::Circle { radius, .. } => pi * radius * radius,
             Aperture::Annulus { inner, outer, .. } => pi * (outer * outer - inner * inner),
             Aperture::Rectangle { half, .. } => 4.0 * half.0 * half.1,
-            Aperture::Stop { .. } => f64::INFINITY,
+            Aperture::Stop { .. } | Aperture::Plate { .. } => f64::INFINITY,
         }
     }
 }

@@ -5,6 +5,14 @@ with the release that introduced them.
 
 ## Unreleased
 
+- M10c rays to fields and back: new command `field` carries a beam as a field from the
+  source (its exact field) or a detector (from the traced rays) to a target detector,
+  through ideal lenses and mechanics (plates, tube bores), with fibre coupling at the
+  target and rays on from it through the rest of the scene. New `graph` kinds `field`,
+  `field-phase` and `field-difference` (field minus rays on the target's pixels). Fixed:
+  an ideal lens now adds the optical path of a perfect lens (rays unchanged); it is
+  recorded twice in ray records, like an objective. M10's exit criterion is met; masks
+  from STEP bodies and tilted field planes remain open.
 - M10b fields and propagation: new engine crate `optobench-field` (L4). Sampled fields
   with a spherical reference; propagation by the angular spectrum or Fresnel's integral
   in one transform, chosen from the grid's Fresnel number, through foci and past them;
