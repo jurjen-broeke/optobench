@@ -21,6 +21,7 @@ mod materials;
 mod moves;
 mod optimize;
 mod parts;
+mod psf;
 mod sweep;
 mod trace;
 
@@ -243,6 +244,14 @@ const STANDARD: &[Command] = &[
         effect: Effect::Read,
         summary: "a Gaussian source's beam radius, curvature and waist at every element and detector, and an objective's pupil fill",
         handler: trace::gaussian,
+    },
+    Command {
+        id: "psf",
+        label: "PSF",
+        icon: "psf",
+        effect: Effect::Read,
+        summary: "the vectorial point-spread function behind an objective, through the layers in front of it: peak, Strehl ratio, widths, axial and lateral profiles",
+        handler: psf::psf,
     },
     Command {
         id: "sweep",

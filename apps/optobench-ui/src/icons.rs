@@ -538,6 +538,23 @@ pub fn draw(painter: &Painter, rect: Rect, id: &str, enabled: bool) {
             c.line(&lower, ACTION, r.beam);
             c.line(&[pos2(32.0, 20.0), pos2(32.0, 44.0)], 2.0, r.guide);
         }
+        "psf" => {
+            // The focal intensity: a central peak and its first rings (sinc²).
+            let profile: Vec<_> = (0..=48)
+                .map(|k| {
+                    let x = 4.0 + 56.0 * k as f32 / 48.0;
+                    let u = (x - 32.0) / 4.2;
+                    let level = if u.abs() < 1e-3 {
+                        1.0
+                    } else {
+                        (u.sin() / u).powi(2)
+                    };
+                    pos2(x, 54.0 - 44.0 * level)
+                })
+                .collect();
+            c.line(&[pos2(4.0, 54.0), pos2(60.0, 54.0)], 2.0, r.guide);
+            c.line(&profile, ACTION, r.beam);
+        }
         "sweep" => {
             // A mirror turning, and the fan of beams it sends.
             let hit = pos2(20.0, 44.0);
@@ -766,6 +783,7 @@ pub const ALL: &[&str] = &[
     "optimise",
     "focus",
     "gaussian",
+    "psf",
     "sweep",
     "check-moves",
     "bodies",

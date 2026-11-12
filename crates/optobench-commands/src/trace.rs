@@ -79,7 +79,7 @@ pub(crate) fn dofs_json(scene: &optobench_scene::Scene) -> Value {
                 let unit = |x: f64| if angle { x.to_degrees() } else { x };
                 let mut v = json!({
                     "name": d.name,
-                    "kind": if angle { "tilt" } else { "slide" },
+                    "kind": d.motion.kind(),
                     "unit": if angle { "deg" } else { "mm" },
                     "value": unit(d.value),
                     "locked": d.locked,

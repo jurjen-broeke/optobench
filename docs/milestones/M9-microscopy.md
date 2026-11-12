@@ -95,8 +95,31 @@ objective's specifications are in the corpus.
 
 ### M9c2 The vectorial PSF and the exit check
 
-- [ ] Richards–Wolf vectorial PSF fed by the traced pupil field, in the stratified-media
-      form (Török et al., J. Opt. Soc. Am. A 12, 325 (1995); Gibson and Lanni 1991)
-- [ ] Correction collar as a DOF (the design cover-glass thickness it corrects for)
-- [ ] Exit check: focal shift and PSF in water against published stratified-media
+- [x] Richards–Wolf vectorial PSF fed by the traced pupil field, in the stratified-media
+      form (Török et al., J. Opt. Soc. Am. A 12, 325 (1995); Gibson and Lanni 1991):
+      `optobench_analysis::psf` and the `psf` command. A collimated or TEM₀₀ Gaussian
+      source is traced on a square grid; each ray reaching the detector through the
+      objective is a plane wave in the focal medium, its amplitude from its power at the
+      pupil over the pupil area it stands for (so a relay's magnification and losses are
+      in it), its phase from its traced optical path, its polarization from the pupil
+      polarization (x, y, circular, radial, azimuthal, in the objective's frame) turned
+      by the objective and multiplied by the Fresnel s/p amplitudes at every face after
+      it. Reported: the peak and its n |E|² (W/mm²), the Strehl ratio, FWHM along x, y
+      and the focus line, the axial and lateral profiles, the rays' axial span
+- [x] Correction collar as a DOF (`kind = "collar"`, value the change in the design
+      cover-glass thickness, mm; no axis): optimised, swept and listed like any DOF
+- [x] Exit check: focal shift and PSF in water against published stratified-media
       results
+
+Checks (commands `tests/psf.rs`): NA 0.1, the peak P π NA² / λ² and the Airy and axial
+widths to 0.5 %; NA 1.2 water, the closed-form Richards–Wolf peak
+P π n⁴ J² / (NA² λ²) to 0.2 %, the focus longer along the polarization and round for
+circular and radial light; a collar set to the glass that is there focuses every ray
+perfectly (Strehl 1), 0.03 mm of glass uncorrected costs NA 1.0 a third of its peak.
+
+Exit check: the axial re-scaling ζ = z_A / z_N from the PSF peak, against the
+depth-dependent analytic result of Loginov et al. (Optica 11, 553 (2024), Eq. 3), which
+follows their vectorial wave-optics calculation to about 2 % beyond 15 µm. A dry NA 0.85
+objective 40 µm into water (λ = 0.52 µm): ζ = 1.425 against 1.416, between the paraxial
+1.34 and marginal 1.97 bounds. An oil NA 1.4 objective 40 µm into water: ζ = 0.844 against
+0.849, below n₂ / n₁. Both within 2 %. M9 Microscopy is complete.
