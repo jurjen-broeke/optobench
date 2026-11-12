@@ -1,7 +1,9 @@
 //! Degrees of freedom (docs/design.md, Coupling with SolidCraft, "The DOF model").
 //!
 //! A DOF moves one item of the scene from its nominal pose: a *slide* along an axis (mm)
-//! or a *tilt* about an axis through a pivot (radians). Axes and pivots are fixed in the
+//! or a *tilt* about an axis through a pivot (radians). An objective's correction
+//! *collar* is a DOF too: it changes the cover-glass thickness the objective is corrected
+//! for (mm), not a pose. Axes and pivots are fixed in the
 //! scene frame at the nominal pose. A DOF may *follow* another (a coupled DOF: its value
 //! is the other's times a ratio) or be *locked* (kept at its value, never optimised).
 //! Poses are always the nominal pose plus the DOF offsets, never free transforms; an item
@@ -30,6 +32,9 @@ pub enum Motion {
         /// A point on the axis.
         pivot: Vec3,
     },
+    /// An objective's correction collar: the value is the change in the design
+    /// cover-glass thickness it corrects for (mm). It moves nothing.
+    Collar,
 }
 
 impl Motion {
@@ -43,12 +48,22 @@ impl Motion {
                     * Transform::new(rotation, Vec3::ZERO)
                     * Transform::from_translation(-pivot)
             }
+            Motion::Collar => Transform::IDENTITY,
         }
     }
 
     /// Whether the value is an angle.
     pub fn is_angle(&self) -> bool {
         matches!(self, Motion::Tilt { .. })
+    }
+
+    /// Its kind as written in files: `slide`, `tilt` or `collar`.
+    pub fn kind(&self) -> &'static str {
+        match self {
+            Motion::Slide { .. } => "slide",
+            Motion::Tilt { .. } => "tilt",
+            Motion::Collar => "collar",
+        }
     }
 }
 
@@ -259,6 +274,45 @@ impl Scene {
                         return Err(missing());
                     }
                 }
+            }
+        }
+        // Collars: each changes its objective's design cover glass by the change in value.
+        for dof in self
+            .dofs
+            .iter()
+            .filter(|d| matches!(d.motion, Motion::Collar))
+        {
+            let change = new[&dof.name] - old.get(&dof.name).copied().unwrap_or(0.0);
+            let Target::Element(id) = &dof.target else {
+                return Err(invalid(format!(
+                    "`{}`: a collar belongs to an objective",
+                    dof.name
+                )));
+            };
+            let element = scene
+                .elements
+                .iter_mut()
+                .find(|e| &e.id == id)
+                .ok_or_else(|| invalid(format!("`{}`: no element `{id}`", dof.name)))?;
+            let crate::ElementKind::Objective { objective, .. } = &mut element.kind else {
+                return Err(invalid(format!(
+                    "`{}`: a collar belongs to an objective; `{id}` is not one",
+                    dof.name
+                )));
+            };
+            // The design layers are the immersion, then the cover glass.
+            let Some(cover) = objective.design_layers.get_mut(1) else {
+                return Err(invalid(format!(
+                    "`{}`: objective `{id}` has no design cover glass for its collar to correct",
+                    dof.name
+                )));
+            };
+            cover.thickness += change;
+            if cover.thickness <= 0.0 {
+                return Err(invalid(format!(
+                    "`{}`: the collar would correct for a cover glass of {:.4} mm",
+                    dof.name, cover.thickness
+                )));
             }
         }
         for dof in &mut scene.dofs {

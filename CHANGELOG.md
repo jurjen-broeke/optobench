@@ -5,6 +5,14 @@ with the release that introduced them.
 
 ## Unreleased
 
+- M9c2 vectorial PSF and the exit check: new command `psf` gives the Richards–Wolf
+  vectorial PSF behind an objective through the layers in front of it (stratified media),
+  fed by the traced pupil field: peak irradiance, Strehl ratio, widths, axial and lateral
+  profiles, for x, y, circular, radial or azimuthal pupil polarization. New DOF kind
+  `collar`: an objective's correction collar, the change in the cover-glass thickness it
+  corrects for. The focal shift into water matches the depth-dependent scaling of Loginov
+  et al. (2024) to within 1 % for a dry NA 0.85 and an oil NA 1.4 objective. M9
+  Microscopy is complete.
 - M9c1 objectives in CAD and Gaussian beams: sidecars place `objective` and `sample`
   elements (an objective may name its CAD bodies, which the ideal model replaces); new
   command `gaussian` gives a Gaussian source's radius, curvature and waist at every

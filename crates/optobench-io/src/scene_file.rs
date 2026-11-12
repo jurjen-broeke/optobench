@@ -61,6 +61,9 @@
 //! immersion = "water"               # design immersion; default 1.0 (dry)
 //! cover_glass = { thickness = 0.17, material = 1.5255 }   # design; omit for none
 //! sample_medium = "water"           # design medium at the focus; default the immersion
+//! dof = [ { name = "OBJ_collar", kind = "collar", range = [-0.04, 0.04] } ]
+//!                                   # correction collar: the change in the cover-glass
+//!                                   # thickness it corrects for (mm); no axis
 //!
 //! [[element]]
 //! id = "S"
@@ -734,6 +737,17 @@ pub(crate) fn dofs(
                 context: context.clone(),
             };
             let name = dof.text("name")?.to_owned();
+            let kind = dof.text("kind")?;
+            if kind == "collar" {
+                if let Some(key) = ["axis", "pivot", "frame"]
+                    .iter()
+                    .find(|k| table.contains_key(**k))
+                {
+                    return Err(error(format!(
+                        "{context}: a collar changes the cover glass the objective corrects for; it has no `{key}`"
+                    )));
+                }
+            }
             let in_scene = match table.get("frame").map(|f| f.as_str()) {
                 None => scene_default,
                 Some(Some("scene")) => true,
@@ -752,6 +766,7 @@ pub(crate) fn dofs(
                 }
             };
             let axis = match table.get("axis") {
+                _ if kind == "collar" => Vec3::Z,
                 Some(Value::String(a)) => match a.as_str() {
                     "x" => Vec3::X,
                     "y" => Vec3::Y,
@@ -768,17 +783,18 @@ pub(crate) fn dofs(
             let axis = to_scene_vector(axis)
                 .normalized()
                 .ok_or_else(|| error(format!("{context}: `axis` has zero length")))?;
-            let kind = dof.text("kind")?;
             let scale = match kind {
-                "slide" => 1.0,
+                "slide" | "collar" => 1.0,
                 "tilt" => core::f64::consts::PI / 180.0,
                 other => {
                     return Err(error(format!(
-                        "{context}: kind `{other}` is not known; use \"slide\" or \"tilt\""
+                        "{context}: kind `{other}` is not known; use \"slide\", \"tilt\" or \"collar\""
                     )));
                 }
             };
-            let motion = if kind == "slide" {
+            let motion = if kind == "collar" {
+                Motion::Collar
+            } else if kind == "slide" {
                 if table.contains_key("pivot") {
                     return Err(error(format!("{context}: a slide has no `pivot`")));
                 }
