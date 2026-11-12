@@ -15,28 +15,48 @@ Graphs come first: the field work is inspected with them.
 
 ## M10a Graphs
 
-- [ ] Graphs as data in `optobench-analysis` (no rendering, builds for wasm32): line,
-      scatter and map graphs; axes with quantity, unit and a readable scale (µm in a
-      focal region, mm on a bench; linear, logarithmic, dB); series with a label and a
-      palette colour that stays the same across graphs; maps with a colour scale
-- [ ] Colour scales: perceptually uniform sequential (intensity), cyclic (phase, masked
-      below an amplitude threshold), diverging centred on zero (differences); readable
-      in grey and by colour-blind viewers
-- [ ] Graphs from existing results: PSF axial and lateral profiles and an x–z section;
-      focus crossings against height; a Gaussian beam's radius along its path with the
-      elements marked; sweeps over a DOF; spot diagrams and footprints; detector
-      irradiance maps; wavefront and OPD over the pupil; merit against iteration
-- [ ] Comparison: results on shared axes, side by side on the same scales, and as
-      differences (residual profiles, difference maps); a result saved as JSON compared
-      with a new one; a closed form or table as a reference series
-- [ ] SVG and CSV output in `optobench-io` (deterministic); `graph` command: a graph of
-      a design's result, optionally against a saved result or a reference, written as
-      SVG and CSV
-- [ ] In the UI: graphs in the results area, hover readout, zoom and pan, a map cursor
-      with its row and column profiles, linked cursors across graphs sharing an axis
-- [ ] Checks: SVG and CSV of fixed results byte for byte; the CSV holds the result's
-      numbers exactly; colour scales monotonic in lightness (sequential), equal in
-      lightness at both ends (cyclic), symmetric about zero (diverging)
+### M10a1 Graphs as data, files and the `graph` command
+
+- [x] Graphs as data in `optobench-analysis::graph` (no rendering, builds for wasm32):
+      line, dot and map graphs; axes with quantity, unit and scale (linear,
+      logarithmic), shown in a readable unit chosen from the range (nm, µm, mm, m; mrad,
+      degrees; a power of ten taken out of long numbers) with ticks at 1, 2 and 5 × 10ⁿ;
+      at least 1 nm (or a millionth of the values) across, so a perfect focus is drawn
+      and not a cloud of rounding
+- [x] Colours (`optobench-analysis::colour`), one job each: eight series hues in a fixed
+      order, never cycled (the reference data-visualisation palette, chosen for
+      colour-blind separation of neighbours; scatter graphs stay clear with three);
+      sequential one-hue blue for magnitude; diverging blue–grey–red for differences;
+      cyclic at constant OKLab lightness for phase; light (files) and dark (interface)
+      variants
+- [x] Graphs from existing results: PSF along the focus line, across the peak (x and y)
+      and an x–z section (`PsfSettings::section`); axial crossings by ray height; spot
+      diagrams (a series per source, to scale); detector irradiance maps
+- [x] Comparison: graphs on shared axes, each named (`combine`); a reference series
+      (closed form, published curve) drawn dashed in neutral ink; differences of
+      matching series (interpolated where the other has values) and of maps on the
+      same grid (diverging scale)
+- [x] `optobench-io::graph`: deterministic SVG (hairline grid, recessive axes, legend
+      from two series up, colour bar beside a map, `<title>` per series for hover), CSV
+      of every number in engine units, JSON that reads back bit for bit (`serde_json`
+      with exact float parsing)
+- [x] `graph` command: `of` a design's result, or `from` a saved graph; `compare`,
+      `difference`, `reference`; written to `svg`, `csv`, `json`
+- [x] Checks (commands `tests/graph.rs`, unit tests in `graph`, `colour` and
+      `optobench-io::graph`): a PSF profile against the Airy pattern within 0.5 % of the
+      peak; saved, read back and redrawn byte for byte; a graph minus itself is zero; a
+      collar set and not set compared on one graph and as a difference (peaks 0.11 mm
+      apart, as 0.33 mm × (1 − 1/n) says); maps and spot diagrams to scale; colour
+      scales monotonic in lightness (sequential), grey and balanced (diverging),
+      constant in lightness and closed (cyclic)
+
+### M10a2 More results, and graphs in the interface
+
+- [ ] Graphs of a Gaussian beam's radius along its path with the elements marked; sweeps
+      over a DOF; wavefront and OPD over the pupil; merit against iteration
+- [ ] In the interface: graphs in the results area on the dark surface, hover readout,
+      zoom and pan, a map cursor with its row and column profiles, linked cursors
+      across graphs sharing an axis
 
 ## M10b Fields and propagation
 

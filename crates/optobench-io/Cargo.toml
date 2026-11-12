@@ -12,6 +12,7 @@ publish = false
 layer = "L5"
 
 [dependencies]
+optobench-analysis.workspace = true
 optobench-materials.workspace = true
 serde_json.workspace = true
 optobench-scene.workspace = true

@@ -538,6 +538,29 @@ pub fn draw(painter: &Painter, rect: Rect, id: &str, enabled: bool) {
             c.line(&lower, ACTION, r.beam);
             c.line(&[pos2(32.0, 20.0), pos2(32.0, 44.0)], 2.0, r.guide);
         }
+        "graph" => {
+            // Axes, a hairline grid and a curve rising and settling.
+            for y in [18.0, 32.0, 46.0] {
+                c.line(&[pos2(10.0, y), pos2(58.0, y)], 1.5, r.guide);
+            }
+            c.line(
+                &[pos2(10.0, 8.0), pos2(10.0, 56.0), pos2(58.0, 56.0)],
+                2.4,
+                r.a3,
+            );
+            let curve: Vec<_> = (0..=32)
+                .map(|k| {
+                    let x = 12.0 + 44.0 * k as f32 / 32.0;
+                    let t = (x - 12.0) / 44.0;
+                    pos2(
+                        x,
+                        52.0 - 36.0 * (1.0 - (-4.0 * t).exp())
+                            - 6.0 * (9.0 * t).sin() * (-3.0 * t).exp(),
+                    )
+                })
+                .collect();
+            c.line(&curve, ACTION, r.beam);
+        }
         "psf" => {
             // The focal intensity: a central peak and its first rings (sinc²).
             let profile: Vec<_> = (0..=48)
@@ -784,6 +807,7 @@ pub const ALL: &[&str] = &[
     "focus",
     "gaussian",
     "psf",
+    "graph",
     "sweep",
     "check-moves",
     "bodies",

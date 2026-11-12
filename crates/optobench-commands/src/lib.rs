@@ -17,6 +17,7 @@
 
 mod edit;
 mod embed;
+mod graph;
 mod materials;
 mod moves;
 mod optimize;
@@ -244,6 +245,14 @@ const STANDARD: &[Command] = &[
         effect: Effect::Read,
         summary: "a Gaussian source's beam radius, curvature and waist at every element and detector, and an objective's pupil fill",
         handler: trace::gaussian,
+    },
+    Command {
+        id: "graph",
+        label: "Graph",
+        icon: "graph",
+        effect: Effect::Write,
+        summary: "a result as a graph (PSF profiles and section, focus, spot diagram, irradiance), compared with saved results or a reference; written as SVG, CSV and JSON",
+        handler: graph::graph,
     },
     Command {
         id: "psf",

@@ -5,6 +5,15 @@ with the release that introduced them.
 
 ## Unreleased
 
+- M10a1 graphs: any result as a graph, built as data in the engine
+  (`optobench_analysis::graph`, colours in `optobench_analysis::colour`) and written by
+  the new command `graph` as SVG, CSV and JSON: PSF along the focus line, across the peak
+  and as an x–z section, axial crossings by ray height, spot diagrams and irradiance
+  maps. Graphs compare with saved graphs on shared axes, with a reference curve, or as
+  a difference. Units are chosen for reading (nm, µm, mm; powers of ten taken out),
+  colours have one job each (series, magnitude, difference, phase) and keep neighbours
+  apart for colour-blind readers. Saved JSON now reads back bit for bit (`serde_json`
+  exact float parsing).
 - Roadmap: new milestone M10 Field propagation and graphs, before the sample. Fields are
   propagated between chosen planes where diffraction matters (apertures, pinholes, fibre
   coupling): rays are turned into a sampled field, propagated, and turned back into rays.

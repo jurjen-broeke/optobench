@@ -2111,6 +2111,7 @@ dependencies = [
 name = "optobench-io"
 version = "0.0.1"
 dependencies = [
+ "optobench-analysis",
  "optobench-library",
  "optobench-materials",
  "optobench-math",

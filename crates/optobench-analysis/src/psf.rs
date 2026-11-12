@@ -69,6 +69,9 @@ pub struct PsfSettings {
     pub lateral: Option<f64>,
     /// Points in the axial scan; by default eight per axial fringe.
     pub points: Option<usize>,
+    /// An x–z section through the peak, (columns, rows): across the lateral half-width
+    /// along the detector's x, and over the axial scan along the focus line.
+    pub section: Option<(usize, usize)>,
 }
 
 impl Default for PsfSettings {
@@ -79,12 +82,29 @@ impl Default for PsfSettings {
             axial: None,
             lateral: None,
             points: None,
+            section: None,
         }
     }
 }
 
 /// A sampled profile: (position, n |E|²) pairs.
 pub type Profile = Vec<(f64, f64)>;
+
+/// An x–z section of the PSF: n |E|² on cells, row by row from the start of the axial
+/// scan, each from −x to +x.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Section {
+    /// Cells across, along the detector's x.
+    pub columns: usize,
+    /// Cells along the focus line.
+    pub rows: usize,
+    /// x range, edge to edge (mm, offset from the focus line).
+    pub x: (f64, f64),
+    /// z range, edge to edge (mm, as the detector's z).
+    pub z: (f64, f64),
+    /// n |E|² (W/mm²).
+    pub values: Vec<f64>,
+}
 
 /// The PSF near a detector, in the detector's frame (+z its axis, z = 0 its plane).
 #[derive(Debug, Clone, PartialEq)]
@@ -119,6 +139,8 @@ pub struct Psf {
     /// The axial crossings of the rays with the focus line: least and greatest z (mm),
     /// the geometric span of the focus.
     pub crossings: (f64, f64),
+    /// The x–z section, if asked for.
+    pub section: Option<Section>,
 }
 
 /// A complex 3-vector.
@@ -626,6 +648,25 @@ pub fn psf(
             .collect()
     };
     let lateral = (profile(Vec3::X), profile(Vec3::Y));
+    let section = settings.section.map(|(columns, rows)| {
+        let (columns, rows) = (columns.max(2), rows.max(2));
+        let mut values = Vec::with_capacity(columns * rows);
+        for j in 0..rows {
+            let z = from + (to - from) * (j as f64 + 0.5) / rows as f64;
+            let base = on_line(z);
+            for i in 0..columns {
+                let x = -half_width + 2.0 * half_width * (i as f64 + 0.5) / columns as f64;
+                values.push(intensity(&waves, index, base + Vec3::X * x));
+            }
+        }
+        Section {
+            columns,
+            rows,
+            x: (-half_width, half_width),
+            z: (from, to),
+            values,
+        }
+    });
 
     // The same pupil field in phase.
     let in_phase = waves
@@ -653,5 +694,6 @@ pub fn psf(
         axial,
         lateral,
         crossings: (low, high),
+        section,
     })
 }

@@ -11,34 +11,55 @@ fn invalid(message: impl Into<String>) -> CommandError {
     CommandError::new(ErrorCode::InvalidParameters, message)
 }
 
-/// `psf`: parameters `path`, and optionally `source` (id; default the first collimated or
-/// Gaussian source), `detector` (id; default the first), `polarization` (`x`, `y`,
-/// `circular`, `radial`, `azimuthal`; default `x`, in the objective's frame), `samples`
-/// (rays across the beam, default 128), `axial` ([from, to] in mm from the detector
-/// plane), `lateral` (half-width of the lateral profiles, mm), `points` (in the axial
-/// scan), `dofs` and `data_directory`.
-pub(crate) fn psf(parameters: &Parameters) -> Result<Value, CommandError> {
-    check_keys(
-        parameters,
-        &[
-            "path",
-            "source",
-            "detector",
-            "polarization",
-            "samples",
-            "axial",
-            "lateral",
-            "points",
-            "dofs",
-            "data_directory",
-        ],
-    )?;
+/// The parameters the PSF takes, besides `path`, `dofs` and `data_directory`.
+pub(crate) const PSF_KEYS: &[&str] = &[
+    "source",
+    "detector",
+    "polarization",
+    "samples",
+    "axial",
+    "lateral",
+    "points",
+];
+
+/// The design at `path` with its DOFs as the parameters set them.
+pub(crate) fn moved_scene(
+    parameters: &Parameters,
+) -> Result<(optobench_scene::Scene, String), CommandError> {
     let path = text(parameters, "path")?.ok_or_else(|| invalid("missing parameter `path`"))?;
     let (scene, _, _, _) = load(path, parameters)?;
     let overrides = dof_values(parameters, &scene)?;
     let scene = scene
         .moved(&overrides)
         .map_err(|e| CommandError::new(ErrorCode::Failed, format!("{path}: {e}")))?;
+    Ok((scene, path.to_owned()))
+}
+
+/// The detector the parameters name (`detector`), or the first.
+pub(crate) fn detector_of(
+    parameters: &Parameters,
+    scene: &optobench_scene::Scene,
+    path: &str,
+) -> Result<usize, CommandError> {
+    match text(parameters, "detector")? {
+        Some(id) => scene
+            .detectors
+            .iter()
+            .position(|d| d.id == id)
+            .ok_or_else(|| invalid(format!("no detector `{id}`"))),
+        None if scene.detectors.is_empty() => {
+            Err(invalid(format!("{path}: the design has no detector")))
+        }
+        None => Ok(0),
+    }
+}
+
+/// The source, detector and settings of a PSF, from the parameters in [`PSF_KEYS`].
+pub(crate) fn request(
+    parameters: &Parameters,
+    scene: &optobench_scene::Scene,
+    path: &str,
+) -> Result<(usize, usize, PsfSettings), CommandError> {
     let source = match text(parameters, "source")? {
         Some(id) => scene
             .sources
@@ -61,17 +82,7 @@ pub(crate) fn psf(parameters: &Parameters) -> Result<Value, CommandError> {
                 ))
             })?,
     };
-    let detector = match text(parameters, "detector")? {
-        Some(id) => scene
-            .detectors
-            .iter()
-            .position(|d| d.id == id)
-            .ok_or_else(|| invalid(format!("no detector `{id}`")))?,
-        None if scene.detectors.is_empty() => {
-            return Err(invalid(format!("{path}: the design has no detector")));
-        }
-        None => 0,
-    };
+    let detector = detector_of(parameters, scene, path)?;
     let polarization = match text(parameters, "polarization")? {
         None | Some("x") => Polarization::X,
         Some("y") => Polarization::Y,
@@ -120,7 +131,23 @@ pub(crate) fn psf(parameters: &Parameters) -> Result<Value, CommandError> {
         axial,
         lateral,
         points: count("points", 3)?,
+        section: None,
     };
+    Ok((source, detector, settings))
+}
+
+/// `psf`: parameters `path`, and optionally `source` (id; default the first collimated or
+/// Gaussian source), `detector` (id; default the first), `polarization` (`x`, `y`,
+/// `circular`, `radial`, `azimuthal`; default `x`, in the objective's frame), `samples`
+/// (rays across the beam, default 128), `axial` ([from, to] in mm from the detector
+/// plane), `lateral` (half-width of the lateral profiles, mm), `points` (in the axial
+/// scan), `dofs` and `data_directory`.
+pub(crate) fn psf(parameters: &Parameters) -> Result<Value, CommandError> {
+    let mut keys = vec!["path", "dofs", "data_directory"];
+    keys.extend_from_slice(PSF_KEYS);
+    check_keys(parameters, &keys)?;
+    let (scene, path) = moved_scene(parameters)?;
+    let (source, detector, settings) = request(parameters, &scene, &path)?;
     let result = optobench_analysis::psf(&scene, source, detector, &settings)
         .map_err(|e| CommandError::new(ErrorCode::Failed, format!("{path}: {e}")))?;
     let pairs =
