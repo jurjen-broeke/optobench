@@ -349,6 +349,22 @@ pub struct Built {
     pub system: NonSequentialSystem,
     /// `owners[face.owner]` for every face.
     pub owners: Vec<Owner>,
+    /// The media of samples' layers: (element index, part, medium index), the part
+    /// `above`, `layer 1`, `layer 2`, … or `below`.
+    pub sample_media: Vec<(usize, String, usize)>,
+}
+
+/// What the direct light left in one part of a sample (W).
+#[derive(Debug, Clone, PartialEq)]
+pub struct LayerAccount {
+    /// The sample's id.
+    pub sample: String,
+    /// `above`, `layer 1`, …, `below`.
+    pub part: String,
+    /// Absorbed in its bulk.
+    pub absorbed: f64,
+    /// Scattered out of the direct beam (the diffuse light's source).
+    pub scattered: f64,
 }
 
 /// Points in the unit disk with the area each stands for, normalised to sum to 1: the
@@ -432,6 +448,7 @@ impl Scene {
         let air = 0;
         // The first face of each sample, for finding what is in front of an objective.
         let mut sample_tops: Vec<usize> = Vec::new();
+        let mut sample_media: Vec<(usize, String, usize)> = Vec::new();
 
         for (index, element) in self.elements.iter().enumerate() {
             let owner = owners.len();
@@ -618,6 +635,14 @@ impl Scene {
                         media.push(system.add_medium(m.clone()));
                     }
                     media.push(medium_or_air(below, &mut system));
+                    let parts = std::iter::once("above".to_owned())
+                        .chain((1..=layers.len()).map(|k| format!("layer {k}")))
+                        .chain(std::iter::once("below".to_owned()));
+                    for (part, &m) in parts.zip(&media) {
+                        if m != air {
+                            sample_media.push((index, part, m));
+                        }
+                    }
                     let mut z = 0.0;
                     for i in 0..=layers.len() {
                         if i == 0 {
@@ -808,7 +833,11 @@ impl Scene {
         let total: f64 = self.sources.iter().map(|s| s.power).sum();
         system.split_cutoff = self.split_cutoff.map(|fraction| fraction * total);
         system.build_index();
-        Ok(Built { system, owners })
+        Ok(Built {
+            system,
+            owners,
+            sample_media,
+        })
     }
 
     /// The rays a source launches, sharing its power: for each spectral line, every
@@ -976,12 +1005,32 @@ impl Scene {
             }
         }
         let footprints = self.footprints(&built, &records);
+        let layers = built
+            .sample_media
+            .iter()
+            .map(|(element, part, medium)| {
+                let (mut absorbed, mut scattered) = (0.0, 0.0);
+                for d in records.iter().flat_map(|r| &r.deposits) {
+                    if d.medium == *medium {
+                        absorbed += d.absorbed;
+                        scattered += d.scattered;
+                    }
+                }
+                LayerAccount {
+                    sample: self.elements[*element].id.clone(),
+                    part: part.clone(),
+                    absorbed,
+                    scattered,
+                }
+            })
+            .collect();
         Ok(SceneTrace {
             records,
             ledger,
             detectors,
             clipping,
             footprints,
+            layers,
         })
     }
 }
@@ -1271,6 +1320,8 @@ pub struct SceneTrace {
     pub clipping: Vec<Clipping>,
     /// Per optical element that light reached.
     pub footprints: Vec<Footprint>,
+    /// Per part of each sample: what the direct light left there.
+    pub layers: Vec<LayerAccount>,
 }
 
 #[cfg(test)]

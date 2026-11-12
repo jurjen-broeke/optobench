@@ -12,26 +12,37 @@ the diffusion approximation here; photon transport by Monte Carlo replaces it in
 
 ## M11a Sample media and the beam in them
 
-- [ ] Sample layers gain absorption µa(λ), scattering µs(λ) and anisotropy g (each a
-      number or a curve, with provenance); a layer of `water` takes its absorption from
-      the bundled data (Hale & Querry 1973) at the trace's wavelength
+### M11a1 Turbid layers and the direct beam
+
+- [x] Sample layers gain absorption µa (in place of the material's own), scattering µs
+      (1/mm) and anisotropy g, each a number or a table over wavelength, with `source`
+      required (`optobench_materials::Turbid`, `Spectrum`); every material can scatter
+      (`Material::scattering_coefficient`, `anisotropy`, zero by default); a layer of
+      `water` takes its absorption from the bundled Hale & Querry table
 - [x] Water's absorption verified: the bundled table equals Table I of Hale & Querry,
       Appl. Opt. 12, 555 (1973), in all 56 rows from 0.2 to 3.35 µm and at spot checks to
       200 µm (`bundled.rs` tests); marked verified in the asset manifest and ATTRIBUTION.md
 - [ ] Water's index against Daimon & Masumura 2007, once that paper is available (M2c's
       item stays open for it)
-- [ ] The ballistic beam: power along traced rays falls as exp(−(µa + µs) z) in each
-      layer; the power ledger gains, per layer, the power absorbed and the power scattered
-      out of the ballistic beam
+- [x] The direct beam: rays lose power at µa + µs, the loss shared in proportion; the
+      ledger gains `scattered` (handed to the diffuse light, not followed as rays) and
+      still closes; each ray records what it left in each medium (`Deposit`), and the
+      trace reports it per part of each sample (`above`, `layer 1`, …, `below`)
+- [x] Checks (commands `tests/sample.rs`): a two-layer turbid stack against Beer–Lambert
+      and its shares µa/µt and µs/µt, layer by layer, to 10⁻¹²; water at 920 nm against
+      µa from Table I; µs given as a spectrum, interpolated; layers without a source or
+      with values out of range refused
+
+### M11a2 Diffuse light
+
 - [ ] Scattered light in the diffusion approximation: the fluence rate from the
       scattered power as a source, per layer, with the layers' boundaries (refractive-index
       mismatch at each face); the absorbed power density µa × fluence rate, ballistic and
       diffuse
 - [ ] Graphs: power and fluence rate against depth, absorbed power density as an x–z
       map
-- [ ] Checks: Beer–Lambert along a ray to 10⁻¹²; power conserved per layer (in =
-      absorbed + scattered + out); the diffusion fluence of a point source in an infinite
-      medium, Φ = P exp(−µ_eff r) / (4π D r), µ_eff = √(3 µa (µa + µs′)), D = 1/(3(µa + µs′))
+- [ ] Checks: the diffusion fluence of a point source in an infinite medium,
+      Φ = P exp(−µ_eff r) / (4π D r), µ_eff = √(3 µa (µa + µs′)), D = 1/(3(µa + µs′))
       (A. J. Welch and M. J. C. van Gemert, Optical-Thermal Response of Laser-Irradiated
       Tissue, 2nd ed., 2011, ch. 6), and of a collimated beam on a half-space against the
       same book's closed forms
@@ -125,9 +136,13 @@ the diffusion approximation here; photon transport by Monte Carlo replaces it in
       - their simulation: the largest rise ~500 µm below the surface; a field 4× smaller
         heats 20.7 % more, 4× larger 23.6 % less
       The brain's optical and thermal properties are not in the paper: its model is
-      adapted from J. M. Stujenske, T. Spellman and J. A. Gordon, Cell Rep. 12, 525 (2015),
-      with constants "from published tables". That paper is needed first (corpus), for
-      µa, µs, g of brain at 920 nm, thermal properties, perfusion and metabolic heat. It
+      adapted from J. M. Stujenske, T. Spellman and J. A. Gordon, Cell Rep. 12, 525 (2015)
+      (local corpus), with constants "from published tables". Stujenske et al. give the
+      model (Monte Carlo light with Henyey–Greenstein scattering, brain n = 1.36; Pennes
+      bioheat with the light as source, ρc ∂T/∂t = ∇·(k∇T) + ρ_b c_b w_b (T_A − T) + q_m
+      + φ µa, baseline 37 °C, arterial blood 36.7 °C) but put their thermal and perfusion
+      values in Supplementary Table S1, and take µa, µs and g from J. D. Johansson,
+      J. Biomed. Opt. 15, 057005 (2010). Both are needed next (corpus). It
       models light by Monte Carlo transport; at the millimetre scale of this heating the
       diffusion approximation should do, so the check is our steady-state heating per
       100 mW at 250 µm against 1.86 ± 0.25 (within its stated error), the ratio of 500 to

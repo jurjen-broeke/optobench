@@ -5,6 +5,11 @@ with the release that introduced them.
 
 ## Unreleased
 
+- M11a1 turbid sample layers: a sample layer may give absorption µa, scattering µs and
+  anisotropy g (numbers or spectra, with their source); the direct beam loses power at
+  µa + µs, and the trace reports what it left in each part of each sample (absorbed,
+  scattered); the power ledger gains `scattered_w`. The bundled water absorption is
+  verified against Hale & Querry's Table I.
 - M10c rays to fields and back: new command `field` carries a beam as a field from the
   source (its exact field) or a detector (from the traced rays) to a target detector,
   through ideal lenses and mechanics (plates, tube bores), with fibre coupling at the

@@ -397,6 +397,12 @@ pub struct RayRecord {
     pub split_power: f64,
     /// Power absorbed in media and coatings (W).
     pub absorbed_power: f64,
+    /// Power scattered out of the ray by turbid media (W): no longer in the direct beam,
+    /// handed to the diffuse light (not followed as rays).
+    pub scattered_power: f64,
+    /// Per medium the ray crossed: the power absorbed and scattered in its bulk (coatings
+    /// not included), for accounts by layer.
+    pub deposits: Vec<Deposit>,
     /// For a detected ray: the hit in the detector face's local frame (x, y).
     pub detector_point: Option<(f64, f64)>,
     /// The face of each hit, in the order of `points[1..]` (an objective's face twice).
@@ -405,6 +411,17 @@ pub struct RayRecord {
     pub powers: Vec<f64>,
     /// 0 for a launched ray, 1 for a ray split off a launched ray, and so on.
     pub generation: usize,
+}
+
+/// What a ray left in one medium's bulk (W).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Deposit {
+    /// The medium (index into the system's media).
+    pub medium: usize,
+    /// Absorbed.
+    pub absorbed: f64,
+    /// Scattered out of the ray.
+    pub scattered: f64,
 }
 
 /// Power totals over many rays (W).
@@ -418,6 +435,8 @@ pub struct Ledger {
     pub clipped: f64,
     /// Absorbed in media.
     pub absorbed: f64,
+    /// Scattered out of the direct beam by turbid media (handed to the diffuse light).
+    pub scattered: f64,
     /// Reflected out of the path at uncoated faces.
     pub reflected: f64,
     /// Left the scene.
@@ -435,6 +454,7 @@ impl Ledger {
             - (self.detected
                 + self.clipped
                 + self.absorbed
+                + self.scattered
                 + self.reflected
                 + self.escaped
                 + self.stopped
@@ -447,6 +467,7 @@ impl Ledger {
             self.launched += record.launched.power;
         }
         self.absorbed += record.absorbed_power;
+        self.scattered += record.scattered_power;
         self.reflected += record.reflected_power;
         self.below_cutoff += record.below_cutoff_power;
         let remaining = record.ray.power;
@@ -498,7 +519,8 @@ impl NonSequentialSystem {
         self.media.len() - 1
     }
 
-    fn medium(&self, index: usize, wavelength: f64) -> Result<(f64, f64), End> {
+    /// The index, absorption coefficient and scattering coefficient of a medium (1/mm).
+    fn medium(&self, index: usize, wavelength: f64) -> Result<(f64, f64, f64), End> {
         let material = self.media[index].material();
         let fail = |error| End::MaterialUndefined {
             medium: index,
@@ -506,7 +528,8 @@ impl NonSequentialSystem {
         };
         let n = material.refractive_index(wavelength).map_err(fail)?;
         let alpha = material.absorption_coefficient(wavelength).map_err(fail)?;
-        Ok((n, alpha))
+        let scattering = material.scattering_coefficient(wavelength).map_err(fail)?;
+        Ok((n, alpha, scattering))
     }
 
     /// Builds the search index over the faces. Call it again after changing `faces`;
@@ -606,6 +629,8 @@ impl NonSequentialSystem {
             below_cutoff_power: 0.0,
             split_power: 0.0,
             absorbed_power: 0.0,
+            scattered_power: 0.0,
+            deposits: Vec::new(),
             detector_point: None,
             faces: Vec::new(),
             powers: Vec::new(),
@@ -614,7 +639,7 @@ impl NonSequentialSystem {
         let mut medium = branch.medium;
         let mut skip: Vec<usize> = branch.skip;
         for _ in 0..self.interaction_limit {
-            let (index_here, alpha) = match self.medium(medium, launched.wavelength) {
+            let (index_here, alpha, scattering) = match self.medium(medium, launched.wavelength) {
                 Ok(values) => values,
                 Err(end) => {
                     record.end = end;
@@ -639,9 +664,28 @@ impl NonSequentialSystem {
 
             // Propagate to the hit.
             ray.optical_path += index_here * hit.distance;
-            let kept = (-alpha * hit.distance).exp();
-            record.absorbed_power += ray.power * (1.0 - kept);
-            ray.power *= kept;
+            // Beer–Lambert with extinction µa + µs; the loss shared in proportion.
+            let extinction = alpha + scattering;
+            if extinction > 0.0 {
+                let kept = (-extinction * hit.distance).exp();
+                let lost = ray.power * (1.0 - kept);
+                let (absorbed, scattered) =
+                    (lost * alpha / extinction, lost * scattering / extinction);
+                record.absorbed_power += absorbed;
+                record.scattered_power += scattered;
+                match record.deposits.iter_mut().find(|d| d.medium == medium) {
+                    Some(d) => {
+                        d.absorbed += absorbed;
+                        d.scattered += scattered;
+                    }
+                    None => record.deposits.push(Deposit {
+                        medium,
+                        absorbed,
+                        scattered,
+                    }),
+                }
+                ray.power *= kept;
+            }
             ray.position = face.placement.apply_point(hit.point);
             record.points.push(ray.position);
             record.faces.push(face_index);
@@ -699,7 +743,7 @@ impl NonSequentialSystem {
                 } => {
                     let to_local = face.placement.inverse();
                     let exit_index = match self.medium(*exit_medium, launched.wavelength) {
-                        Ok((n, _)) => n,
+                        Ok((n, _, _)) => n,
                         Err(end) => {
                             record.end = end;
                             return record;
@@ -783,7 +827,7 @@ impl NonSequentialSystem {
                         self.medium(from, launched.wavelength),
                         self.medium(to, launched.wavelength),
                     ) {
-                        (Ok((n1, _)), Ok((n2, _))) => (n1, n2),
+                        (Ok((n1, _, _)), Ok((n2, _, _))) => (n1, n2),
                         (Err(end), _) | (_, Err(end)) => {
                             record.end = end;
                             return record;

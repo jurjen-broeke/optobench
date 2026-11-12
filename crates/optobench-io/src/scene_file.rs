@@ -72,6 +72,12 @@
 //! above = "water"                   # the immersion above the first face; default the
 //!                                   # surroundings (the objective's rays go on in it)
 //! layers = [ { thickness = 0.17, material = 1.5255 }, { thickness = 5.0, material = "water" } ]
+//!                                   # a turbid layer adds absorption µa (in place of the
+//!                                   # material's own), scattering µs (both 1/mm) and
+//!                                   # anisotropy g, each a number or [[wavelength_um, value], …],
+//!                                   # and says where they come from:
+//!                                   # { thickness = 1.0, material = 1.36, absorption = 0.02,
+//!                                   #   scattering = 20.0, anisotropy = 0.9, source = "…" }
 //! below = 1.0                       # optional; default the surroundings
 //!
 //! [[element]]
@@ -139,7 +145,7 @@ use optobench_library::{CoatingSpec, Library, Outline, Part};
 use optobench_scene::dof::{Dof, Motion, Target};
 
 use crate::coatings::CurveLookup;
-use optobench_materials::Medium;
+use optobench_materials::{Medium, Spectrum, Turbid};
 use optobench_math::{Frame, Vec3, radians_from_degrees};
 use optobench_scene::layout::{PlanarLayout, TableLayout};
 use optobench_scene::{
@@ -956,6 +962,59 @@ pub(crate) fn objective_kind(
     })
 }
 
+/// A layer's optical quantity: a number (1/mm, or none for g), or a table
+/// `[[wavelength_um, value], …]` in increasing wavelength; values not negative (g may be).
+fn spectrum(layer: &Item, key: &str) -> Result<Option<Spectrum>, FileError> {
+    let context = &layer.context;
+    let Some(value) = layer.table.get(key) else {
+        return Ok(None);
+    };
+    let signed = key == "anisotropy";
+    let check = |v: f64| -> Result<f64, FileError> {
+        if v.is_finite() && (signed || v >= 0.0) {
+            Ok(v)
+        } else {
+            Err(error(format!(
+                "{context}: `{key}` must be a finite number{}",
+                if signed { "" } else { ", not negative" }
+            )))
+        }
+    };
+    match value {
+        Value::Float(_) | Value::Integer(_) => {
+            Ok(Some(Spectrum::Constant(check(layer.number(key)?)?)))
+        }
+        Value::Array(rows) => {
+            let mut out = Vec::with_capacity(rows.len());
+            for row in rows {
+                let pair = row
+                    .as_array()
+                    .filter(|r| r.len() == 2)
+                    .and_then(|r| {
+                        let n =
+                            |v: &Value| v.as_float().or_else(|| v.as_integer().map(|i| i as f64));
+                        Some((n(&r[0])?, n(&r[1])?))
+                    })
+                    .ok_or_else(|| {
+                        error(format!(
+                            "{context}: `{key}` is a number or [[wavelength_um, value], …]"
+                        ))
+                    })?;
+                out.push((pair.0, check(pair.1)?));
+            }
+            if out.len() < 2 || out.windows(2).any(|w| w[1].0 <= w[0].0) {
+                return Err(error(format!(
+                    "{context}: `{key}` needs at least two rows in increasing wavelength"
+                )));
+            }
+            Ok(Some(Spectrum::Table(out)))
+        }
+        _ => Err(error(format!(
+            "{context}: `{key}` is a number or [[wavelength_um, value], …]"
+        ))),
+    }
+}
+
 /// A `sample` entry's layers (layouts and sidecars alike).
 pub(crate) fn sample_kind(item: &Item, lookup: &MaterialLookup) -> Result<ElementKind, FileError> {
     let layers = item
@@ -971,12 +1030,62 @@ pub(crate) fn sample_kind(item: &Item, lookup: &MaterialLookup) -> Result<Elemen
                 ))
             })?;
             let context = format!("{} layer", item.context);
-            check_keys(table, &["thickness", "material"], &context)?;
+            check_keys(
+                table,
+                &[
+                    "thickness",
+                    "material",
+                    "absorption",
+                    "scattering",
+                    "anisotropy",
+                    "source",
+                ],
+                &context,
+            )?;
             let layer = Item { table, context };
-            Ok((
-                layer.positive("thickness")?,
-                medium(layer.get("material")?, lookup, &layer.context)?,
-            ))
+            let base = medium(layer.get("material")?, lookup, &layer.context)?;
+            let optics = ["absorption", "scattering", "anisotropy"]
+                .iter()
+                .any(|k| table.contains_key(*k));
+            let medium = if optics {
+                let source = match table.get("source") {
+                    Some(Value::String(s)) => s.clone(),
+                    Some(_) => {
+                        return Err(error(format!("{}: `source` is text", layer.context)));
+                    }
+                    None => {
+                        return Err(error(format!(
+                            "{}: say where µa, µs and g come from (`source`)",
+                            layer.context
+                        )));
+                    }
+                };
+                let anisotropy = spectrum(&layer, "anisotropy")?.unwrap_or(Spectrum::Constant(0.0));
+                if let Spectrum::Constant(g) = anisotropy {
+                    if !(-1.0..=1.0).contains(&g) {
+                        return Err(error(format!(
+                            "{}: `anisotropy` lies from −1 to 1",
+                            layer.context
+                        )));
+                    }
+                }
+                Medium::from(Turbid {
+                    base,
+                    absorption: spectrum(&layer, "absorption")?,
+                    scattering: spectrum(&layer, "scattering")?.unwrap_or(Spectrum::Constant(0.0)),
+                    anisotropy,
+                    source,
+                })
+            } else {
+                if table.contains_key("source") {
+                    return Err(error(format!(
+                        "{}: `source` goes with `absorption`, `scattering` or `anisotropy`",
+                        layer.context
+                    )));
+                }
+                base
+            };
+            Ok((layer.positive("thickness")?, medium))
         })
         .collect::<Result<Vec<_>, FileError>>()?;
     let material = |key: &str| -> Result<Option<Medium>, FileError> {

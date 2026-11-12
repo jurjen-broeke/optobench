@@ -259,6 +259,7 @@ pub(crate) fn trace(parameters: &Parameters) -> Result<Value, CommandError> {
             "detected_w": ledger.detected,
             "clipped_w": ledger.clipped,
             "absorbed_w": ledger.absorbed,
+            "scattered_w": ledger.scattered,
             "reflected_w": ledger.reflected,
             "escaped_w": ledger.escaped,
             "stopped_w": ledger.stopped,
@@ -270,6 +271,12 @@ pub(crate) fn trace(parameters: &Parameters) -> Result<Value, CommandError> {
         "parts": crate::parts::matches_json(&parts),
         "dofs": dofs_json(&scene),
         "embedded": crate::embed::compare(&source, data.as_deref())?,
+        "layers": traced.layers.iter().map(|l| json!({
+            "sample": l.sample,
+            "part": l.part,
+            "absorbed_w": l.absorbed,
+            "scattered_w": l.scattered,
+        })).collect::<Vec<_>>(),
         "footprints": traced.footprints.iter().map(|f| json!({
             "id": f.id,
             "hits": f.hits,
