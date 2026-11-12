@@ -13,6 +13,8 @@ layer = "apps"
 
 [dependencies]
 optobench-commands.workspace = true
+optobench-analysis.workspace = true
+optobench-io.workspace = true
 serde_json.workspace = true
 egui.workspace = true
 eframe.workspace = true

@@ -6,7 +6,8 @@
 //! selection first; `OPTOBENCH_UI_VIEW` (top, front, right,
 //! iso), `OPTOBENCH_UI_PERSPECTIVE=1`, `OPTOBENCH_UI_ZOOM` (the view's height in sizes of
 //! the selected item, or of the scene, centred on it) and `OPTOBENCH_UI_SECTION` (x, y or
-//! z: a cut through its centre) set the view.
+//! z: a cut through its centre) set the view. `OPTOBENCH_UI_GRAPHS` (kinds of the `graph`
+//! command, comma-separated) draws those graphs in the results strip first.
 
 use std::io::Write;
 use std::path::Path;

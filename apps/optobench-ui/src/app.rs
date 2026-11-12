@@ -47,6 +47,9 @@ pub struct App {
     licence: Option<(PathBuf, String, Value)>,
     /// See `screenshot`.
     shot: Option<Shot>,
+    /// The graph cursor of the last frame (its x quantity and value), shown on graphs
+    /// whose x measures the same.
+    graph_cursor: Option<(optobench_analysis::graph::Unit, f64)>,
 }
 
 /// Where in the design file an item of the view is written: its table and the entry.
@@ -88,6 +91,8 @@ struct Shot {
     trace: bool,
     traced: bool,
     select: Option<String>,
+    /// Graphs to draw first (the `graph` command's `of`), the last drawn first.
+    graphs: Vec<String>,
     frames: u32,
     viewed: bool,
     requested: bool,
@@ -132,11 +137,20 @@ impl App {
                 trace: std::env::var_os("OPTOBENCH_UI_TRACE").is_some(),
                 traced: false,
                 select: std::env::var("OPTOBENCH_UI_SELECT").ok(),
+                graphs: std::env::var("OPTOBENCH_UI_GRAPHS")
+                    .map(|g| {
+                        g.split(',')
+                            .map(|k| k.trim().to_owned())
+                            .filter(|k| !k.is_empty())
+                            .collect()
+                    })
+                    .unwrap_or_default(),
                 frames: 0,
                 viewed: false,
                 requested: false,
                 done: Default::default(),
             }),
+            graph_cursor: None,
         };
         if let Some(path) = path {
             app.open(path);
@@ -244,7 +258,9 @@ impl App {
                 let writes = optobench_commands::Registry::standard()
                     .get(id)
                     .is_some_and(|c| c.effect == optobench_commands::Effect::Write);
-                if writes && id != "optimize" {
+                // The window's `optimize` writes only the move report and `graph` no
+                // file at all, so neither asks first.
+                if writes && id != "optimize" && id != "graph" {
                     self.confirm = Some(id);
                 } else {
                     self.run(id);
@@ -1298,10 +1314,67 @@ impl App {
         if let Some((error, text)) = &self.notice {
             ui.label(RichText::new(text).color(if *error { DARK.error } else { DARK.text }));
         }
-        let Some(doc) = &self.doc else {
+        if self.doc.is_none() {
             ui.label(RichText::new("Results appear here after a trace").color(DARK.text_dim));
             return;
-        };
+        }
+        ui.horizontal_top(|ui| {
+            self.graphs_panel(ui);
+            ui.separator();
+            self.result_columns(ui);
+        });
+    }
+
+    /// The graphs: which one the Graph button draws, and the last three drawn.
+    fn graphs_panel(&mut self, ui: &mut egui::Ui) {
+        let App {
+            doc, graph_cursor, ..
+        } = self;
+        let Some(doc) = doc else { return };
+        let mut hovered = None;
+        ui.vertical(|ui| {
+            ui.horizontal(|ui| {
+                ui.label(RichText::new("Graphs").strong());
+                let name = crate::graphs::KINDS
+                    .iter()
+                    .find(|(id, _)| *id == doc.graph_kind)
+                    .map_or("?", |(_, name)| name);
+                egui::ComboBox::new("graph kind", "drawn by Graph")
+                    .selected_text(name)
+                    .show_ui(ui, |ui| {
+                        for (id, name) in crate::graphs::KINDS {
+                            ui.selectable_value(&mut doc.graph_kind, id, *name);
+                        }
+                    });
+            });
+            if doc.graphs.is_empty() {
+                ui.label(
+                    RichText::new("Choose one and press Graph; scroll to zoom, drag to pan, double-click to fit")
+                        .color(DARK.text_dim),
+                );
+                return;
+            }
+            let height = ui.available_height().max(150.0);
+            ui.horizontal_top(|ui| {
+                for (graph, view) in &mut doc.graphs {
+                    if let Some(c) = crate::graphs::show(
+                        ui,
+                        graph,
+                        view,
+                        *graph_cursor,
+                        Vec2::new(380.0, height),
+                    ) {
+                        hovered = Some(c);
+                    }
+                }
+            });
+        });
+        *graph_cursor = hovered;
+    }
+
+    /// Messages, the power ledger, detectors, runs and the last command's output.
+    fn result_columns(&mut self, ui: &mut egui::Ui) {
+        let Some(doc) = &self.doc else { return };
         ui.horizontal_top(|ui| {
             ui.vertical(|ui| {
                 ui.set_width(340.0);
@@ -1483,7 +1556,7 @@ impl eframe::App for App {
             .show(ui, |ui| self.ribbon(ui));
         egui::Panel::bottom("results")
             .resizable(true)
-            .default_size(170.0)
+            .default_size(240.0)
             .frame(Frame::new().fill(DARK.panel).inner_margin(Margin::same(8)))
             .show(ui, |ui| self.results(ui));
         egui::Panel::left("browser")
@@ -1583,6 +1656,13 @@ impl App {
             shot.traced = true;
             let ctx2 = ctx.clone();
             doc.run("trace", json!({}), move || ctx2.request_repaint());
+            return;
+        }
+        // One graph at a time, so they arrive in order.
+        if !shot.graphs.is_empty() {
+            let of = shot.graphs.remove(0);
+            let ctx2 = ctx.clone();
+            doc.run("graph", json!({ "of": of }), move || ctx2.request_repaint());
             return;
         }
         if let Some(id) = shot.select.take() {
@@ -1761,6 +1841,60 @@ mod exit {
                 &json!({ "path": path.to_string_lossy(), "data_directory": data.to_string_lossy() }),
             )
             .expect("traces")
+    }
+
+    #[test]
+    fn graphs_are_drawn_in_the_window_and_read_out_under_the_pointer() {
+        // A dry NA 0.1 objective focusing onto a screen: the Graph button draws the
+        // chosen graph in the results strip, newest first; the pointer on a graph sets
+        // the cursor other graphs with the same x quantity show.
+        let dir = scratch("graphs");
+        let path = dir.join("focus.optobench");
+        std::fs::write(
+            &path,
+            "format = \"optobench/1\"\nkind = \"layout\"\nlayout = \"planar\"\n\n\
+             [[source]]\nid = \"beam\"\nkind = \"collimated\"\nwavelength_um = 0.55\npower_w = 1.0\ndiameter = 2.4\nrings = 6\nat = 0\n\n\
+             [[element]]\nid = \"OBJ\"\nkind = \"objective\"\nat = 50\nfocal_length = 10.0\nna = 0.1\npupil_distance = 30.0\nworking_distance = 5.0\n\n\
+             [[detector]]\nid = \"focus\"\nat = 85.0\nsize = [0.05, 0.05]\npixels = [40, 40]\n",
+        )
+        .expect("written");
+        let mut h = window(Some(path), &dir);
+        settle(&mut h);
+        click(&mut h, "Workspace");
+        click(&mut h, "Simulate");
+        click(&mut h, "Graph");
+        assert!(errors(&h).is_empty(), "{:?}", errors(&h));
+        let titles = |h: &Harness<'static, App>| -> Vec<String> {
+            h.state()
+                .doc
+                .as_ref()
+                .map(|d| d.graphs.iter().map(|(g, _)| g.title.clone()).collect())
+                .unwrap_or_default()
+        };
+        assert_eq!(titles(&h), ["Spot diagram on `focus`"]);
+        if let Some(doc) = h.state_mut().doc.as_mut() {
+            doc.graph_kind = "psf-lateral"; // chosen in the Graphs list
+        }
+        click(&mut h, "Graph");
+        assert_eq!(
+            titles(&h),
+            ["PSF across the peak", "Spot diagram on `focus`"]
+        );
+        // The newest graph is first, at the left of the results strip: the pointer on its
+        // plot reads a length along x.
+        let strip = h
+            .query_all_by_label("Graphs")
+            .next()
+            .expect("the Graphs heading")
+            .rect();
+        h.hover_at(egui::pos2(strip.left() + 200.0, strip.bottom() + 80.0));
+        h.step();
+        h.step();
+        let cursor = h.state().graph_cursor;
+        assert!(
+            matches!(cursor, Some((optobench_analysis::graph::Unit::Length, _))),
+            "{cursor:?}"
+        );
     }
 
     #[test]

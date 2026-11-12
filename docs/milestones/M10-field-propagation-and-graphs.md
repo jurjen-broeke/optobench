@@ -52,11 +52,22 @@ Graphs come first: the field work is inspected with them.
 
 ### M10a2 More results, and graphs in the interface
 
-- [ ] Graphs of a Gaussian beam's radius along its path with the elements marked; sweeps
-      over a DOF; wavefront and OPD over the pupil; merit against iteration
-- [ ] In the interface: graphs in the results area on the dark surface, hover readout,
-      zoom and pan, a map cursor with its row and column profiles, linked cursors
-      across graphs sharing an axis
+- [x] Graphs of a Gaussian beam's radius along its path (each free stretch from the
+      beam there by the q law, the planes marked); sweeps over a DOF (centroid, power,
+      RMS radius, pointing, or the chief ray at an element); the wavefront error at the
+      PSF peak over the beam; the optimiser's merit by accepted step
+- [x] In the interface: a Graph button (CAD, Layout and Simulate) drawing the kind chosen
+      in the results strip, the last three graphs there on the dark surface; readout of
+      the nearest point or the cell under the pointer; zoom about the pointer, pan,
+      double-click to fit; on maps, a crosshair with the row and column profiles through
+      the cell; a cursor linked across graphs whose x measures the same quantity;
+      `OPTOBENCH_UI_GRAPHS` draws graphs before a screenshot
+- [x] Checks (commands `tests/graph.rs`, the window test in `app.rs`): the Gaussian curve
+      against w(z) and the `gaussian` radius at the screen; a galvo sweep with no pupil
+      walk, landing at f (f₁/f₂) tan 2α; the merit falling at every step; the RMS
+      wavefront error against the Strehl ratio by Maréchal's exp(−(2πσ)²), to 0.005 at
+      σ = 0.045 waves; in the window, graphs drawn newest first and the pointer on a
+      plot setting the linked cursor
 
 ## M10b Fields and propagation
 

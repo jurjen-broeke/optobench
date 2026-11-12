@@ -5,6 +5,12 @@ with the release that introduced them.
 
 ## Unreleased
 
+- M10a2 more graphs, and graphs in the window: `graph` draws a Gaussian beam along its
+  path, sweeps over a DOF, the wavefront error at the PSF peak and the optimiser's
+  progress (`optimize` now returns its `history`). The window's Graph button (CAD,
+  Layout, Simulate) draws the kind chosen in the results strip, with readouts, zoom, pan,
+  map cursors with row and column profiles, and cursors linked across graphs. The
+  `graph` command's saved-graph parameter is `saved`.
 - M10a1 graphs: any result as a graph, built as data in the engine
   (`optobench_analysis::graph`, colours in `optobench_analysis::colour`) and written by
   the new command `graph` as SVG, CSV and JSON: PSF along the focus line, across the peak

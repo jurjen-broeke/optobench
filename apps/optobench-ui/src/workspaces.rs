@@ -287,7 +287,11 @@ pub const WORKSPACES: [Workspace; 3] = [
                     },
                     Section {
                         name: "INSPECT",
-                        items: &[button(command("bodies")), button(command("trace"))],
+                        items: &[
+                            button(command("bodies")),
+                            button(command("trace")),
+                            button(command("graph")),
+                        ],
                     },
                     VIEW_SECTION,
                 ],
@@ -329,6 +333,7 @@ pub const WORKSPACES: [Workspace; 3] = [
                         name: "TRACE",
                         items: &[
                             button(command("trace")),
+                            button(command("graph")),
                             button(command("optimize")),
                             button(Control::Action(Action::Apply)),
                         ],
@@ -374,6 +379,7 @@ pub const WORKSPACES: [Workspace; 3] = [
             ],
             primary: command("trace"),
             tools: &[
+                button(command("graph")),
                 button(command("optimize")),
                 button(Control::Action(Action::Apply)),
                 button(Control::Action(Action::Undo)),

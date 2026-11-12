@@ -2188,7 +2188,9 @@ dependencies = [
  "eframe",
  "egui",
  "egui_kittest",
+ "optobench-analysis",
  "optobench-commands",
+ "optobench-io",
  "serde_json",
 ]
 
