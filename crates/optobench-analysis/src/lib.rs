@@ -30,7 +30,7 @@ mod zernike;
 
 pub use focus::{Crossing, Focus, focus};
 pub use gaussian::{BeamAt, gaussian};
-pub use psf::{Polarization, Profile, Psf, PsfSettings, Section, psf};
+pub use psf::{Polarization, Profile, Psf, PsfSettings, PupilWavefront, Section, psf};
 pub use pupil::{Aiming, Analysis, AnalysisError, Field, ImageRay, Pupils};
 pub use spot::{FanPoint, RayFan, SpotDiagram};
 pub use wavefront::Wavefront;

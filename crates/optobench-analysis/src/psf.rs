@@ -106,6 +106,29 @@ pub struct Section {
     pub values: Vec<f64>,
 }
 
+/// The wavefront error of the light reaching the focus, over the source's beam: each
+/// ray's optical path to the PSF peak (as the plane wave it stands for), less the
+/// power-weighted mean, in waves. Referred to the peak, so tilt and the defocus to it are
+/// gone; what is left is aberration (spherical aberration behind a mismatched layer).
+#[derive(Debug, Clone, PartialEq)]
+pub struct PupilWavefront {
+    /// Cells across the beam (the source's grid), along its x.
+    pub columns: usize,
+    /// Cells along its y.
+    pub rows: usize,
+    /// x range at the source, edge to edge (mm).
+    pub x: (f64, f64),
+    /// y range at the source (mm).
+    pub y: (f64, f64),
+    /// Optical path difference (waves), row by row from −y, each from −x; NaN where no
+    /// ray reached the focus.
+    pub values: Vec<f64>,
+    /// Power-weighted RMS (waves).
+    pub rms: f64,
+    /// Greatest minus least (waves).
+    pub peak_to_valley: f64,
+}
+
 /// The PSF near a detector, in the detector's frame (+z its axis, z = 0 its plane).
 #[derive(Debug, Clone, PartialEq)]
 pub struct Psf {
@@ -141,6 +164,8 @@ pub struct Psf {
     pub crossings: (f64, f64),
     /// The x–z section, if asked for.
     pub section: Option<Section>,
+    /// The wavefront error over the beam, referred to the peak.
+    pub wavefront: PupilWavefront,
 }
 
 /// A complex 3-vector.
@@ -474,6 +499,7 @@ pub fn psf(
         .unwrap_or(0.0);
     let mut waves: Vec<Wave> = Vec::with_capacity(arrived.len());
     let mut directions: Vec<(Vec3, Vec3, f64)> = Vec::with_capacity(arrived.len()); // point, direction, power
+    let mut cells: Vec<(usize, usize)> = Vec::with_capacity(arrived.len());
     let mut index: Option<f64> = None;
     let mut power = 0.0;
     for (r, area) in arrived.iter().zip(&areas) {
@@ -551,6 +577,7 @@ pub fn psf(
             k: kv,
         });
         directions.push((point, direction, p_pupil));
+        cells.push(r.cell);
         power += p_pupil;
     }
     let index = index.ok_or("no ray reaches the detector")?;
@@ -668,6 +695,32 @@ pub fn psf(
         }
     });
 
+    // The wavefront error: each wave's optical path to the peak, less the mean.
+    let paths: Vec<f64> = waves
+        .iter()
+        .map(|w| (w.phase + w.k.dot(peak)) / k0)
+        .collect();
+    let weights: Vec<f64> = directions.iter().map(|d| d.2).collect();
+    let piston = paths.iter().zip(&weights).map(|(p, w)| p * w).sum::<f64>() / power;
+    let mut values = vec![f64::NAN; n * n];
+    let (mut least, mut greatest, mut square) = (f64::INFINITY, f64::NEG_INFINITY, 0.0);
+    for ((p, w), (i, j)) in paths.iter().zip(&weights).zip(&cells) {
+        let waves_off = (p - piston) / wavelength;
+        values[j * n + i] = waves_off;
+        least = least.min(waves_off);
+        greatest = greatest.max(waves_off);
+        square += w * waves_off * waves_off;
+    }
+    let wavefront = PupilWavefront {
+        columns: n,
+        rows: n,
+        x: (-half, half),
+        y: (-half, half),
+        values,
+        rms: (square / power).sqrt(),
+        peak_to_valley: greatest - least,
+    };
+
     // The same pupil field in phase.
     let in_phase = waves
         .iter()
@@ -695,5 +748,6 @@ pub fn psf(
         lateral,
         crossings: (low, high),
         section,
+        wavefront,
     })
 }

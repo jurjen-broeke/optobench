@@ -10,7 +10,7 @@
 
 use optobench_analysis::colour::{self, ColourScale, Rgb, Surface};
 use optobench_analysis::graph::{
-    Axis, Display, Graph, Map, Mark, Plot, Scale, Series, Unit, tick_label, ticks,
+    Axis, Display, Graph, Map, Mark, Marker, Plot, Scale, Series, Unit, tick_label, ticks,
 };
 use serde_json::{Value, json};
 
@@ -45,22 +45,33 @@ struct Drawn {
 }
 
 impl Drawn {
-    fn new(axis: &Axis, range: (f64, f64), wanted: usize) -> Self {
+    /// `whole`: the data are whole numbers (steps, counts), so ticks are too.
+    fn new(axis: &Axis, range: (f64, f64), wanted: usize, whole: bool) -> Self {
         if axis.scale == Scale::Logarithmic {
             let low = range.0.max(f64::MIN_POSITIVE).log10().floor();
             let high = range.1.max(f64::MIN_POSITIVE).log10().ceil().max(low + 1.0);
+            // At most about `wanted` decades labelled.
+            let every = ((high - low) / wanted.max(1) as f64).ceil().max(1.0) as i32;
             return Self {
                 display: axis.display(range.0, range.1),
                 low,
                 high,
-                ticks: (low as i32..=high as i32).map(f64::from).collect(),
+                ticks: (low as i32..=high as i32)
+                    .filter(|e| (e - low as i32) % every == 0)
+                    .map(f64::from)
+                    .collect(),
                 step: 1.0,
                 log: true,
             };
         }
         let display = axis.display(range.0, range.1);
         let (low, high) = (display.shown(range.0), display.shown(range.1));
-        let found = ticks(low, high, wanted);
+        let mut found = ticks(low, high, wanted);
+        if whole && found.len() > 1 && found[1] - found[0] < 1.0 {
+            found = ((low.ceil() as i64)..=(high.floor() as i64))
+                .map(|k| k as f64)
+                .collect();
+        }
         let step = if found.len() > 1 {
             found[1] - found[0]
         } else {
@@ -147,8 +158,17 @@ pub fn svg(graph: &Graph) -> String {
     let right = RIGHT + if map.is_some() { BAR } else { 0.0 };
     let mut plot_width = WIDTH - LEFT - right;
     let mut plot_height = PLOT_HEIGHT;
-    let x = Drawn::new(&graph.x, xr, 7);
-    let y = Drawn::new(&graph.y, yr, 6);
+    let whole = |pick: fn(&(f64, f64)) -> f64| match &graph.plot {
+        Plot::Series(list) => list
+            .iter()
+            .flat_map(|s| s.points.iter())
+            .map(pick)
+            .filter(|v| v.is_finite())
+            .all(|v| v.fract() == 0.0),
+        Plot::Map(_) => false,
+    };
+    let x = Drawn::new(&graph.x, xr, 7, whole(|p| p.0));
+    let y = Drawn::new(&graph.y, yr, 6, whole(|p| p.1));
     if graph.equal_aspect && !x.log && !y.log {
         // The same engine length per pixel on both axes.
         let span_x = (xr.1 - xr.0).abs();
@@ -251,6 +271,28 @@ pub fn svg(graph: &Graph) -> String {
             number(gy + 4.0),
             hex(ink.muted),
             escape(&y.label(t))
+        ));
+    }
+    // Markers: hairlines across the plot, labelled at the top, alternating rows so
+    // neighbours do not collide.
+    for (k, m) in graph.markers.iter().enumerate() {
+        let Some(mx) = px(m.at) else { continue };
+        if !(LEFT..=LEFT + plot_width).contains(&mx) {
+            continue;
+        }
+        out.push_str(&format!(
+            "<line x1='{0}' y1='{1}' x2='{0}' y2='{2}' stroke='{3}' stroke-width='1'/>\n",
+            number(mx),
+            number(top),
+            number(bottom),
+            hex(ink.axis)
+        ));
+        out.push_str(&format!(
+            "<text x='{}' y='{}' font-size='10.5' fill='{}'>{}</text>\n",
+            number(mx + 3.0),
+            number(top + 12.0 + 12.0 * (k % 2) as f64),
+            hex(ink.muted),
+            escape(&m.label)
         ));
     }
     out.push_str(&format!(
@@ -418,7 +460,7 @@ fn colour_bar(m: &Map, left: f64, top: f64, height: f64) -> String {
         ));
     }
     out.push_str("</g>\n");
-    let axis = Drawn::new(&m.value, (low, high), 5);
+    let axis = Drawn::new(&m.value, (low, high), 5, false);
     for &t in &axis.ticks {
         let f = (t - axis.low) / (axis.high - axis.low);
         let ty = top + (1.0 - f) * height;
@@ -517,6 +559,7 @@ pub fn to_json(graph: &Graph) -> Value {
         "y": axis_json(&graph.y),
         "equal_aspect": graph.equal_aspect,
         "notes": graph.notes,
+        "markers": graph.markers.iter().map(|m| json!({ "at": m.at, "label": m.label })).collect::<Vec<_>>(),
     });
     match &graph.plot {
         Plot::Series(list) => {
@@ -645,6 +688,19 @@ pub fn from_json(v: &Value) -> Result<Graph, String> {
         y: read_axis(v, "y")?,
         plot,
         equal_aspect: v["equal_aspect"].as_bool().unwrap_or(false),
+        markers: v["markers"]
+            .as_array()
+            .map(|list| {
+                list.iter()
+                    .filter_map(|m| {
+                        Some(Marker {
+                            at: m["at"].as_f64()?,
+                            label: m["label"].as_str()?.to_owned(),
+                        })
+                    })
+                    .collect()
+            })
+            .unwrap_or_default(),
         notes,
     })
 }
@@ -665,6 +721,7 @@ mod tests {
                 reference: false,
             }]),
             equal_aspect: false,
+            markers: Vec::new(),
             notes: vec!["peak 1e7 W/mm²".into()],
         }
         .with_reference("Airy, \"closed form\"", vec![(-0.001, 0.0), (0.001, 0.0)])
@@ -672,7 +729,11 @@ mod tests {
 
     #[test]
     fn json_reads_back_exactly() {
-        let g = sample();
+        let mut g = sample();
+        g.markers.push(Marker {
+            at: 0.0005,
+            label: "L1".into(),
+        });
         assert_eq!(from_json(&to_json(&g)).expect("reads"), g);
         let map = Graph {
             title: "m".into(),
@@ -688,6 +749,7 @@ mod tests {
                 colours: ColourScale::Sequential,
             }),
             equal_aspect: true,
+            markers: Vec::new(),
             notes: Vec::new(),
         };
         assert_eq!(from_json(&to_json(&map)).expect("reads"), map);

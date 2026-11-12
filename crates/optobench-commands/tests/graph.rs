@@ -108,7 +108,7 @@ fn a_psf_profile_is_drawn_against_the_airy_pattern_and_reads_back() {
         })
         .collect();
     let compared = run(json!({
-        "from": saved.to_string_lossy(),
+        "saved": saved.to_string_lossy(),
         "reference": { "label": "Airy pattern", "points": airy },
         "svg": out("psf-lateral-against-airy.svg"),
     }));
@@ -133,7 +133,7 @@ fn a_psf_profile_is_drawn_against_the_airy_pattern_and_reads_back() {
     }
     // Saved, read back and drawn again: the same graph and the same SVG.
     let again =
-        run(json!({ "from": saved.to_string_lossy(), "svg": out("psf-lateral-again.svg") }));
+        run(json!({ "saved": saved.to_string_lossy(), "svg": out("psf-lateral-again.svg") }));
     assert_eq!(again["graph"], first["graph"]);
     assert_eq!(
         std::fs::read_to_string(&svg).expect("svg"),
@@ -141,7 +141,7 @@ fn a_psf_profile_is_drawn_against_the_airy_pattern_and_reads_back() {
     );
     // A graph minus itself is zero everywhere.
     let zero =
-        run(json!({ "from": saved.to_string_lossy(), "difference": saved.to_string_lossy() }));
+        run(json!({ "saved": saved.to_string_lossy(), "difference": saved.to_string_lossy() }));
     for s in series(&zero) {
         for p in s["points"].as_array().expect("points") {
             assert_eq!(p[1].as_f64(), Some(0.0));
@@ -244,7 +244,7 @@ fn unknown_kinds_and_mixed_sources_are_refused() {
     let path = layout("refuse", "", "");
     for parameters in [
         json!({ "path": path.to_string_lossy(), "of": "histogram" }),
-        json!({ "path": path.to_string_lossy(), "of": "spot", "from": "x.json" }),
+        json!({ "path": path.to_string_lossy(), "of": "spot", "saved": "x.json" }),
         json!({ "path": path.to_string_lossy() }),
     ] {
         let error = Registry::standard()
@@ -258,4 +258,218 @@ fn unknown_kinds_and_mixed_sources_are_refused() {
         );
     }
     assert!(Path::new(&path).exists());
+}
+
+fn write(label: &str, text: &str) -> PathBuf {
+    let path = scratch(label).join(format!("{label}.optobench"));
+    std::fs::write(&path, text).expect("written");
+    path
+}
+
+fn points(series: &Value) -> Vec<(f64, f64)> {
+    series["points"]
+        .as_array()
+        .expect("points")
+        .iter()
+        .map(|p| {
+            (
+                p[0].as_f64().unwrap_or(f64::NAN),
+                p[1].as_f64().unwrap_or(f64::NAN),
+            )
+        })
+        .collect()
+}
+
+#[test]
+fn a_gaussian_beam_is_drawn_along_its_path_through_a_lens() {
+    // λ = 0.633 µm, w₀ = 0.5 mm at the source, a 100 mm ideal lens 50 mm on, a screen at
+    // 300 mm: before the lens w(z) = w₀ √(1 + (z / z_R)²), z_R = π w₀² / λ (Siegman,
+    // Lasers, §17.1); after it, the curve ends on the radius the `gaussian` command gives
+    // at the screen. Both planes are marked at their distance along the path.
+    let path = write(
+        "beam",
+        "format = \"optobench/1\"\nkind = \"layout\"\nlayout = \"planar\"\n\n\
+         [[source]]\nid = \"laser\"\nkind = \"gaussian\"\nwavelength_um = 0.633\npower_w = 0.01\nwaist_diameter = 1.0\nat = 0\n\n\
+         [[element]]\nid = \"L\"\nkind = \"ideal_lens\"\nat = 50\nfocal_length = 100\n\n\
+         [[detector]]\nid = \"screen\"\nat = 300\nsize = [5, 5]\npixels = [10, 10]\n",
+    );
+    let graph = run(
+        json!({ "path": path.to_string_lossy(), "of": "gaussian", "svg": out("gaussian.svg") }),
+    );
+    let list = series(&graph);
+    assert_eq!(list.len(), 1, "a round beam: one curve");
+    let curve = points(&list[0]);
+    let (w0, lambda) = (0.5, 0.633e-3);
+    let rayleigh = core::f64::consts::PI * w0 * w0 / lambda;
+    for &(z, w) in curve.iter().filter(|p| p.0 <= 50.0) {
+        let expected = w0 * (1.0 + (z / rayleigh).powi(2)).sqrt();
+        assert!((w - expected).abs() < 1e-9, "z = {z}: {w} vs {expected}");
+    }
+    let planes = Registry::standard()
+        .run("gaussian", &json!({ "path": path.to_string_lossy() }))
+        .expect("gaussian");
+    let at_screen = planes["planes"][1]["radius_mm"][0]
+        .as_f64()
+        .expect("radius");
+    let last = curve
+        .iter()
+        .rev()
+        .find(|p| p.0.is_finite())
+        .expect("a point");
+    assert!(
+        (last.0 - 300.0).abs() < 1e-9 && (last.1 - at_screen).abs() < 1e-9,
+        "{last:?} vs {at_screen}"
+    );
+    let markers = graph["graph"]["markers"].as_array().expect("markers");
+    let at: Vec<(f64, &str)> = markers
+        .iter()
+        .map(|m| {
+            (
+                m["at"].as_f64().expect("at"),
+                m["label"].as_str().expect("label"),
+            )
+        })
+        .collect();
+    assert_eq!(at, [(50.0, "L"), (300.0, "screen")]);
+}
+
+#[test]
+fn a_galvo_sweep_is_drawn_as_the_hand_calculation_says() {
+    // The 4f galvo relay of commands `tests/scan.rs` (f₁ = 50, f₂ = 200 mm) into an
+    // objective (f = 9 mm): swept ±2°, the chief ray does not walk at the objective's
+    // pupil, and lands on the image at f · (f₁ / f₂) · tan 2α from the axis.
+    let (f1, f2, f) = (50.0, 200.0, 9.0);
+    let (galvo, scan) = (50.0, 50.0 + f1);
+    let (tube, pupil) = (scan + f1 + f2, scan + f1 + f2 + f2);
+    let path = write(
+        "galvo",
+        &format!(
+            "format = \"optobench/1\"\nkind = \"layout\"\nlayout = \"planar\"\n\n\
+             [[source]]\nid = \"beam\"\nkind = \"collimated\"\nwavelength_um = 0.55\npower_w = 1.0\ndiameter = 1.0\nrings = 4\nat = 0\n\n\
+             [[element]]\nid = \"G\"\nkind = \"mirror\"\nat = {galvo}\nfold = 90\ndiameter = 10\nclear_aperture = 9\n\
+             dof = [ {{ name = \"scan\", kind = \"tilt\", axis = [0, 0, 1], frame = \"scene\", range = [-10, 10] }} ]\n\n\
+             [[element]]\nid = \"SL\"\nkind = \"ideal_lens\"\nat = {scan}\nfocal_length = {f1}\n\n\
+             [[element]]\nid = \"TL\"\nkind = \"ideal_lens\"\nat = {tube}\nfocal_length = {f2}\ndiameter = 50\n\n\
+             [[element]]\nid = \"OBJ\"\nkind = \"objective\"\nat = {pupil}\nfocal_length = {f}\nna = 0.3\n\
+             pupil_distance = 30.0\nworking_distance = 5.0\n\n\
+             [[detector]]\nid = \"image\"\nat = {}\nsize = [10, 10]\npixels = [100, 100]\n",
+            pupil + 35.0
+        ),
+    );
+    let sweep = |element: &str, name: &str| {
+        run(json!({
+            "path": path.to_string_lossy(), "of": "sweep", "dof": "scan", "from": -2, "to": 2, "steps": 9,
+            "quantity": "chief", "element": element, "svg": out(name),
+        }))
+    };
+    let walk = sweep("OBJ", "sweep-pupil.svg");
+    assert_eq!(walk["graph"]["x"]["unit"], "angle");
+    for s in series(&walk) {
+        for (_, p) in points(s) {
+            assert!(p.abs() < 1e-9, "pupil walk {p}");
+        }
+    }
+    let image = sweep("image", "sweep-image.svg");
+    let moving: Vec<(f64, f64)> = series(&image)
+        .iter()
+        .map(points)
+        .max_by(|a, b| {
+            let span = |s: &Vec<(f64, f64)>| s.iter().map(|p| p.1.abs()).fold(0.0, f64::max);
+            span(a).total_cmp(&span(b))
+        })
+        .expect("a series");
+    assert_eq!(moving.len(), 9);
+    for (alpha, position) in moving {
+        let expected = f * (f1 / f2) * (2.0 * alpha).tan();
+        assert!(
+            (position.abs() - expected.abs()).abs() < 1e-9,
+            "α = {alpha}: {position} vs {expected}"
+        );
+    }
+}
+
+#[test]
+fn the_optimiser_s_progress_is_drawn_step_by_step() {
+    // The refocusing case of commands `tests/optimize.rs`: a screen 5 mm past the
+    // perfect focus of a hyperboloid (60 mm past its vertex), moved back by the optimiser.
+    let path = write(
+        "refocus",
+        "format = \"optobench/1\"\nkind = \"layout\"\nlayout = \"planar\"\n\n\
+         [[source]]\nid = \"beam\"\nkind = \"collimated\"\nwavelength_um = 0.55\npower_w = 1.0\ndiameter = 10.0\nrings = 4\nat = 0\n\n\
+         [[element]]\nid = \"L1\"\nkind = \"lens\"\nat = 20\n\
+         surfaces = [{ radius = \"inf\" }, { radius = -30, conic = -2.25 }]\nthickness = [6]\nmaterial = [1.5]\n\
+         diameter = 25.4\nclear_aperture = 22.9\ncoating = \"ideal\"\n\n\
+         [[detector]]\nid = \"screen\"\nat = 86\nsize = [4, 4]\npixels = [20, 20]\n\
+         dof = [{ name = \"screen_z\", kind = \"slide\", axis = \"z\", range = [-10, 10], value = 5 }]\n\n\
+         [[merit]]\nkind = \"focus\"\ndetector = \"screen\"\n",
+    );
+    let graph = run(
+        json!({ "path": path.to_string_lossy(), "of": "optimize", "svg": out("optimize.svg") }),
+    );
+    let history = points(&series(&graph)[0]);
+    assert!(history.len() >= 2, "{history:?}");
+    for pair in history.windows(2) {
+        assert!(
+            pair[1].1 < pair[0].1,
+            "the merit falls at every accepted step: {history:?}"
+        );
+    }
+    assert!(history[history.len() - 1].1 < 1e-6 * history[0].1);
+}
+
+#[test]
+fn the_wavefront_error_at_a_mismatched_focus_agrees_with_its_strehl_ratio() {
+    // A dry NA 0.4 objective focusing 0.2 mm into water: a little spherical aberration. For
+    // small aberrations the Strehl ratio is about exp(−(2π σ)²), σ the RMS wavefront
+    // error in waves referred to the best focus (Maréchal; Born and Wolf, §9.3). A
+    // matched focus has no wavefront error.
+    let matched = layout("flat", "", "");
+    let flat =
+        run(json!({ "path": matched.to_string_lossy(), "of": "psf-wavefront", "samples": 64 }));
+    assert_eq!(flat["graph"]["map"]["colours"], "diverging");
+    let values: Vec<f64> = flat["graph"]["map"]["values"]
+        .as_array()
+        .expect("values")
+        .iter()
+        .filter_map(Value::as_f64)
+        .collect();
+    assert!(values.len() > 1000);
+    assert!(values.iter().all(|v| v.abs() < 1e-6), "a perfect focus");
+
+    let path = write(
+        "water",
+        "format = \"optobench/1\"\nkind = \"layout\"\nlayout = \"planar\"\n\n\
+         [[source]]\nid = \"beam\"\nkind = \"collimated\"\nwavelength_um = 0.55\npower_w = 1.0\ndiameter = 8.2\nrings = 4\nat = 0\n\n\
+         [[element]]\nid = \"OBJ\"\nkind = \"objective\"\nat = 50\nfocal_length = 10.0\nna = 0.4\npupil_distance = 30.0\nworking_distance = 5.0\n\n\
+         [[element]]\nid = \"W\"\nkind = \"sample\"\nat = 84.8\nlayers = [ { thickness = 5.0, material = 1.333 } ]\n\n\
+         [[detector]]\nid = \"focus\"\nat = 85.0\nsize = [1, 1]\npixels = [10, 10]\n",
+    );
+    let report = run(json!({
+        "path": path.to_string_lossy(), "of": "psf-wavefront", "samples": 128,
+        "svg": out("psf-wavefront.svg"),
+    }));
+    let notes: Vec<&str> = report["graph"]["notes"]
+        .as_array()
+        .expect("notes")
+        .iter()
+        .filter_map(Value::as_str)
+        .collect();
+    let number_after = |text: &str, key: &str| -> f64 {
+        let rest = &text[text.find(key).expect(key) + key.len()..];
+        rest.split_whitespace()
+            .next()
+            .and_then(|w| w.trim_end_matches(',').parse().ok())
+            .expect("number")
+    };
+    let sigma = number_after(notes[0], "RMS ");
+    let strehl = number_after(notes[1], "Strehl ratio ");
+    let marechal = (-(2.0 * core::f64::consts::PI * sigma).powi(2)).exp();
+    assert!(
+        sigma > 0.02 && sigma < 0.1,
+        "a small aberration: σ = {sigma}"
+    );
+    assert!(
+        (strehl - marechal).abs() < 0.005,
+        "Strehl {strehl}, Maréchal {marechal} (σ = {sigma})"
+    );
 }

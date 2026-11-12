@@ -24,10 +24,249 @@ const KINDS: &[&str] = &[
     "psf-axial",
     "psf-lateral",
     "psf-section",
+    "psf-wavefront",
     "focus",
     "spot",
     "irradiance",
+    "gaussian",
+    "sweep",
+    "optimize",
 ];
+
+/// The parameters of `of = "sweep"` and `of = "optimize"`, passed on to those commands.
+const SWEEP_KEYS: &[&str] = &[
+    "dof", "values", "from", "to", "steps", "quantity", "element",
+];
+const OPTIMIZE_KEYS: &[&str] = &["merit", "max_iterations"];
+
+/// `parameters` restricted to `keys`.
+fn subset(parameters: &Parameters, keys: &[&str]) -> Parameters {
+    parameters
+        .iter()
+        .filter(|(k, _)| keys.contains(&k.as_str()))
+        .map(|(k, v)| (k.clone(), v.clone()))
+        .collect()
+}
+
+/// A sweep's results as a graph: `quantity` (`centroid`, `power`, `rms`, `pointing` of
+/// each detector's direct light, or `chief`: where each source's chief ray crosses
+/// `element`) against the DOF's value.
+fn sweep_graph(
+    result: &Value,
+    quantity: &str,
+    detector: Option<&str>,
+    element: Option<&str>,
+) -> Result<Graph, CommandError> {
+    use optobench_analysis::graph::{Axis, Mark, Plot, Series, Unit};
+    let angle = result["unit"] == "deg";
+    let name = result["dof"].as_str().unwrap_or("value");
+    let steps = result["steps"].as_array().cloned().unwrap_or_default();
+    let x_of = |step: &Value| {
+        let v = step["value"].as_f64().unwrap_or(f64::NAN);
+        if angle { v.to_radians() } else { v }
+    };
+    // Series by label, in order of appearance.
+    let mut series: Vec<(String, Vec<(f64, f64)>)> = Vec::new();
+    let mut add = |label: String, x: f64, y: f64| match series.iter_mut().find(|(l, _)| *l == label)
+    {
+        Some((_, points)) => points.push((x, y)),
+        None => series.push((label, vec![(x, y)])),
+    };
+    let (y_axis, title) = match quantity {
+        "centroid" | "power" | "rms" | "pointing" => {
+            let ids: Vec<String> = steps
+                .first()
+                .and_then(|s| s["detectors"].as_array())
+                .map(|d| {
+                    d.iter()
+                        .filter_map(|d| d["id"].as_str().map(str::to_owned))
+                        .collect()
+                })
+                .unwrap_or_default();
+            let chosen: Vec<&String> = ids
+                .iter()
+                .filter(|id| detector.is_none_or(|d| d == id.as_str()))
+                .collect();
+            if chosen.is_empty() {
+                return Err(invalid(format!(
+                    "no detector {}in the sweep",
+                    detector.map(|d| format!("`{d}` ")).unwrap_or_default()
+                )));
+            }
+            let prefix = |id: &str, part: &str| {
+                if chosen.len() > 1 {
+                    if part.is_empty() {
+                        id.to_owned()
+                    } else {
+                        format!("{id}: {part}")
+                    }
+                } else if part.is_empty() {
+                    id.to_owned()
+                } else {
+                    part.to_owned()
+                }
+            };
+            for step in &steps {
+                let x = x_of(step);
+                for d in step["detectors"].as_array().into_iter().flatten() {
+                    let id = d["id"].as_str().unwrap_or("?");
+                    if !chosen.iter().any(|c| c.as_str() == id) {
+                        continue;
+                    }
+                    let pair = |key: &str, scale: f64| {
+                        (
+                            d[key][0].as_f64().unwrap_or(f64::NAN) * scale,
+                            d[key][1].as_f64().unwrap_or(f64::NAN) * scale,
+                        )
+                    };
+                    match quantity {
+                        "centroid" => {
+                            let (a, b) = pair("direct_centroid_mm", 1.0);
+                            add(prefix(id, "x"), x, a);
+                            add(prefix(id, "y"), x, b);
+                        }
+                        "pointing" => {
+                            let (a, b) = pair("direct_mean_slope_mrad", 1e-3);
+                            add(prefix(id, "x"), x, a);
+                            add(prefix(id, "y"), x, b);
+                        }
+                        "power" => add(
+                            prefix(id, ""),
+                            x,
+                            d["direct_power_w"].as_f64().unwrap_or(f64::NAN),
+                        ),
+                        _ => add(
+                            prefix(id, ""),
+                            x,
+                            d["direct_rms_radius_mm"].as_f64().unwrap_or(f64::NAN),
+                        ),
+                    }
+                }
+            }
+            match quantity {
+                "centroid" => (
+                    Axis::new("centroid", Unit::Length),
+                    "Centroid of the direct light",
+                ),
+                "pointing" => (
+                    Axis::new("mean slope", Unit::Angle),
+                    "Pointing of the direct light",
+                ),
+                "power" => (
+                    Axis::new("direct power", Unit::Power),
+                    "Power of the direct light",
+                ),
+                _ => (
+                    Axis::new("RMS radius", Unit::Length),
+                    "RMS radius of the direct light",
+                ),
+            }
+        }
+        "chief" => {
+            let element = element.ok_or_else(|| {
+                invalid("`quantity` = `chief` needs `element` (an element or detector id)")
+            })?;
+            for step in &steps {
+                let x = x_of(step);
+                for chief in step["chief"].as_array().into_iter().flatten() {
+                    let source = chief["source"].as_str().unwrap_or("?");
+                    let at = chief["hits"]
+                        .as_array()
+                        .and_then(|h| h.iter().find(|h| h["element"] == element))
+                        .map(|h| &h["position_mm"])
+                        .or_else(|| {
+                            (chief["landed"]["detector"] == element)
+                                .then(|| &chief["landed"]["position_mm"])
+                        });
+                    if let Some(p) = at {
+                        let (a, b) = (
+                            p[0].as_f64().unwrap_or(f64::NAN),
+                            p[1].as_f64().unwrap_or(f64::NAN),
+                        );
+                        add(format!("{source}: x"), x, a);
+                        add(format!("{source}: y"), x, b);
+                    }
+                }
+            }
+            if series.is_empty() {
+                return Err(failed(format!("no chief ray reaches `{element}`")));
+            }
+            (
+                Axis::new(format!("chief ray at `{element}`"), Unit::Length),
+                "Chief ray position",
+            )
+        }
+        other => {
+            return Err(invalid(format!(
+                "`quantity` `{other}` is not known; use centroid, power, rms, pointing or chief"
+            )));
+        }
+    };
+    Ok(Graph {
+        title: format!("{title} over `{name}`"),
+        x: Axis::new(name, if angle { Unit::Angle } else { Unit::Length }),
+        y: y_axis,
+        plot: Plot::Series(
+            series
+                .into_iter()
+                .map(|(label, points)| Series {
+                    label,
+                    points,
+                    mark: Mark::Line,
+                    reference: false,
+                })
+                .collect(),
+        ),
+        equal_aspect: false,
+        markers: Vec::new(),
+        notes: vec![format!("{} values", steps.len())],
+    })
+}
+
+/// The optimiser's merit (sum of squared weighted residuals) by accepted step.
+fn optimize_graph(result: &Value) -> Graph {
+    use optobench_analysis::graph::{Axis, Mark, Plot, Scale, Series, Unit};
+    let history: Vec<f64> = result["history"]
+        .as_array()
+        .map(|h| h.iter().filter_map(Value::as_f64).collect())
+        .unwrap_or_default();
+    let positive = history.iter().all(|c| *c > 0.0);
+    Graph {
+        title: "Optimiser progress".into(),
+        x: Axis::new("accepted step", Unit::Number),
+        y: Axis {
+            label: "merit".into(),
+            unit: Unit::Number,
+            scale: if positive {
+                Scale::Logarithmic
+            } else {
+                Scale::Linear
+            },
+        },
+        plot: Plot::Series(vec![Series {
+            label: "merit".into(),
+            points: history
+                .iter()
+                .enumerate()
+                .map(|(i, c)| (i as f64, *c))
+                .collect(),
+            mark: Mark::Line,
+            reference: false,
+        }]),
+        equal_aspect: false,
+        markers: Vec::new(),
+        notes: vec![format!(
+            "{} after {} iterations and {} traces",
+            if result["converged"] == true {
+                "converged"
+            } else {
+                "stopped"
+            },
+            result["iterations"],
+            result["traces"]
+        )],
+    }
+}
 
 /// A graph saved as JSON (by this command's `json`).
 fn read_saved(path: &str) -> Result<Graph, CommandError> {
@@ -44,10 +283,29 @@ fn read_saved(path: &str) -> Result<Graph, CommandError> {
 
 /// The graph of a design's result.
 fn of_design(parameters: &Parameters, kind: &str) -> Result<Graph, CommandError> {
+    let base = ["path", "dofs", "data_directory"];
+    if kind == "sweep" {
+        let mut keys = base.to_vec();
+        keys.extend_from_slice(&SWEEP_KEYS[..5]);
+        let result = crate::sweep::sweep(&subset(parameters, &keys))?;
+        let quantity = text(parameters, "quantity")?.unwrap_or("centroid");
+        return sweep_graph(
+            &result,
+            quantity,
+            text(parameters, "detector")?,
+            text(parameters, "element")?,
+        );
+    }
+    if kind == "optimize" {
+        let mut keys = base.to_vec();
+        keys.extend_from_slice(OPTIMIZE_KEYS);
+        let result = crate::optimize::optimize(&subset(parameters, &keys))?;
+        return Ok(optimize_graph(&result));
+    }
     let (scene, path) = moved_scene(parameters)?;
     let fail = |e: String| failed(format!("{path}: {e}"));
     match kind {
-        "psf-axial" | "psf-lateral" | "psf-section" => {
+        "psf-axial" | "psf-lateral" | "psf-section" | "psf-wavefront" => {
             let (source, detector, mut settings) = request(parameters, &scene, &path)?;
             if kind == "psf-section" {
                 settings.section = Some(match parameters.get("section") {
@@ -64,6 +322,7 @@ fn of_design(parameters: &Parameters, kind: &str) -> Result<Graph, CommandError>
             Ok(match kind {
                 "psf-axial" => graphs::psf_axial(&psf),
                 "psf-lateral" => graphs::psf_lateral(&psf),
+                "psf-wavefront" => graphs::psf_wavefront(&psf),
                 _ => graphs::psf_section(&psf).ok_or_else(|| fail("no section".into()))?,
             })
         }
@@ -81,6 +340,29 @@ fn of_design(parameters: &Parameters, kind: &str) -> Result<Graph, CommandError>
                     .ok_or_else(|| fail(format!("no detector `{id}`"))),
             }
         }
+        "gaussian" => {
+            let source = match text(parameters, "source")? {
+                Some(id) => scene
+                    .sources
+                    .iter()
+                    .position(|s| s.id == id)
+                    .ok_or_else(|| invalid(format!("no source `{id}`")))?,
+                None => scene
+                    .sources
+                    .iter()
+                    .position(|s| matches!(s.kind, optobench_scene::SourceKind::Gaussian { .. }))
+                    .ok_or_else(|| invalid(format!("{path}: the design has no Gaussian source")))?,
+            };
+            let src = &scene.sources[source];
+            let optobench_scene::SourceKind::Gaussian { m_squared, .. } = src.kind else {
+                return Err(invalid(format!(
+                    "source `{}` is not a Gaussian beam",
+                    src.id
+                )));
+            };
+            let beams = optobench_analysis::gaussian(&scene, source).map_err(fail)?;
+            Ok(graphs::gaussian_path(&beams, src.wavelength, m_squared))
+        }
         other => Err(invalid(format!(
             "`of` = `{other}` is not known; use one of {}",
             KINDS.join(", ")
@@ -94,11 +376,20 @@ fn file_name(path: &str) -> String {
         .map_or_else(|| path.to_owned(), |s| s.to_string_lossy().into_owned())
 }
 
-/// `graph`: a result as a graph. Either `path` (a design) and `of` (`psf-axial`,
-/// `psf-lateral`, `psf-section`, `focus`, `spot`, `irradiance`) with that analysis's
-/// parameters (`detector`, `dofs`, `data_directory`, and for the PSF `source`,
-/// `polarization`, `samples`, `axial`, `lateral`, `points`, `section`), or `from`, a
-/// graph saved earlier as JSON. Optionally compared: `compare` (saved graphs drawn on the
+/// `graph`: a result as a graph. Either `path` (a design) and `of` with that analysis's
+/// parameters, or `saved`, a graph saved earlier as JSON. `of` is one of:
+///
+/// - `psf-axial`, `psf-lateral`, `psf-section`, `psf-wavefront`: the PSF (`source`,
+///   `detector`, `polarization`, `samples`, `axial`, `lateral`, `points`; `section` as
+///   [columns, rows]);
+/// - `focus`, `spot`, `irradiance`: the trace at `detector`;
+/// - `gaussian`: a Gaussian `source` along its path;
+/// - `sweep`: the `sweep` command's `dof`, `values` or `from`, `to`, `steps`, with
+///   `quantity` (`centroid`, `power`, `rms`, `pointing` at `detector`, or `chief` at
+///   `element`);
+/// - `optimize`: the optimiser's merit by step (`merit`, `max_iterations`).
+///
+/// Every kind takes `dofs` and `data_directory`. Optionally compared: `compare` (saved graphs drawn on the
 /// same axes; strings, or `{ "path", "name" }`), `difference` (a saved graph subtracted
 /// from this one), `reference` (`{ "label", "points": [[x, y], …] }` in mm, W, W/mm²,
 /// radians), `name` (this graph's name in a comparison; default `this`). Written to
@@ -107,7 +398,7 @@ pub(crate) fn graph(parameters: &Parameters) -> Result<Value, CommandError> {
     let mut keys = vec![
         "path",
         "of",
-        "from",
+        "saved",
         "dofs",
         "data_directory",
         "section",
@@ -120,12 +411,14 @@ pub(crate) fn graph(parameters: &Parameters) -> Result<Value, CommandError> {
         "json",
     ];
     keys.extend_from_slice(PSF_KEYS);
+    keys.extend_from_slice(SWEEP_KEYS);
+    keys.extend_from_slice(OPTIMIZE_KEYS);
     check_keys(parameters, &keys)?;
-    let mut graph = match (text(parameters, "from")?, text(parameters, "of")?) {
+    let mut graph = match (text(parameters, "saved")?, text(parameters, "of")?) {
         (Some(from), None) => {
             if parameters.contains_key("path") {
                 return Err(invalid(
-                    "give `from` (a saved graph) or `path` and `of`, not both",
+                    "give `saved` (a saved graph) or `path` and `of`, not both",
                 ));
             }
             read_saved(from)?
@@ -133,12 +426,12 @@ pub(crate) fn graph(parameters: &Parameters) -> Result<Value, CommandError> {
         (None, Some(kind)) => of_design(parameters, kind)?,
         (Some(_), Some(_)) => {
             return Err(invalid(
-                "give `from` (a saved graph) or `path` and `of`, not both",
+                "give `saved` (a saved graph) or `path` and `of`, not both",
             ));
         }
         (None, None) => {
             return Err(invalid(format!(
-                "missing `of` ({}) with `path`, or `from`",
+                "missing `of` ({}) with `path`, or `saved`",
                 KINDS.join(", ")
             )));
         }

@@ -35,6 +35,11 @@ pub struct BeamAt {
     pub index: f64,
     /// For an objective: w / (f · NA), the fill of its pupil (mean over x and y).
     pub fill: Option<f64>,
+    /// Path length along the chief ray from the source to the plane (mm).
+    pub distance: f64,
+    /// Length of the last straight stretch before the plane, in the medium the beam
+    /// arrives through (mm): where the beam is free space before it.
+    pub free: f64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -60,11 +65,20 @@ struct Arrival {
     point: Vec3,
     direction: Vec3,
     index: f64,
+    distance: f64,
+    free: f64,
 }
 
 /// The arrival at the `occurrence`-th hit on `face` (the departure of an objective not
 /// counted), or at the detector the ray ended on.
 fn arrival(record: &RayRecord, face: Option<(usize, usize)>, built: &Built) -> Option<Arrival> {
+    // Path length to point k + 1, and the last stretch before it.
+    let along = |k: usize| -> (f64, f64) {
+        let total = (0..=k)
+            .map(|m| (record.points[m + 1] - record.points[m]).length())
+            .sum();
+        (total, (record.points[k + 1] - record.points[k]).length())
+    };
     let index_of = |k: usize| {
         let length = (record.points[k + 1] - record.points[k]).length();
         if length > 0.0 {
@@ -84,10 +98,13 @@ fn arrival(record: &RayRecord, face: Option<(usize, usize)>, built: &Built) -> O
                     continue;
                 }
                 if seen == occurrence {
+                    let (distance, free) = along(k);
                     return Some(Arrival {
                         point: record.points[k + 1],
                         direction: (record.points[k + 1] - record.points[k]).normalized()?,
                         index: index_of(k),
+                        distance,
+                        free,
                     });
                 }
                 seen += 1;
@@ -99,10 +116,13 @@ fn arrival(record: &RayRecord, face: Option<(usize, usize)>, built: &Built) -> O
                 return None;
             };
             let k = record.points.len().checked_sub(2)?;
+            let (distance, free) = along(k);
             Some(Arrival {
                 point: record.ray.position,
                 direction: record.ray.direction,
                 index: index_of(k),
+                distance,
+                free,
             })
         }
     }
@@ -280,6 +300,8 @@ pub fn gaussian(scene: &Scene, source: usize) -> Result<Vec<BeamAt>, String> {
             to_waist: (to_waist[0], to_waist[1]),
             index: n,
             fill,
+            distance: at[0].distance,
+            free: at[0].free,
         });
     }
     Ok(out)

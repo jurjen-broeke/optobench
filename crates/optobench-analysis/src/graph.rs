@@ -27,6 +27,8 @@ pub enum Unit {
     Power,
     /// Irradiance or n |E|² (W/mm²).
     Irradiance,
+    /// Optical path in waves.
+    Wave,
     /// A plain number (a ratio, a count, a Strehl ratio).
     Number,
 }
@@ -40,6 +42,7 @@ impl Unit {
             Unit::Phase => "phase",
             Unit::Power => "power",
             Unit::Irradiance => "irradiance",
+            Unit::Wave => "wave",
             Unit::Number => "number",
         }
     }
@@ -52,6 +55,7 @@ impl Unit {
             Unit::Phase,
             Unit::Power,
             Unit::Irradiance,
+            Unit::Wave,
             Unit::Number,
         ]
         .into_iter()
@@ -65,6 +69,7 @@ impl Unit {
             Unit::Angle | Unit::Phase => "rad",
             Unit::Power => "W",
             Unit::Irradiance => "W/mm²",
+            Unit::Wave => "waves",
             Unit::Number => "",
         }
     }
@@ -172,7 +177,8 @@ impl Axis {
                 }
             }
             Unit::Angle => {
-                if size < 0.05 {
+                // Under a degree in mrad (pointing), else degrees (scan angles).
+                if size < core::f64::consts::PI / 180.0 {
                     ("mrad", 1e3)
                 } else {
                     ("°", 180.0 / core::f64::consts::PI)
@@ -181,11 +187,15 @@ impl Axis {
             Unit::Phase => ("rad", 1.0),
             Unit::Power => ("W", 1.0),
             Unit::Irradiance => ("W/mm²", 1.0),
+            Unit::Wave => ("waves", 1.0),
             Unit::Number => ("", 1.0),
         };
         let shown = size * factor;
         let exponent = if self.scale == Scale::Logarithmic
-            || matches!(self.unit, Unit::Length | Unit::Angle | Unit::Phase)
+            || matches!(
+                self.unit,
+                Unit::Length | Unit::Angle | Unit::Phase | Unit::Wave
+            )
             || shown == 0.0
             || !shown.is_finite()
             || (1e-2..1e4).contains(&shown)
@@ -320,6 +330,15 @@ pub enum Plot {
     Map(Map),
 }
 
+/// A named place along x, drawn as a hairline across the plot.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Marker {
+    /// Where (engine units).
+    pub at: f64,
+    /// What is there.
+    pub label: String,
+}
+
 /// A graph.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Graph {
@@ -333,6 +352,8 @@ pub struct Graph {
     pub plot: Plot,
     /// One unit on x as long as one on y (spot diagrams, maps of a plane).
     pub equal_aspect: bool,
+    /// Places along x worth naming (the elements along a beam's path).
+    pub markers: Vec<Marker>,
     /// Lines of text shown with it (key numbers).
     pub notes: Vec<String>,
 }
@@ -581,6 +602,7 @@ pub fn psf_axial(psf: &Psf) -> Graph {
             reference: false,
         }]),
         equal_aspect: false,
+        markers: Vec::new(),
         notes: psf_notes(psf),
     }
 }
@@ -602,6 +624,7 @@ pub fn psf_lateral(psf: &Psf) -> Graph {
             series("along y", &psf.lateral.1),
         ]),
         equal_aspect: false,
+        markers: Vec::new(),
         notes: psf_notes(psf),
     }
 }
@@ -623,8 +646,112 @@ pub fn psf_section(psf: &Psf) -> Option<Graph> {
             colours: ColourScale::Sequential,
         }),
         equal_aspect: false,
+        markers: Vec::new(),
         notes: psf_notes(psf),
     })
+}
+
+/// The wavefront error over the beam, referred to the PSF peak.
+pub fn psf_wavefront(psf: &Psf) -> Graph {
+    let w = &psf.wavefront;
+    Graph {
+        title: "Wavefront error at the focus, over the beam".into(),
+        x: Axis::new("beam x at the source", Unit::Length),
+        y: Axis::new("beam y at the source", Unit::Length),
+        plot: Plot::Map(Map {
+            columns: w.columns,
+            rows: w.rows,
+            x: w.x,
+            y: w.y,
+            values: w.values.clone(),
+            value: Axis::new("OPD", Unit::Wave),
+            colours: ColourScale::Diverging,
+        }),
+        equal_aspect: true,
+        markers: Vec::new(),
+        notes: vec![
+            format!(
+                "RMS {:.4} waves, peak to valley {:.4} waves",
+                w.rms, w.peak_to_valley
+            ),
+            format!("Strehl ratio {:.4}", psf.strehl),
+        ],
+    }
+}
+
+/// A Gaussian beam's 1/e² radius along its chief ray, element by element: the free
+/// stretch before each plane drawn from the beam there, w(z) = w₀ √(1 + (z / z_R)²) with
+/// z_R = π n w₀² / (M² λ) (Siegman, Lasers, §17.1 and §17.6), and the planes marked.
+/// `wavelength` in µm. Inside elements (between their faces) nothing is drawn.
+pub fn gaussian_path(beams: &[crate::BeamAt], wavelength: f64, m_squared: f64) -> Graph {
+    let lambda = wavelength * 1e-3;
+    let stretch = |b: &crate::BeamAt, axis: usize| -> Vec<(f64, f64)> {
+        let (w0, to_waist) = if axis == 0 {
+            (b.waist.0, b.to_waist.0)
+        } else {
+            (b.waist.1, b.to_waist.1)
+        };
+        let rayleigh = core::f64::consts::PI * b.index * w0 * w0 / (m_squared * lambda);
+        let steps = 400;
+        let mut points: Vec<(f64, f64)> = (0..=steps)
+            .map(|k| {
+                let s = -b.free + b.free * k as f64 / steps as f64;
+                // Distance past the waist at s: the waist is `to_waist` beyond the plane.
+                let z = s - to_waist;
+                let w = if rayleigh > 0.0 {
+                    w0 * (1.0 + (z / rayleigh).powi(2)).sqrt()
+                } else {
+                    f64::NAN
+                };
+                (b.distance + s, w)
+            })
+            .collect();
+        points.push((f64::NAN, f64::NAN)); // a break before the next stretch
+        points
+    };
+    let round = beams.iter().all(|b| {
+        let close = |p: (f64, f64)| (p.0 - p.1).abs() <= 1e-9 * p.0.abs().max(p.1.abs());
+        close(b.waist) && close(b.to_waist)
+    });
+    let series = |label: &str, axis: usize| Series {
+        label: label.into(),
+        points: beams.iter().flat_map(|b| stretch(b, axis)).collect(),
+        mark: Mark::Line,
+        reference: false,
+    };
+    let plot = if round {
+        vec![series("1/e² radius", 0)]
+    } else {
+        vec![series("1/e² radius, x", 0), series("1/e² radius, y", 1)]
+    };
+    let notes = beams
+        .iter()
+        .filter_map(|b| {
+            b.fill.map(|f| {
+                format!(
+                    "`{}`: pupil fill {:.3} (w / (f · NA)), w = {:.4} mm",
+                    b.id,
+                    f,
+                    0.5 * (b.radius.0 + b.radius.1)
+                )
+            })
+        })
+        .collect();
+    Graph {
+        title: "Gaussian beam along its path".into(),
+        x: Axis::new("distance along the chief ray", Unit::Length),
+        y: Axis::new("radius", Unit::Length),
+        plot: Plot::Series(plot),
+        equal_aspect: false,
+        markers: beams
+            .iter()
+            .map(|b| Marker {
+                at: b.distance,
+                label: b.id.clone(),
+            })
+            .collect(),
+        notes,
+    }
 }
 
 /// Where rays cross the axis near a detector, against their launch height.
@@ -646,6 +773,7 @@ pub fn focus_crossings(focus: &Focus) -> Graph {
             reference: false,
         }]),
         equal_aspect: false,
+        markers: Vec::new(),
         notes: vec![
             format!("paraxial focus {:.6} mm", focus.paraxial),
             format!("marginal focus {:.6} mm", focus.marginal),
@@ -710,6 +838,7 @@ pub fn spot(scene: &Scene, trace: &SceneTrace, detector: usize) -> Option<Graph>
         y: Axis::new("y", Unit::Length),
         plot: Plot::Series(series),
         equal_aspect: true,
+        markers: Vec::new(),
         notes: vec![
             format!("{} rays, {:.6} W", result.rays, result.power),
             format!("RMS radius {:.4} µm", result.direct_rms_radius * 1e3),
@@ -738,6 +867,7 @@ pub fn irradiance(scene: &Scene, trace: &SceneTrace, detector: usize) -> Option<
             colours: ColourScale::Sequential,
         }),
         equal_aspect: true,
+        markers: Vec::new(),
         notes: vec![format!("{:.6} W on {} rays", result.power, result.rays)],
     })
 }
@@ -762,6 +892,7 @@ mod tests {
             y: Axis::new("I", Unit::Irradiance),
             plot: Plot::Series(series),
             equal_aspect: false,
+            markers: Vec::new(),
             notes: Vec::new(),
         }
     }
@@ -834,6 +965,7 @@ mod tests {
                 colours: ColourScale::Sequential,
             }),
             equal_aspect: true,
+            markers: Vec::new(),
             notes: Vec::new(),
         };
         let d = difference(
