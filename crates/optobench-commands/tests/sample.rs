@@ -172,3 +172,101 @@ fn turbid_layers_say_where_their_values_come_from_and_stay_in_range() {
         assert!(error.contains(words), "{label}: {error}");
     }
 }
+
+fn run(command: &str, parameters: Value) -> Value {
+    let mut parameters = parameters;
+    parameters["data_directory"] = json!(scratch("empty").to_string_lossy());
+    Registry::standard()
+        .run(command, &parameters)
+        .unwrap_or_else(|e| panic!("{}", e.message))
+}
+
+#[test]
+fn the_light_in_a_turbid_slab_is_accounted_for_direct_and_diffuse() {
+    // A 0.5 mm beam at 800 nm into 3 mm of a brain-like medium (n = 1.36, µa 0.02, µs 10
+    // /mm, g 0.9: µs′ = 1 /mm) between media of the same index. On the grid: the power
+    // scattered out of the direct beam and absorbed from it equal the trace's own accounts
+    // of the layer (both integrate Beer–Lambert exactly), and the diffuse light it feeds is
+    // all absorbed or leaves through the grid's faces.
+    let path = layout(
+        "slab",
+        0.8,
+        "1.36",
+        "{ thickness = 3.0, material = 1.36, absorption = 0.02, scattering = 10.0, anisotropy = 0.9, source = \"test values\" }",
+        3.0,
+    );
+    let text = std::fs::read_to_string(&path).expect("layout");
+    std::fs::write(
+        &path,
+        text.replace("diameter = 2.0\nrings = 4", "diameter = 0.5\nrings = 12"),
+    )
+    .expect("narrower beam");
+    let report = trace(&path).expect("traces");
+    let layer = part(&report, "layer 1");
+    let light = run(
+        "fluence",
+        json!({ "path": path.to_string_lossy(), "radius": 6.0, "rings": 60, "slices": 60 }),
+    );
+    let close = |a: f64, b: f64| (a - b).abs() <= 1e-9 * b.abs().max(1e-12);
+    assert!(
+        close(number(&light["scattered_w"]), number(&layer["scattered_w"])),
+        "{light}"
+    );
+    assert!(
+        close(
+            number(&light["direct_absorbed_w"]),
+            number(&layer["absorbed_w"])
+        ),
+        "{light}"
+    );
+    let diffuse = &light["diffuse"];
+    let out = number(&diffuse["absorbed_w"])
+        + number(&diffuse["top_w"])
+        + number(&diffuse["bottom_w"])
+        + number(&diffuse["side_w"]);
+    assert!(close(out, number(&light["scattered_w"])), "{diffuse}");
+    // Most of the scattered light comes back out of a slab only 3 transport lengths thick
+    // with so little absorption, through its faces.
+    assert!(
+        number(&diffuse["top_w"]) + number(&diffuse["bottom_w"]) > number(&diffuse["absorbed_w"])
+    );
+    // The layer's account by part sums the direct absorption.
+    let parts = light["layers"].as_array().expect("layers");
+    assert!(close(
+        number(&parts[0]["direct_absorbed_w"]),
+        number(&light["direct_absorbed_w"])
+    ));
+    // And as graphs.
+    for of in ["fluence-depth", "absorption"] {
+        let graph = run(
+            "graph",
+            json!({ "path": path.to_string_lossy(), "of": of, "radius": 6.0, "rings": 60, "slices": 60 }),
+        );
+        assert!(
+            graph["graph"]["title"]
+                .as_str()
+                .is_some_and(|t| t.contains("`S`")),
+            "{graph}"
+        );
+    }
+}
+
+#[test]
+fn clear_layers_between_turbid_ones_are_refused_for_diffusion() {
+    let path = layout(
+        "gap",
+        0.8,
+        "1.36",
+        "{ thickness = 1.0, material = 1.36, scattering = 5.0, source = \"x\" }, \
+         { thickness = 1.0, material = 1.36 }, \
+         { thickness = 1.0, material = 1.36, scattering = 5.0, source = \"x\" }",
+        3.0,
+    );
+    let error = Registry::standard()
+        .run(
+            "fluence",
+            &json!({ "path": path.to_string_lossy(), "data_directory": scratch("empty").to_string_lossy() }),
+        )
+        .expect_err("refused");
+    assert!(error.message.contains("layer 2"), "{}", error.message);
+}

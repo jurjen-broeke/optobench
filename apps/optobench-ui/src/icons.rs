@@ -573,6 +573,15 @@ pub fn draw(painter: &Painter, rect: Rect, id: &str, enabled: bool) {
                 c.line(&arc, if radius < 15.0 { ACTION } else { 1.8 }, r.beam);
             }
         }
+        "fluence" => {
+            // A beam entering a slab and glowing out into it.
+            c.line(&[pos2(6.0, 22.0), pos2(58.0, 22.0)], 2.4, r.a3);
+            for radius in [8.0, 16.0, 24.0] {
+                let arc = c.arc(pos2(32.0, 22.0), radius, 0.0, 180.0);
+                c.line(&arc, if radius < 10.0 { ACTION } else { 1.8 }, r.beam);
+            }
+            c.line(&[pos2(32.0, 2.0), pos2(32.0, 30.0)], ACTION, r.beam);
+        }
         "psf" => {
             // The focal intensity: a central peak and its first rings (sinc²).
             let profile: Vec<_> = (0..=48)
@@ -820,6 +829,7 @@ pub const ALL: &[&str] = &[
     "gaussian",
     "psf",
     "field",
+    "fluence",
     "graph",
     "sweep",
     "check-moves",

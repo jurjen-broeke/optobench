@@ -34,6 +34,8 @@ const KINDS: &[&str] = &[
     "field",
     "field-phase",
     "field-difference",
+    "fluence-depth",
+    "absorption",
 ];
 
 /// The parameters of `of = "sweep"` and `of = "optimize"`, passed on to those commands.
@@ -349,6 +351,14 @@ fn of_design(parameters: &Parameters, kind: &str) -> Result<Graph, CommandError>
             }
         };
     }
+    if matches!(kind, "fluence-depth" | "absorption") {
+        let light = crate::fluence::light(parameters)?;
+        return Ok(if kind == "absorption" {
+            graphs::absorption_map(&light)
+        } else {
+            graphs::fluence_depth(&light)
+        });
+    }
     if kind == "optimize" {
         let mut keys = base.to_vec();
         keys.extend_from_slice(OPTIMIZE_KEYS);
@@ -467,6 +477,7 @@ pub(crate) fn graph(parameters: &Parameters) -> Result<Value, CommandError> {
     keys.extend_from_slice(SWEEP_KEYS);
     keys.extend_from_slice(OPTIMIZE_KEYS);
     keys.extend_from_slice(crate::field::FIELD_KEYS);
+    keys.extend_from_slice(crate::fluence::LIGHT_KEYS);
     check_keys(parameters, &keys)?;
     let mut graph = match (text(parameters, "saved")?, text(parameters, "of")?) {
         (Some(from), None) => {

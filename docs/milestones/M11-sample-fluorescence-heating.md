@@ -35,17 +35,32 @@ the diffusion approximation here; photon transport by Monte Carlo replaces it in
 
 ### M11a2 Diffuse light
 
-- [ ] Scattered light in the diffusion approximation: the fluence rate from the
-      scattered power as a source, per layer, with the layers' boundaries (refractive-index
-      mismatch at each face); the absorbed power density µa × fluence rate, ballistic and
-      diffuse
-- [ ] Graphs: power and fluence rate against depth, absorbed power density as an x–z
-      map
-- [ ] Checks: the diffusion fluence of a point source in an infinite medium,
-      Φ = P exp(−µ_eff r) / (4π D r), µ_eff = √(3 µa (µa + µs′)), D = 1/(3(µa + µs′))
-      (A. J. Welch and M. J. C. van Gemert, Optical-Thermal Response of Laser-Irradiated
-      Tissue, 2nd ed., 2011, ch. 6), and of a collimated beam on a half-space against the
-      same book's closed forms
+- [x] A finite-volume solver on rings about an axis (`optobench_analysis::diffusion`):
+      −∇·(D ∇Φ) + µa Φ = S, D = 1/(3 (µa + µs′)), harmonic D between cells, conjugate
+      gradients; the side dark, top and bottom dark or a partial-current face with
+      A = (1 + R_eff)/(1 − R_eff) from the index step (Groenhuis et al. 1983); power
+      absorbed and leaving each face from the same terms, so the balance closes. Built to
+      be reused by M11d's heat solver
+- [x] In a sample (`optobench_analysis::sample`, command `fluence`): every ray segment in
+      the turbid layers walked in short pieces; the direct fluence rate by track length;
+      the power scattered along each piece as the diffuse light's source (first
+      scattering taken as isotropic, g only in D); the absorbed power density
+      µa (Φ_direct + Φ_diffuse); totals per layer, the diffuse light's balance, the peak.
+      The turbid layers must touch (a clear layer between them is refused); their stack's
+      faces lose light by their index step to the media beyond
+- [x] Graphs (`graph` kinds `fluence-depth`, `absorption`): direct, diffuse and total
+      fluence rate along the axis; the absorbed power density as an x–z map on a
+      logarithmic colour scale (maps now share one colour mapping, `Map::level`, between
+      files and the interface, log scales included)
+- [x] Checks: a point source in an infinite medium against Φ = P exp(−µ_eff r)/(4π D r)
+      to 2 % along the axis; under a matched surface against the extrapolated-boundary
+      image solution (T. J. Farrell, M. S. Patterson and B. Wilson, Med. Phys. 19, 879
+      (1992)) to 3 %; A ≈ 1 matched and ≈ 3.25 for n = 1.4; power balance to 10⁻⁹; in a
+      traced slab, the scattered and directly absorbed power on the grid equal the
+      trace's own accounts to 10⁻⁹ and the diffuse light's absorbed and escaping power
+      add up to the scattered power to 10⁻⁹
+- [ ] A collimated beam on a half-space against a published closed form, once a source
+      is in the corpus (Welch and van Gemert, or Farrell et al. 1992)
 
 ## M11b Excitation
 

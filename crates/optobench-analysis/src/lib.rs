@@ -19,11 +19,13 @@
 #![forbid(unsafe_code)]
 
 pub mod colour;
+pub mod diffusion;
 mod focus;
 mod gaussian;
 pub mod graph;
 mod psf;
 mod pupil;
+pub mod sample;
 mod spot;
 mod wavefront;
 mod zernike;

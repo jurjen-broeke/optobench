@@ -5,6 +5,11 @@ with the release that introduced them.
 
 ## Unreleased
 
+- M11a2 diffuse light: new command `fluence` gives the light in a sample, the direct beam
+  from the traced rays and the diffuse light it scatters (diffusion approximation on rings
+  about the axis, partial-current faces from the index step), with the absorbed power by
+  layer and its density; new `graph` kinds `fluence-depth` and `absorption` (an x–z map on
+  a log scale). Map colours are now computed once for files and the window alike.
 - M11a1 turbid sample layers: a sample layer may give absorption µa, scattering µs and
   anisotropy g (numbers or spectra, with their source); the direct beam loses power at
   µa + µs, and the trace reports what it left in each part of each sample (absorbed,

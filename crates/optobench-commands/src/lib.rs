@@ -18,6 +18,7 @@
 mod edit;
 mod embed;
 mod field;
+mod fluence;
 mod graph;
 mod materials;
 mod moves;
@@ -270,6 +271,14 @@ const STANDARD: &[Command] = &[
         effect: Effect::Read,
         summary: "carry a beam as a field from a plane to a detector through ideal lenses and mechanics (diffraction), into a fibre and on as rays",
         handler: field::field,
+    },
+    Command {
+        id: "fluence",
+        label: "Fluence",
+        icon: "fluence",
+        effect: Effect::Read,
+        summary: "the light in a sample: the direct beam and the diffuse light it scatters (diffusion approximation), absorbed power by layer and its density",
+        handler: fluence::fluence,
     },
     Command {
         id: "sweep",

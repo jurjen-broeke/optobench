@@ -29,6 +29,8 @@ pub enum Unit {
     Irradiance,
     /// Optical path in waves.
     Wave,
+    /// Power per volume (W/mm³): absorbed power density, heat sources.
+    PowerDensity,
     /// A plain number (a ratio, a count, a Strehl ratio).
     Number,
 }
@@ -43,6 +45,7 @@ impl Unit {
             Unit::Power => "power",
             Unit::Irradiance => "irradiance",
             Unit::Wave => "wave",
+            Unit::PowerDensity => "power-density",
             Unit::Number => "number",
         }
     }
@@ -56,6 +59,7 @@ impl Unit {
             Unit::Power,
             Unit::Irradiance,
             Unit::Wave,
+            Unit::PowerDensity,
             Unit::Number,
         ]
         .into_iter()
@@ -70,6 +74,7 @@ impl Unit {
             Unit::Power => "W",
             Unit::Irradiance => "W/mm²",
             Unit::Wave => "waves",
+            Unit::PowerDensity => "W/mm³",
             Unit::Number => "",
         }
     }
@@ -188,6 +193,7 @@ impl Axis {
             Unit::Power => ("W", 1.0),
             Unit::Irradiance => ("W/mm²", 1.0),
             Unit::Wave => ("waves", 1.0),
+            Unit::PowerDensity => ("W/mm³", 1.0),
             Unit::Number => ("", 1.0),
         };
         let shown = size * factor;
@@ -294,6 +300,30 @@ pub struct Map {
 }
 
 impl Map {
+    /// The range the colour scale spans: as [`Map::range`], or on a logarithmic value
+    /// axis six whole decades up to the decade above the peak.
+    pub fn colour_range(&self) -> (f64, f64) {
+        let (low, high) = self.range();
+        if self.value.scale == Scale::Logarithmic && high > 0.0 {
+            let top = 10f64.powf(high.log10().ceil());
+            (top * 1e-6, top)
+        } else {
+            (low, high)
+        }
+    }
+
+    /// Where a value falls on the colour scale, 0 to 1 (renderers share this, so files and
+    /// the interface colour alike).
+    pub fn level(&self, value: f64) -> f64 {
+        let (low, high) = self.colour_range();
+        let t = if self.value.scale == Scale::Logarithmic && high > 0.0 {
+            (value.max(low).log10() - low.log10()) / (high.log10() - low.log10())
+        } else {
+            (value - low) / (high - low)
+        };
+        t.clamp(0.0, 1.0)
+    }
+
     /// The least and greatest finite value; for a diverging scale, symmetric about zero;
     /// for a cyclic one, −π to π.
     pub fn range(&self) -> (f64, f64) {
@@ -751,6 +781,88 @@ pub fn gaussian_path(beams: &[crate::BeamAt], wavelength: f64, m_squared: f64) -
             })
             .collect(),
         notes,
+    }
+}
+
+/// The fluence rate along a sample's axis (the innermost ring): direct, diffuse and both.
+pub fn fluence_depth(light: &crate::sample::SampleLight) -> Graph {
+    let g = &light.grid;
+    let line = |label: &str, values: &dyn Fn(usize) -> f64| Series {
+        label: label.into(),
+        points: (0..g.slices)
+            .map(|j| (g.z_at(j), values(g.index(0, j))))
+            .collect(),
+        mark: Mark::Line,
+        reference: false,
+    };
+    let mut notes = vec![format!(
+        "scattered {:.4e} W, absorbed from the direct beam {:.4e} W",
+        light.scattered, light.direct_absorbed
+    )];
+    if let Some(d) = &light.diffuse_light {
+        notes.push(format!(
+            "diffuse: absorbed {:.4e} W, out through the top {:.4e}, bottom {:.4e}, side {:.4e} W",
+            d.absorbed, d.top, d.bottom, d.side
+        ));
+    }
+    Graph {
+        title: format!("Fluence rate along the axis of `{}`", light.id),
+        x: Axis::new("depth", Unit::Length),
+        y: Axis::new("fluence rate", Unit::Irradiance),
+        plot: Plot::Series(vec![
+            line("direct", &|c| light.direct[c]),
+            line("diffuse", &|c| light.diffuse[c]),
+            line("total", &|c| light.direct[c] + light.diffuse[c]),
+        ]),
+        equal_aspect: false,
+        markers: Vec::new(),
+        notes,
+    }
+}
+
+/// The absorbed power density in a sample as an x–z map (the rings mirrored about the
+/// axis).
+pub fn absorption_map(light: &crate::sample::SampleLight) -> Graph {
+    let g = &light.grid;
+    let columns = 2 * g.rings;
+    let mut values = Vec::with_capacity(columns * g.slices);
+    // Rows from low y: the deepest slice first.
+    for j in (0..g.slices).rev() {
+        for c in 0..columns {
+            let i = if c < g.rings {
+                g.rings - 1 - c
+            } else {
+                c - g.rings
+            };
+            values.push(light.absorbed[g.index(i, j)]);
+        }
+    }
+    let peak = light.absorbed.iter().copied().fold(0.0, f64::max);
+    Graph {
+        title: format!("Absorbed power density in `{}`", light.id),
+        x: Axis::new("x", Unit::Length),
+        // Depth downwards: y is minus the depth, so the beam comes in at the top.
+        y: Axis::new("−depth", Unit::Length),
+        plot: Plot::Map(Map {
+            columns,
+            rows: g.slices,
+            x: (-g.radius, g.radius),
+            y: (-g.z.1, -g.z.0),
+            values,
+            // Over decades, from the beam's entry to the diffuse glow: a log scale.
+            value: Axis {
+                label: "absorbed".into(),
+                unit: Unit::PowerDensity,
+                scale: Scale::Logarithmic,
+            },
+            colours: ColourScale::Sequential,
+        }),
+        equal_aspect: true,
+        markers: Vec::new(),
+        notes: vec![format!(
+            "peak {peak:.4e} W/mm³ (a log scale of six decades); depth from {} to {} mm",
+            g.z.0, g.z.1
+        )],
     }
 }
 
