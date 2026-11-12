@@ -384,8 +384,7 @@ impl Field {
         let peak = (0..n * n).map(weight).fold(0.0, f64::max);
         let lit = |i: usize| weight(i) >= 1e-2 * peak;
         let (mut largest, mut coarse, mut total) = (0.0f64, 0.0, 0.0);
-        for k in 0..2 {
-            let s = &self.components[k];
+        for s in &self.components {
             for r in 0..n {
                 for c in 0..n {
                     let i = r * n + c;
@@ -647,10 +646,10 @@ impl Field {
         // The whole field, sphere included, sampled.
         let mut full = self.clone();
         full.curvature = 0.0;
-        for comp in 0..2 {
+        for (comp, samples) in full.components.iter_mut().enumerate() {
             for r in 0..n {
                 for c in 0..n {
-                    full.components[comp][r * n + c] = self.value(comp, r, c);
+                    samples[r * n + c] = self.value(comp, r, c);
                 }
             }
         }
