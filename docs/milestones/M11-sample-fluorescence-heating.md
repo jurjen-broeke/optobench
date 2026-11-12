@@ -15,9 +15,11 @@ the diffusion approximation here; photon transport by Monte Carlo replaces it in
 - [ ] Sample layers gain absorption µa(λ), scattering µs(λ) and anisotropy g (each a
       number or a curve, with provenance); a layer of `water` takes its absorption from
       the bundled data (Hale & Querry 1973) at the trace's wavelength
-- [ ] Water verified against its sources: the bundled absorption against Hale & Querry,
-      Appl. Opt. 12, 555 (1973) (local corpus), value by value; the index against Daimon &
-      Masumura 2007 once that paper is available (not yet: M2c's item stays open for it)
+- [x] Water's absorption verified: the bundled table equals Table I of Hale & Querry,
+      Appl. Opt. 12, 555 (1973), in all 56 rows from 0.2 to 3.35 µm and at spot checks to
+      200 µm (`bundled.rs` tests); marked verified in the asset manifest and ATTRIBUTION.md
+- [ ] Water's index against Daimon & Masumura 2007, once that paper is available (M2c's
+      item stays open for it)
 - [ ] The ballistic beam: power along traced rays falls as exp(−(µa + µs) z) in each
       layer; the power ledger gains, per layer, the power absorbed and the power scattered
       out of the ballistic beam

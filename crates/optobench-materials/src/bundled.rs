@@ -218,7 +218,9 @@ pub const WATER_ABSORPTION: Provenance = Provenance {
     reference: "G. M. Hale and M. R. Querry, Appl. Opt. 12, 555-563 (1973)",
     transcribed_from: "database/data/main/H2O/nk/Hale.yml",
     licence: "CC0-1.0",
-    verified: false,
+    // Against Table I of the paper (2026-11-12): every row from 0.200 to 3.35 µm, and
+    // spot checks beyond to 200 µm (this module's tests).
+    verified: true,
 };
 
 /// Why a table file could not be read.
@@ -262,6 +264,97 @@ pub fn parse_table(text: &str) -> Result<Tabulated, ParseError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Table I of G. M. Hale and M. R. Querry, Appl. Opt. 12, 555 (1973), p. 557, read
+    /// from the paper (2026-11-12): (λ µm, n, k). The first column of the table complete
+    /// (0.200 to 3.35 µm: the optical and near-infrared range), then rows of the second and
+    /// third columns as spot checks.
+    const TABLE_I: &[(f64, f64, f64)] = &[
+        (0.200, 1.396, 1.1e-7),
+        (0.225, 1.373, 4.9e-8),
+        (0.250, 1.362, 3.35e-8),
+        (0.275, 1.354, 2.35e-8),
+        (0.300, 1.349, 1.6e-8),
+        (0.325, 1.346, 1.08e-8),
+        (0.350, 1.343, 6.5e-9),
+        (0.375, 1.341, 3.5e-9),
+        (0.400, 1.339, 1.86e-9),
+        (0.425, 1.338, 1.3e-9),
+        (0.450, 1.337, 1.02e-9),
+        (0.475, 1.336, 9.35e-10),
+        (0.500, 1.335, 1.00e-9),
+        (0.525, 1.334, 1.32e-9),
+        (0.550, 1.333, 1.96e-9),
+        (0.575, 1.333, 3.60e-9),
+        (0.600, 1.332, 1.09e-8),
+        (0.625, 1.332, 1.39e-8),
+        (0.650, 1.331, 1.64e-8),
+        (0.675, 1.331, 2.23e-8),
+        (0.700, 1.331, 3.35e-8),
+        (0.725, 1.330, 9.15e-8),
+        (0.750, 1.330, 1.56e-7),
+        (0.775, 1.330, 1.48e-7),
+        (0.800, 1.329, 1.25e-7),
+        (0.825, 1.329, 1.82e-7),
+        (0.850, 1.329, 2.93e-7),
+        (0.875, 1.328, 3.91e-7),
+        (0.900, 1.328, 4.86e-7),
+        (0.925, 1.328, 1.06e-6),
+        (0.950, 1.327, 2.93e-6),
+        (0.975, 1.327, 3.48e-6),
+        (1.0, 1.327, 2.89e-6),
+        (1.2, 1.324, 9.89e-6),
+        (1.4, 1.321, 1.38e-4),
+        (1.6, 1.317, 8.55e-5),
+        (1.8, 1.312, 1.15e-4),
+        (2.0, 1.306, 1.1e-3),
+        (2.2, 1.296, 2.89e-4),
+        (2.4, 1.279, 9.56e-4),
+        (2.6, 1.242, 3.17e-3),
+        (2.65, 1.219, 6.7e-3),
+        (2.70, 1.188, 0.019),
+        (2.75, 1.157, 0.059),
+        (2.80, 1.142, 0.115),
+        (2.85, 1.149, 0.185),
+        (2.90, 1.201, 0.268),
+        (2.95, 1.292, 0.298),
+        (3.00, 1.371, 0.272),
+        (3.05, 1.426, 0.240),
+        (3.10, 1.467, 0.192),
+        (3.15, 1.483, 0.135),
+        (3.20, 1.478, 0.0924),
+        (3.25, 1.467, 0.0610),
+        (3.30, 1.450, 0.0368),
+        (3.35, 1.432, 0.0261),
+        // Spot checks in the second and third columns.
+        (3.40, 1.420, 0.0195),
+        (4.0, 1.351, 0.00460),
+        (6.0, 1.265, 0.107),
+        (9.8, 1.229, 0.0479),
+        (10.0, 1.218, 0.0508),
+        (200.0, 2.130, 0.504),
+    ];
+
+    #[test]
+    fn the_bundled_water_table_is_hale_and_querry_s_table_i() {
+        let table = parse_table(HALE_QUERRY).expect("bundled file is valid");
+        for &(wavelength, n, k) in TABLE_I {
+            let row = table
+                .points
+                .iter()
+                .find(|p| (p.0 - wavelength).abs() < 1e-9)
+                .unwrap_or_else(|| panic!("no row at {wavelength} µm"));
+            assert_eq!((row.1, row.2), (n, k), "{wavelength} µm");
+        }
+        // Every row of the first column, nothing in between.
+        let first: Vec<f64> = table
+            .points
+            .iter()
+            .map(|p| p.0)
+            .filter(|&w| w <= 3.35 + 1e-9)
+            .collect();
+        assert_eq!(first.len(), 56);
+    }
 
     #[test]
     fn bundled_table_parses_completely() {

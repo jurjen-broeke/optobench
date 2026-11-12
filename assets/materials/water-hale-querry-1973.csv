@@ -1,7 +1,8 @@
 # Liquid water at 25 °C: refractive index n and extinction coefficient k.
 # Hale & Querry, Appl. Opt. 12, 555-563 (1973), doi:10.1364/AO.12.000555.
 # Transcribed unchanged from the refractiveindex.info database (CC0 1.0),
-# database/data/main/H2O/nk/Hale.yml. Not yet verified against the original paper.
+# database/data/main/H2O/nk/Hale.yml. Verified against the paper's Table I (2026-11-12):
+# every row 0.2-3.35 um, spot checks to 200 um.
 wavelength_um,n,k
 0.200,1.396,1.10E-7
 0.225,1.373,4.90E-8
