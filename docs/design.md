@@ -21,13 +21,15 @@ The target is checking a light path built from catalog parts (cage systems, lens
 - Model a part's mechanical degrees of freedom (slide along a rod, tip/tilt on a kinematic mount) and suggest moves only within them.
 - Provide a parts library keyed by vendor part number, built from public spec sheets and downloaded by the user.
 - Cover microscopy specifics: an ideal objective, scan mirrors, pupil conjugation, Gaussian beams, a vectorial PSF, immersion and dipping objectives focusing into water.
+- Propagate the field where diffraction changes the answer (a beam clipped by an iris or a tube, a pinhole, coupling into a fibre, a long path after an aperture): convert traced rays to a sampled field at a plane, propagate it, and hand it back to the ray trace.
+- Show results and fields as graphs (profiles, sweeps, spot diagrams, irradiance and field maps) that can be inspected and compared: with theory, with another design, before and after an optimisation, rays against fields.
 - Model the imaging target: an aqueous sample with layers, fluorophores, and absorption and scattering, giving fluorescence excitation, a photon budget and laser heating.
 - One engine for desktop CLI, desktop UI and wasm32.
 
 **Non-goals (for now)**
 
 - Replacing commercial lens-design suites for multi-element objective design.
-- Wave-optics simulation of whole systems (FDTD, BPM through the assembly). Photochemistry and photodamage beyond heating and simple bleaching estimates.
+- Wave-optics simulation of whole systems (FDTD, BPM through the assembly). Fields are propagated between chosen planes only, in free space and through thin elements; thick optics stay with the ray trace (see Optical model, Field propagation). Photochemistry and photodamage beyond heating and simple bleaching estimates.
 - Editing geometry. SolidCraft stays the source of truth for shapes and positions.
 - Reading SolidCraft's native .sc design files. That format changes often (format 45 at v0.28), so STEP is the interchange format.
 
@@ -55,8 +57,8 @@ The crates are layered like SolidCraft's: a crate depends only on crates in its 
 | L1 | optobench-surfaces, optobench-materials | analytic surfaces (plane, sphere, conic, even asphere, Zernike) with sag, normal and intersection; dispersion models and glass data |
 | L2 | optobench-trace | rays, interactions, sequential and non-sequential tracing, mesh BVH with Newton refinement on exact surfaces |
 | L3 | optobench-scene, optobench-library | the optical scene (elements, sources, detectors, DOFs, mechanical proxies) from STEP or from a standalone layout; lookup in user-downloaded parts libraries |
-| L4 | optobench-analysis, optobench-optimize | paraxial, spot, OPD, Zernike, PSF/MTF, power ledger, footprints; damped least squares over DOFs and tolerancing |
-| L5 | optobench-io, optobench-bridge, optobench-commands | STEP import (our own reader for the AP203/AP214/AP242 subset), sidecar files, reports; the control-channel adapter (Phase B); the command registry |
+| L4 | optobench-analysis, optobench-field, optobench-optimize | paraxial, spot, OPD, Zernike, PSF/MTF, power ledger, footprints, graphs (as data); sampled fields, their propagation and conversion to and from rays; damped least squares over DOFs and tolerancing |
+| L5 | optobench-io, optobench-bridge, optobench-commands | STEP import (our own reader for the AP203/AP214/AP242 subset), sidecar files, reports, graphs drawn as SVG; the control-channel adapter (Phase B); the command registry |
 | apps | optobench-cli, optobench-ui | headless CLI; desktop UI with a 3D ray view, later |
 
 Every command is a function taking JSON parameters and returning a JSON result, the same pattern as SolidCraft's run(command, args). The CLI, the UI and a later MCP server, or a SolidCraft plugin once #1221 lands, all call the same command registry, which lives in `optobench-commands` (L5, so commands can read and write files through `optobench-io`). Parameters are a JSON object and parsing is strict, as for files: an unknown key is an error. A failure is `{"error": {"code", "message"}}` with a stable code. On the command line, `optobench <command> [parameters]` takes the object as one argument or `-` for standard input and prints the JSON result.
@@ -79,7 +81,7 @@ A design can start without SolidCraft. A scene file describes the optics directl
 - **Reports** give positions in layout coordinates (axis distance, grid hole, height).
 - **Upgrade path:** `optobench export-placements` writes the element poses and a matching sidecar, so the layout can be rebuilt in SolidCraft later and matched to its bodies.
 
-### Phase A: iterative (milestones M4–M9)
+### Phase A: iterative (milestones M4–M11)
 
 1. In SolidCraft, the user exports the assembly as STEP, one file per run.
 2. `optobench trace design.step --scene design.optobench` reads the geometry and sidecar, matches bodies to sidecar entries by STEP product name, then path, then geometry fingerprint, and traces.
@@ -89,18 +91,18 @@ A design can start without SolidCraft. A scene file describes the optics directl
 
 Phase A needs nothing from SolidCraft beyond STEP export, so it keeps working however much the command set changes.
 
-### Phase B: live (milestones M11–M12)
+### Phase B: live (milestones M12–M13)
 
 The `optobench-bridge` crate connects to a running SolidCraft through the authenticated loopback control channel and replaces steps 1, 4 and 5:
 
-- **Read (M11):** list occurrences, transforms, joints and parameters; get the geometry of tagged bodies; detect design changes and re-trace automatically. Writes nothing.
-- **Write (M12):** map each DOF to a *binding*, in this order of preference: a user parameter (`parameters.change`), a joint value (`joint.edit` offset or angle), and as a fallback a direct move (`occurrence.move`). Changes go out as one batch, the design rebuilds once, every value is read back, and the loop stops if any read-back differs from the request by more than a tolerance.
+- **Read (M12):** list occurrences, transforms, joints and parameters; get the geometry of tagged bodies; detect design changes and re-trace automatically. Writes nothing.
+- **Write (M13):** map each DOF to a *binding*, in this order of preference: a user parameter (`parameters.change`), a joint value (`joint.edit` offset or angle), and as a fallback a direct move (`occurrence.move`). Changes go out as one batch, the design rebuilds once, every value is read back, and the loop stops if any read-back differs from the request by more than a tolerance.
 - **Versioning:** the adapter is keyed to the SolidCraft release. At startup it checks the commands it needs against `describe_command` schemas and refuses to write if a contract has changed. A nightly contract test runs against the latest SolidCraft release.
 - **Safety:** items are always addressed by numeric id, never by name (names can repeat). Strict parameter checking is on. Each write session is one undoable step in SolidCraft, when SolidCraft offers grouping.
 
 ## Optical model
 
-The model is geometric ray optics carrying power, with wave optics only where microscopy needs it (focal PSF, Gaussian beams).
+The model is geometric ray optics carrying power, with wave optics where the rays cannot tell the answer: at a focus (the vectorial PSF), for Gaussian beams, and where a field is propagated between chosen planes (Field propagation, below).
 
 - **Ray:** position, unit direction, wavelength (µm), power (W), accumulated optical path length, and an optional Jones vector for polarization. Rays are traced in batches of struct-of-arrays for SIMD and later GPU.
 - **Sequential trace:** an ordered list of analytic surfaces in local frames. Intersection is closed-form for planes, spheres and conics, and Newton on the sag function for aspheres and freeforms. Used for lens prescriptions, paraxial analysis and optimization.
@@ -110,6 +112,29 @@ The model is geometric ray optics carrying power, with wave optics only where mi
 - **Sources:** collimated beam, Gaussian beam (waist, M²), fiber (core diameter, NA), Lambertian LED (emitter size), point source, each with power and a spectrum.
 - **Detectors:** any face or plane. Records total W, irradiance map (W/m²), angular distribution and footprint polygon.
 - **Microscopy elements:** an ideal (paraxial) objective defined by focal length, NA, working distance, parfocal shoulder and pupil position, anchored to the objective's STEP body; a scan mirror whose angle is a DOF swept over a range; a Richards–Wolf vectorial PSF at the focus, fed by the traced pupil field; Gaussian beam propagation with the complex q parameter for aperture fill.
+
+### Field propagation (M10)
+
+Rays miss diffraction: the rings and lost power of a Gaussian beam clipped by an iris or a lens tube, the light a pinhole passes, how much couples into a single-mode fibre, how a beam spreads over a long path after an aperture. Where that matters, the light is carried as a sampled complex field between chosen planes, and as rays everywhere else. The method is from J. W. Goodman, *Introduction to Fourier Optics* (3rd ed., 2005), chs. 3–5, and A. E. Siegman, *Lasers* (1986), chs. 16–20; it lives in `optobench-field` (L4) and builds on the M9c2 PSF, which already turns traced rays into a field.
+
+- **Field.** A complex scalar amplitude per polarization component (x, y in the plane's frame) on a square grid across a plane, with the wavelength, the medium and a reference sphere: a field may carry its mean curvature analytically, so that a converging or diverging beam is sampled on its residual phase only (Siegman's "spherical reference" for propagation over large Fresnel numbers). Power is Σ n |E|² dA and is checked at every step.
+- **Rays to field.** At a plane the user chooses (a `field` entry: a plane, a grid size, a sample spacing or a padding factor), the traced rays become a field: amplitude from each ray's power over the area it stands for (its neighbours on the source grid, as in the PSF), phase from its optical path, interpolated onto the grid; a Gaussian source may instead start as its exact field. Sampling is checked against the phase gradient and the user told when the grid is too coarse.
+- **Propagation.** Angular spectrum (exact for scalar fields in a homogeneous medium) for short distances, and the Fresnel transfer or single-transform method for long ones, chosen from the Fresnel number of the grid; zero-padding against wrap-around; tilted planes by rotating the angular spectrum. Each method's sampling rules (Goodman ch. 5; D. G. Voelz, *Computational Fourier Optics*, SPIE 2011) are enforced, not left to the user.
+- **What a field meets.** Apertures and the mechanics in the plane (a proxy plate or tube, a STEP body cut by the plane) as amplitude masks with their exact edges; ideal thin lenses, the ideal objective's pupil and user phase maps (Zernike) as phase screens; a detector plane records the irradiance n |E|² and the field itself.
+- **Field to rays.** At a plane where the trace takes over, rays are launched from the field: one per grid cell above a power threshold, along the local phase gradient (the direction of the Poynting vector in the paraxial limit), with the cell's power and its optical path, so the non-sequential trace carries on through thick or tilted optics. Where the phase is not smooth (near a dark ring) the rays are marked as such and their spread shown.
+- **Overlaps.** A field's coupling into a mode (a single-mode fibre's Gaussian of the mode-field diameter, or any field) is the normalised overlap integral |∫ E₁* E₂ dA|² / (∫ |E₁|² dA ∫ |E₂|² dA).
+- **FFT.** The `rustfft` crate (MIT OR Apache-2.0, pure Rust, builds for wasm32; checked 2026-11-12 with version 6.4.1 and its dependencies), used only behind a small transform interface in `optobench-field`, so it can be tuned or replaced by our own transform when performance work reaches the fields.
+
+The geometric limit is a check on the whole chain: with no aperture in the way, rays → field → propagation → rays reproduces the plain ray trace to the sampling error, and a field propagated to the focus of an ideal lens reproduces the PSF of M9c2 at low NA.
+
+## Graphs
+
+Every result can be drawn, inspected and compared. The engine builds a graph as data: what is plotted, against what, in which units, with its colour scale; renderers turn that into an SVG file (`optobench-io`, deterministic, so tests compare them), CSV of the data behind it, and an interactive view in the UI. Graphs are built in `optobench-analysis` (L4, no rendering, builds for wasm32).
+
+- **Kinds.** Line graphs (PSF and beam profiles, sweeps over a DOF, axial crossings against height, merit against iteration); scatter graphs (spot diagrams, footprints on an aperture, ray landing points); maps (irradiance on a detector, a field's amplitude and phase, PSF sections in x–z, wavefront and OPD over the pupil) with their colour scale; and a beam's radius along its path, with element positions marked.
+- **Comparison.** Several results on shared axes (the PSF against its closed form, rays against a propagated field, a design before and after an optimisation, two designs), side by side on the same scales, and as differences: a difference map with a diverging scale centred on zero, or the residual of a profile. A result kept from an earlier run (its JSON) can be compared with a new one.
+- **Units and scales.** Each axis carries its quantity and unit and picks a readable one (µm in a focal region, mm on a bench), with linear or logarithmic scales (dB for a PSF's side lobes). Colour scales are perceptually uniform (sequential for intensity, cyclic for phase, diverging for differences), readable in grey and by colour-blind viewers; phase is masked where the amplitude is below a threshold. Series colours follow one palette across graphs, so the same design or method has the same colour everywhere.
+- **Inspection.** In the UI: hover for values, zoom and pan, a cursor that reads a map's value and draws its row and column profiles, and linked cursors across graphs that share an axis. A `graph` command builds any graph from a design and writes it as SVG and CSV, for reports and the command line.
 
 ## Samples, fluorescence and heating
 
@@ -137,7 +162,7 @@ The optics end in a **sample element**: a stack of media the focused light enter
 
 **Power and heating**
 
-- **Absorbed power density** in each layer = µa(λ) × local fluence rate, from the traced beam. The ballistic and scattered parts use a diffusion approximation until the Monte Carlo model of M14 replaces it.
+- **Absorbed power density** in each layer = µa(λ) × local fluence rate, from the traced beam. The ballistic and scattered parts use a diffusion approximation until the Monte Carlo model of M15 replaces it.
 - **Temperature rise:** heat diffusion in the layer stack with water's thermal properties (conductivity, density, heat capacity), steady state and time-resolved for a scanned or parked beam. An optional perfusion term (Pennes bioheat) covers in-vivo tissue.
 - **Reports:** power at the sample surface and at the focal plane, peak and FOV-averaged temperature rise, and excitation rate versus depth. Thresholds the user sets give warnings for heating and saturation.
 - **Validation target:** published measurements of laser heating during multiphoton imaging (for example Podgorski & Ranganathan 2016) are reproduced from their stated conditions as a benchmark.
@@ -302,11 +327,11 @@ Every file optobench writes for people to keep has one extension, `.optobench`, 
 
 ## Milestones
 
-M3 is the first usable release: CAD-free planar and table layouts with clipping and spot analysis. M6 completes the iterative CAD loop, suggesting part moves within real mechanical DOFs. M10 adds the sample: fluorescence excitation, photon budget and heating in water. Live coupling (M11–M12) is a separate phase behind gate G1, so SolidCraft churn can't block the optics work.
+M3 is the first usable release: CAD-free planar and table layouts with clipping and spot analysis. M6 completes the iterative CAD loop, suggesting part moves within real mechanical DOFs. M10 adds field propagation for diffraction at apertures, pinholes and fibres, and graphs for every result. M11 adds the sample: fluorescence excitation, photon budget and heating in water. Live coupling (M12–M13) is a separate phase behind gate G1, so SolidCraft churn can't block the optics work.
 
-![Roadmap: 3 phases, 15 milestones, 2 gates](roadmap.svg)
+![Roadmap: 3 phases, 16 milestones, 2 gates](roadmap.svg)
 
-Phase C doesn't depend on Phase B: tolerancing can start straight after M10 if it's needed first.
+Phase C doesn't depend on Phase B: tolerancing can start straight after M11 if it's needed first.
 
 **Improvements not tied to a milestone** (added 2026-11-07):
 
@@ -325,11 +350,12 @@ Phase C doesn't depend on Phase B: tolerancing can start straight after M10 if i
 | M7 Performance | converted-face cache per STEP file and product, parallel ray batches (rayon on desktop), B-spline intersection seeded from a coarse mesh, skipping absorbers no ray can reach before an optical face, fewer traces per optimiser iteration (forward differences, Jacobian reuse); benchmarks committed with their timings | the local Thorlabs beam-expander periscope optimised in under 2 minutes (25 today); trace results unchanged to 1e-12 |
 | M8 Interface | stand-alone desktop app in SolidCraft's style: ribbon generated from command metadata (label, icon, tab, panel, enabled/reason), browser, 3D view with display tessellation of the exact faces, properties, results; CAD, LAYOUT and SIMULATE workspaces (corpus/interface/DESIGN.md); moves in CAD deferred to SolidCraft | a layout built, traced, optimised and saved from the UI alone; the golden periscope's CAD workflow (tag, DOFs, optimise, move report) done in the UI |
 | M9 Microscopy pack | ideal objective with immersion and cover-glass design, dry/immersion/dipping cases, index-mismatch trace, correction collar DOF, scan-mirror sweeps, pupil conjugation and telecentricity, Gaussian beams, stratified-media Richards–Wolf PSF | 4f scan/tube relay with galvo matches hand calculation; focal shift and PSF in water match published stratified-media results |
-| M10 Sample, fluorescence, heating | sample layer stack (µa, µs, g), fluorophore definitions, 1P and 2P excitation with saturation checks, pulse broadening from glass GDD, emission trace and photon budget, absorbed power, heat diffusion (steady and scanned), heating and saturation warnings | excitation rates match closed-form cases; temperature rise matches the analytic Gaussian-source solution and a published multiphoton heating benchmark |
-| M11 Live read-only | bridge crate: connect, schema check, read occurrences/transforms/joints/parameters, change detection, auto re-trace | re-trace within 2 s of a design change on a golden scene; refuses to run on schema mismatch |
-| M12 Live write-back | DOF bindings (parameter, joint, move), batched writes, single rebuild, read-back verification, abort on mismatch | nightly contract test green against the latest SolidCraft release for 4 weeks |
-| M13 Tolerancing | Monte Carlo over DOFs, mount and part tolerances; yield and sensitivity report | sensitivity ranking stable across seeds; runtime documented |
-| M14 GPU, tissue MC | wgpu compute for non-sequential batches; photon transport in scattering tissue (Henyey–Greenstein) replacing the diffusion approximation for fluence and heating | GPU equals CPU within statistical error; tissue fluence matches published slab benchmarks |
+| M10 Field propagation and graphs | graphs as data (line, scatter, map; units, colour scales, comparison and differences), SVG and CSV output, interactive graphs in the UI; sampled fields, rays to field at a chosen plane, angular-spectrum and Fresnel propagation with enforced sampling, apertures and mechanics as masks, thin elements and pupil aberrations as phase screens, field to rays, mode overlap (fibre coupling) | a circular aperture's on-axis Fresnel diffraction, a truncated Gaussian's transmitted power and far field, the Talbot distance and Gaussian-to-fibre coupling match their closed forms; rays → field → rays reproduces the ray trace with no aperture in the way, and a field focused by an ideal lens the M9c2 PSF; every analysis result drawn as a graph and compared with its reference |
+| M11 Sample, fluorescence, heating | sample layer stack (µa, µs, g), fluorophore definitions, 1P and 2P excitation with saturation checks, pulse broadening from glass GDD, emission trace and photon budget, absorbed power, heat diffusion (steady and scanned), heating and saturation warnings | excitation rates match closed-form cases; temperature rise matches the analytic Gaussian-source solution and a published multiphoton heating benchmark |
+| M12 Live read-only | bridge crate: connect, schema check, read occurrences/transforms/joints/parameters, change detection, auto re-trace | re-trace within 2 s of a design change on a golden scene; refuses to run on schema mismatch |
+| M13 Live write-back | DOF bindings (parameter, joint, move), batched writes, single rebuild, read-back verification, abort on mismatch | nightly contract test green against the latest SolidCraft release for 4 weeks |
+| M14 Tolerancing | Monte Carlo over DOFs, mount and part tolerances; yield and sensitivity report | sensitivity ranking stable across seeds; runtime documented |
+| M15 GPU, tissue MC | wgpu compute for non-sequential batches; photon transport in scattering tissue (Henyey–Greenstein) replacing the diffusion approximation for fluence and heating | GPU equals CPU within statistical error; tissue fluence matches published slab benchmarks |
 
 ## Tests and validation
 
@@ -354,7 +380,7 @@ Correctness is shown without commercial tools, so every reference value comes fr
 | Body matching across re-exports | sidecar entries lose their bodies | match by product name, then path, then geometry fingerprint; unmatched entries are an error, not a silent skip |
 | Objective prescriptions unavailable | PSF and aberrations at focus approximate | ideal objective plus user-supplied pupil aberrations (Zernike) |
 | Third-party data licences | a licence conflict in what we ship | external databases are downloaded by the user, never bundled; bundled data limited to clearly open-licensed sets, each in ATTRIBUTION.md and a CI-checked asset manifest; shared designs embed only the extracted parameters they need, with provenance, and warn on sources that forbid redistribution |
-| Performance in non-sequential scenes | slow iteration | BVH, struct-of-arrays batches, rayon on desktop; GPU compute in M14 |
+| Performance in non-sequential scenes | slow iteration | BVH, struct-of-arrays batches, rayon on desktop; GPU compute in M15 |
 
 **Open questions**
 
@@ -364,6 +390,8 @@ Correctness is shown without commercial tools, so every reference value comes fr
 
 **Decided**
 
+- Field propagation and graphs become milestone M10, before the sample (now M11), because they build on the M9c2 PSF; the later milestones move up by one (M11–M15). Fields are propagated between chosen planes, with rays everywhere else; whole-system wave optics stays out of scope (2026-11-12).
+- Fields are transformed with the `rustfft` crate behind optobench's own interface; an own transform is an option for later performance work, not a start-up task (2026-11-12).
 - Two milestones follow M6: M7 Performance, then M8 Interface, a stand-alone desktop app in SolidCraft's style (ribbon, browser, workspaces; corpus/interface/DESIGN.md) built on the same UI toolkit as SolidCraft so it can later become a SolidCraft workspace; the microscopy pack and later milestones move up by two (2026-11-08).
 - The interface (M8) is built like SolidCraft's: egui 0.37 with eframe and wgpu 30, at SolidCraft's versions. SolidCraft is MIT OR Apache-2.0; UI-kit pieces optobench needs are adapted into an optobench crate with ATTRIBUTION.md rows, never depended on, so only optobench-io and optobench-bridge know SolidCraft exists. The ribbon, panels and the SIMULATE stages are declared as data, the shape SolidCraft's planned plugin workspaces take; the plugin route (RFC 0002, #1221) comes later. The fonts bundled inside dependencies (egui's: OFL-1.1, Ubuntu-font-1.0) are allowed by convention. The Optics workspace has its own icons, drawn in SolidCraft's design language (2026-11-08).
 - The parts library lives in the user's data directory and is managed and transferred by the user; the project hosts no library (2026-11-07).
