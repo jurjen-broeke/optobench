@@ -31,7 +31,8 @@ fn read_file(path: &str) -> Result<Vec<u8>, CommandError> {
 /// which its API does not give: a table with a header, or JSON pairs) with
 /// `two_photon_column` (default the column named like `2P`), `two_photon_values`
 /// (`relative`, default; `gm`; `action-gm`) and, for a relative spectrum,
-/// `two_photon_peak_gm`, `two_photon_peak_action` and `two_photon_peak_source`;
+/// `two_photon_peak_gm` (published, at `two_photon_peak_wavelength_nm` if given, else at
+/// the spectrum's greatest value), `two_photon_peak_action` and `two_photon_peak_source`;
 /// `accept_licence` and `data_directory`. Without `accept_licence: true` nothing is stored
 /// or written: the result shows FPbase's terms, the protein's reference and the entry.
 pub(crate) fn import_fluorophore(parameters: &Parameters) -> Result<Value, CommandError> {
@@ -48,6 +49,7 @@ pub(crate) fn import_fluorophore(parameters: &Parameters) -> Result<Value, Comma
             "two_photon_column",
             "two_photon_values",
             "two_photon_peak_gm",
+            "two_photon_peak_wavelength_nm",
             "two_photon_peak_action",
             "two_photon_peak_source",
             "accept_licence",
@@ -69,8 +71,12 @@ pub(crate) fn import_fluorophore(parameters: &Parameters) -> Result<Value, Comma
     let two_photon_path = text(parameters, "two_photon")?;
     let two_photon_bytes = two_photon_path.map(read_file).transpose()?;
     if let (Some(path), Some(bytes)) = (two_photon_path, &two_photon_bytes) {
-        let (rows, column) = fpbase::read_two_photon(bytes, text(parameters, "two_photon_column")?)
-            .map_err(|e| failed(format!("{path}: {e}")))?;
+        let (rows, column) = fpbase::read_two_photon(
+            bytes,
+            text(parameters, "two_photon_column")?,
+            Some(protein.name.as_str()),
+        )
+        .map_err(|e| failed(format!("{path}: {e}")))?;
         let values = match text(parameters, "two_photon_values")? {
             None | Some("relative") => fpbase::TwoPhotonValues::Relative,
             Some("gm") => fpbase::TwoPhotonValues::Absorption,
@@ -83,29 +89,45 @@ pub(crate) fn import_fluorophore(parameters: &Parameters) -> Result<Value, Comma
         };
         let peak = match parameters.get("two_photon_peak_gm") {
             None => None,
-            Some(v) => Some((
-                v.as_f64()
+            Some(v) => Some(fpbase::Peak {
+                value: v
+                    .as_f64()
                     .ok_or_else(|| invalid("`two_photon_peak_gm` must be a number"))?,
-                text(parameters, "two_photon_peak_source")?
+                wavelength: match parameters.get("two_photon_peak_wavelength_nm") {
+                    None => None,
+                    Some(w) => Some(
+                        w.as_f64().filter(|w| *w > 0.0).ok_or_else(|| {
+                            invalid("`two_photon_peak_wavelength_nm` must be a positive number")
+                        })? / 1000.0,
+                    ),
+                },
+                source: text(parameters, "two_photon_peak_source")?
                     .ok_or_else(|| {
                         invalid("say where the peak comes from (`two_photon_peak_source`)")
                     })?
                     .to_owned(),
-                flag(parameters, "two_photon_peak_action")?,
-            )),
+            }),
         };
         let file = std::path::Path::new(path)
             .file_name()
             .map_or(path.to_owned(), |f| f.to_string_lossy().into_owned());
         let file = format!("{file}, column {column}");
         protein.two_photon = Some(
-            fpbase::TwoPhoton::new(rows, values, peak, &file, &optobench_io::sha256_hex(bytes))
-                .map_err(invalid)?,
+            fpbase::TwoPhoton::new(
+                rows,
+                values,
+                peak,
+                flag(parameters, "two_photon_peak_action")?,
+                &file,
+                &optobench_io::sha256_hex(bytes),
+            )
+            .map_err(invalid)?,
         );
     } else if [
         "two_photon_column",
         "two_photon_values",
         "two_photon_peak_gm",
+        "two_photon_peak_wavelength_nm",
         "two_photon_peak_action",
         "two_photon_peak_source",
     ]
@@ -154,9 +176,16 @@ pub(crate) fn import_fluorophore(parameters: &Parameters) -> Result<Value, Comma
             "file": t.file,
             "rows": t.spectrum.len(),
             "range_um": [t.spectrum.first().map(|r| r.0), t.spectrum.last().map(|r| r.0)],
-            "peak_gm": t.peak,
+            "values": match t.values {
+                fpbase::TwoPhotonValues::Relative => "relative",
+                fpbase::TwoPhotonValues::Absorption => "gm",
+                fpbase::TwoPhotonValues::Action => "action-gm",
+            },
+            "greatest": t.spectrum.iter().cloned().fold((0.0, 0.0), |a, r| if r.1 > a.1 { r } else { a }),
+            "peak_gm": t.peak.as_ref().map(|p| p.value),
+            "peak_wavelength_um": t.peak.as_ref().and_then(|p| p.wavelength),
             "action": t.action,
-            "peak_source": t.peak_source,
+            "peak_source": t.peak.as_ref().map(|p| p.source.clone()),
         })),
         "missing": missing,
         "two_photon_note": "FPbase's API gives no two-photon data: export the protein's two-photon excitation spectrum from the website and pass it as `two_photon`; a relative spectrum needs `two_photon_peak_gm` with `two_photon_peak_source`. Emission after two-photon excitation follows the one-photon emission spectrum.",

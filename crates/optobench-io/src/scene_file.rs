@@ -156,7 +156,8 @@
 //!                                   # (10⁻⁵⁰ cm⁴ s), two photons per excitation; or
 //!                                   # two_photon_action_cross_section_gm (η σ₂, as most
 //!                                   # spectra are published), divided by quantum_yield;
-//!                                   # a number with two_photon_spectrum (relative) is its peak
+//!                                   # a number with two_photon_spectrum (relative) applies at
+//!                                   # two_photon_reference_um, else at its greatest value
 //! emission = [[0.5, 0.3], [0.52, 1.0], [0.6, 0.1]]      # optional, relative
 //! concentrations = [ { sample = "S", layer = 2, micromolar = 10.0 } ]
 //!
@@ -1780,6 +1781,7 @@ pub(crate) fn fluorophores(
                 "two_photon_cross_section_gm",
                 "two_photon_action_cross_section_gm",
                 "two_photon_spectrum",
+                "two_photon_reference_um",
                 "emission",
                 "concentrations",
             ],
@@ -1884,16 +1886,33 @@ pub(crate) fn fluorophores(
         };
         // A relative two-photon spectrum (as FPbase gives it) shaped by a peak value.
         let two_photon = match (two_photon, spectrum(&item, "two_photon_spectrum")?) {
-            (any, None) => any,
-            (Some(Spectrum::Constant(peak)), Some(Spectrum::Table(rows))) => {
-                let top = rows.iter().map(|r| r.1).fold(0.0, f64::max);
-                if top <= 0.0 {
+            (any, None) => {
+                if item.table.contains_key("two_photon_reference_um") {
                     return Err(error(format!(
-                        "{}: `two_photon_spectrum` is zero everywhere",
+                        "{}: `two_photon_reference_um` belongs with `two_photon_spectrum`",
                         item.context
                     )));
                 }
-                Some(scaled(Spectrum::Table(rows), peak / top))
+                any
+            }
+            (Some(Spectrum::Constant(peak)), Some(Spectrum::Table(rows))) => {
+                // The number applies at `two_photon_reference_um`, else at the greatest value.
+                let reference = match item.table.get("two_photon_reference_um") {
+                    None => rows.iter().map(|r| r.1).fold(0.0, f64::max),
+                    Some(_) => {
+                        let at = item.positive("two_photon_reference_um")?;
+                        Spectrum::Table(rows.clone()).at(at).map_err(|e| {
+                            error(format!("{}: `two_photon_reference_um`: {e}", item.context))
+                        })?
+                    }
+                };
+                if reference <= 0.0 {
+                    return Err(error(format!(
+                        "{}: `two_photon_spectrum` is zero where its cross-section applies",
+                        item.context
+                    )));
+                }
+                Some(scaled(Spectrum::Table(rows), peak / reference))
             }
             (None, Some(_)) => {
                 return Err(error(format!(

@@ -261,18 +261,31 @@ pub fn read(
 /// A two-photon excitation spectrum, from its own file.
 #[derive(Debug, Clone, PartialEq)]
 pub struct TwoPhoton {
-    /// (µm, relative), peak 1.
+    /// (µm, value) as in the file: relative, or in GM.
     pub spectrum: Vec<(f64, f64)>,
-    /// The peak cross-section (GM); `None` until given.
-    pub peak: Option<f64>,
-    /// Whether `peak` is an action cross-section η σ₂.
+    /// What the values are.
+    pub values: TwoPhotonValues,
+    /// For a relative spectrum, the cross-section that scales it (GM); `None` until given.
+    pub peak: Option<Peak>,
+    /// Whether the cross-sections (the file's in GM, or `peak`) are action cross-sections.
     pub action: bool,
-    /// Where `peak` comes from.
-    pub peak_source: Option<String>,
-    /// The file's name.
+    /// The file's name and column.
     pub file: String,
     /// Its SHA-256.
     pub sha256: String,
+}
+
+/// A published two-photon cross-section that scales a relative spectrum.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Peak {
+    /// GM.
+    pub value: f64,
+    /// The wavelength it was measured at (µm); `None`: at the spectrum's greatest value.
+    /// A relative spectrum need not be 1 there (tdTomato's FPbase spectrum exceeds 1 below
+    /// 700 nm), so a value quoted at a wavelength is applied at that wavelength.
+    pub wavelength: Option<f64>,
+    /// Where it comes from.
+    pub source: String,
 }
 
 /// What a two-photon file's values are.
@@ -288,15 +301,18 @@ pub enum TwoPhotonValues {
 
 /// A table of a two-photon spectrum: delimited text (comma, tab, semicolon or spaces)
 /// with a header row, the column named `column` or else the one whose name holds `2p`
-/// (any case), or the only value column; or JSON, a list of `[wavelength, value]` or an
+/// (any case; among several, the one that also names `protein`, as FPbase's spectra
+/// viewer exports `<protein> 2P` columns side by side), or the only value column; or JSON, a list of `[wavelength, value]` or an
 /// object with such a `data` list. Wavelengths above 100 are taken as nm. Rows without a
 /// value in the column are skipped; small negative values (noise) are set to 0. Returns
 /// (µm, value) rows and the column's name.
 pub fn read_two_photon(
     bytes: &[u8],
     column: Option<&str>,
+    protein: Option<&str>,
 ) -> Result<(Vec<(f64, f64)>, String), String> {
     let text = String::from_utf8_lossy(bytes);
+    let text = text.trim_start_matches('\u{feff}');
     let trimmed = text.trim_start();
     let mut rows: Vec<(f64, f64)> = Vec::new();
     let label;
@@ -349,12 +365,29 @@ pub fn read_two_photon(
                         .iter()
                         .position(|n| n.to_lowercase().contains(&wanted.to_lowercase()))
                 }),
-            None => names
-                .iter()
-                .skip(1)
-                .position(|n| n.to_lowercase().contains("2p"))
-                .map(|i| i + 1)
-                .or((names.len() == 2).then_some(1)),
+            None => {
+                let two: Vec<usize> = (1..names.len())
+                    .filter(|&i| names[i].to_lowercase().contains("2p"))
+                    .collect();
+                let named: Vec<usize> = match protein {
+                    Some(p) => two
+                        .iter()
+                        .copied()
+                        .filter(|&i| {
+                            let n = names[i].to_lowercase();
+                            let p = p.to_lowercase();
+                            n.split_whitespace().any(|w| w == p) || n.starts_with(&format!("{p} "))
+                        })
+                        .collect(),
+                    None => Vec::new(),
+                };
+                match (two.as_slice(), named.as_slice()) {
+                    (_, [one]) => Some(*one),
+                    ([one], _) => Some(*one),
+                    ([], _) => (names.len() == 2).then_some(1),
+                    _ => None,
+                }
+            }
         }
         .filter(|&i| i > 0)
         .ok_or_else(|| {
@@ -400,43 +433,43 @@ pub fn read_two_photon(
 }
 
 impl TwoPhoton {
-    /// From a table read by [`read_two_photon`]: normalised to a peak of 1, the peak taken
-    /// from the values when they are in GM, else from `peak` (GM, with where it comes from).
+    /// From a table read by [`read_two_photon`]: values in GM as they are; relative values
+    /// with `peak` to scale them (or none yet), `action` saying whether the cross-sections
+    /// are action cross-sections η σ₂.
     pub fn new(
         rows: Vec<(f64, f64)>,
         values: TwoPhotonValues,
-        peak: Option<(f64, String, bool)>,
+        peak: Option<Peak>,
+        action: bool,
         file: &str,
         sha256: &str,
     ) -> Result<Self, String> {
-        let top = rows.iter().map(|r| r.1).fold(0.0, f64::max);
-        let spectrum = rows.into_iter().map(|(w, v)| (w, v / top)).collect();
-        let (peak, action, peak_source) = match (values, peak) {
-            (TwoPhotonValues::Relative, None) => (None, false, None),
-            (TwoPhotonValues::Relative, Some((value, from, action))) => {
-                if !(value > 0.0 && value.is_finite()) {
-                    return Err("the peak cross-section must be positive".into());
-                }
-                if from.trim().is_empty() {
-                    return Err("say where the peak cross-section comes from".into());
-                }
-                (Some(value), action, Some(from))
-            }
-            (_, Some(_)) => {
+        if let Some(p) = &peak {
+            if values != TwoPhotonValues::Relative {
                 return Err("the file's values are in GM already; give no separate peak".into());
             }
-            (TwoPhotonValues::Absorption, None) => {
-                (Some(top), false, Some(format!("the file ({file})")))
+            if !(p.value > 0.0 && p.value.is_finite()) {
+                return Err("the peak cross-section must be positive".into());
             }
-            (TwoPhotonValues::Action, None) => {
-                (Some(top), true, Some(format!("the file ({file})")))
+            if p.source.trim().is_empty() {
+                return Err("say where the peak cross-section comes from".into());
             }
-        };
+            if let Some(w) = p.wavelength {
+                let at = optobench_materials::Spectrum::Table(rows.clone())
+                    .at(w)
+                    .map_err(|e| format!("the peak's wavelength: {e}"))?;
+                if at <= 0.0 {
+                    return Err(format!(
+                        "the spectrum is zero at the peak's wavelength {w} µm"
+                    ));
+                }
+            }
+        }
         Ok(Self {
-            spectrum,
+            spectrum: rows,
+            values,
             peak,
-            action,
-            peak_source,
+            action: action || values == TwoPhotonValues::Action,
             file: file.to_owned(),
             sha256: sha256.to_owned(),
         })
@@ -475,9 +508,21 @@ impl Protein {
                 two.file,
                 &two.sha256[..16.min(two.sha256.len())]
             ));
-            if let (Some(peak), Some(from)) = (two.peak, &two.peak_source) {
-                let kind = if two.action { "action " } else { "" };
-                text.push_str(&format!(", peak {kind}cross-section {peak} GM from {from}"));
+            let kind = if two.action { "action " } else { "" };
+            match (&two.peak, two.values) {
+                (Some(p), _) => {
+                    let at = p
+                        .wavelength
+                        .map_or("at its greatest value".to_owned(), |w| {
+                            format!("at {} nm", w * 1e3)
+                        });
+                    text.push_str(&format!(
+                        ", scaled by the {kind}cross-section {} GM {at} from {}",
+                        p.value, p.source
+                    ));
+                }
+                (None, TwoPhotonValues::Relative) => {}
+                (None, _) => text.push_str(&format!(", values in GM ({kind}cross-sections)")),
             }
         }
         text
@@ -522,18 +567,25 @@ impl Protein {
             } else {
                 "two_photon_cross_section_gm"
             };
-            match two.peak {
-                Some(peak) => {
-                    out.push_str(&format!("{key} = {peak}\n"));
+            match (&two.peak, two.values) {
+                (_, TwoPhotonValues::Absorption | TwoPhotonValues::Action) => {
+                    out.push_str(&format!("{key} = {}\n", table(&two.spectrum)));
+                }
+                (Some(peak), TwoPhotonValues::Relative) => {
+                    out.push_str(&format!("{key} = {}\n", peak.value));
+                    if let Some(w) = peak.wavelength {
+                        out.push_str(&format!("two_photon_reference_um = {w}\n"));
+                    }
                     out.push_str(&format!("two_photon_spectrum = {}\n", table(&two.spectrum)));
                 }
-                None => {
+                (None, TwoPhotonValues::Relative) => {
                     out.push_str(
-                        "# The two-photon spectrum is relative: give its peak cross-section from a\n\
-                         # publication (absorption, or an action cross-section η σ₂ as\n\
-                         # two_photon_action_cross_section_gm), add it to `source`, and remove\n\
-                         # the comment marks.\n\
-                         # two_photon_cross_section_gm = …\n",
+                        "# The two-photon spectrum is relative: give a published cross-section, the\n\
+                         # wavelength it was measured at (two_photon_reference_um; else it applies\n\
+                         # at the spectrum's greatest value), add its source to `source`, and\n\
+                         # remove the comment marks.\n\
+                         # two_photon_cross_section_gm = …\n\
+                         # two_photon_reference_um = …\n",
                     );
                     for line in format!("two_photon_spectrum = {}", table(&two.spectrum)).lines() {
                         out.push_str(&format!("# {line}\n"));
@@ -600,8 +652,9 @@ pub fn import(
         "protein_sha256": proteins.map(|p| sha256_hex(p.1)),
         "two_photon_file": two_photon.map(|p| p.0.to_string_lossy().into_owned()),
         "two_photon_sha256": two_photon.map(|p| sha256_hex(p.1)),
-        "two_photon_peak_gm": protein.two_photon.as_ref().and_then(|t| t.peak),
-        "two_photon_peak_source": protein.two_photon.as_ref().and_then(|t| t.peak_source.clone()),
+        "two_photon_peak_gm": protein.two_photon.as_ref().and_then(|t| t.peak.as_ref().map(|p| p.value)),
+        "two_photon_peak_um": protein.two_photon.as_ref().and_then(|t| t.peak.as_ref().and_then(|p| p.wavelength)),
+        "two_photon_peak_source": protein.two_photon.as_ref().and_then(|t| t.peak.as_ref().map(|p| p.source.clone())),
         "directory": directory.to_string_lossy(),
     });
     let pretty = serde_json::to_string_pretty(&record).map_err(|e| e.to_string())?;
@@ -680,47 +733,63 @@ mod tests {
     fn a_two_photon_table_is_read_and_scaled() {
         // Several spectra in one table; the two-photon column found by its name.
         let csv = "wavelength,TestFP EX,TestFP 2P\n700,,10\n800,0.1,40\n900,0.2,20\n";
-        let (rows, label) = read_two_photon(csv.as_bytes(), None).expect("read");
+        let (rows, label) = read_two_photon(csv.as_bytes(), None, None).expect("read");
         assert_eq!(label, "TestFP 2P");
         assert_eq!(rows, vec![(0.7, 10.0), (0.8, 40.0), (0.9, 20.0)]);
         // Given a column; tabs; µm stays µm; JSON pairs.
         let (rows, _) = read_two_photon(
             "nm\tex\tfoo\n0.8\t1\t3\n0.9\t1\t6\n".as_bytes(),
             Some("foo"),
+            None,
         )
         .expect("read");
         assert_eq!(rows[1], (0.9, 6.0));
-        let (rows, _) = read_two_photon(b"[[800, 0.5], [900, 1.0]]", None).expect("json");
+        let (rows, _) = read_two_photon(b"[[800, 0.5], [900, 1.0]]", None, None).expect("json");
         assert_eq!(rows[0], (0.8, 0.5));
         assert!(
-            read_two_photon("w,a,b\n800,1,2\n".as_bytes(), None)
+            read_two_photon("w,a,b\n800,1,2\n".as_bytes(), None, None)
                 .expect_err("which")
                 .contains("which column")
         );
-        // In GM: the peak is the file's; relative: given with its source, or left open.
+        // Two "2P" columns, as FPbase's viewer exports them: the protein's is taken.
+        let both = "\u{feff}\"Wavelength\",\"AFP 2P\",\"BFP 2P\"\n800,1,0.5\n900,0.5,1\n";
+        let (rows, label) = read_two_photon(both.as_bytes(), None, Some("bfp")).expect("named");
+        assert_eq!((label.as_str(), rows[1]), ("BFP 2P", (0.9, 1.0)));
+        assert!(read_two_photon(both.as_bytes(), None, None).is_err());
+        // In GM as it is; relative with a peak at a wavelength, which must be on the table.
         let gm = TwoPhoton::new(
             vec![(0.7, 10.0), (0.8, 40.0)],
             TwoPhotonValues::Absorption,
             None,
-            "f.csv",
-            "00",
-        )
-        .expect("gm");
-        assert_eq!((gm.peak, gm.spectrum[0].1), (Some(40.0), 0.25));
-        let relative = TwoPhoton::new(
-            vec![(0.7, 0.5), (0.8, 1.0)],
-            TwoPhotonValues::Relative,
-            None,
+            false,
             "f",
             "00",
         )
-        .expect("relative");
-        assert!(relative.peak.is_none());
+        .expect("gm");
+        assert_eq!(gm.spectrum[1].1, 40.0);
+        let peak = |w: Option<f64>, source: &str| Peak {
+            value: 30.0,
+            wavelength: w,
+            source: source.into(),
+        };
+        let rows = vec![(0.7, 1.2), (0.8, 1.0), (0.9, 0.5)];
         assert!(
             TwoPhoton::new(
-                vec![(0.7, 0.5), (0.8, 1.0)],
+                rows.clone(),
                 TwoPhotonValues::Relative,
-                Some((30.0, " ".into(), false)),
+                Some(peak(Some(0.8), "paper")),
+                false,
+                "f",
+                "00"
+            )
+            .is_ok()
+        );
+        assert!(
+            TwoPhoton::new(
+                rows.clone(),
+                TwoPhotonValues::Relative,
+                Some(peak(Some(1.2), "paper")),
+                false,
                 "f",
                 "00"
             )
@@ -728,9 +797,21 @@ mod tests {
         );
         assert!(
             TwoPhoton::new(
-                vec![(0.7, 0.5), (0.8, 1.0)],
+                rows.clone(),
+                TwoPhotonValues::Relative,
+                Some(peak(None, " ")),
+                false,
+                "f",
+                "00"
+            )
+            .is_err()
+        );
+        assert!(
+            TwoPhoton::new(
+                rows,
                 TwoPhotonValues::Action,
-                Some((30.0, "paper".into(), true)),
+                Some(peak(None, "paper")),
+                true,
                 "f",
                 "00"
             )

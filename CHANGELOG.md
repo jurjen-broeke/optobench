@@ -11,7 +11,8 @@ with the release that introduced them.
   their provenance and gives (or appends to a design) a `[[fluorophore]]` entry carrying
   FPbase's citation and the protein's DOI. The API has no two-photon data: a two-photon
   excitation spectrum exported from FPbase's website is imported from its own file
-  (`two_photon`, relative with a cited peak, or in GM). Fluorophores take
+  (`two_photon`, the protein's `2P` column of FPbase's CSV export; relative with a
+  cited peak, applied at the wavelength it was quoted at, or in GM). Fluorophores take
   `two_photon_spectrum` (relative) shaped by a peak cross-section. Licence review entry
   for FPbase.
 - M11b2 the excitation volume: new command `excitation` gives a fluorophore's one- and

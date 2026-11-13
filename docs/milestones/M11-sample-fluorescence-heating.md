@@ -161,7 +161,14 @@ the diffusion approximation here; photon transport by Monte Carlo replaces it in
       named like `2P`, or `two_photon_column`); its values are relative, or in GM
       (`two_photon_values = "gm"` or `"action-gm"`), and a relative spectrum needs
       `two_photon_peak_gm` with `two_photon_peak_source` before the entry uses it (else it
-      is written commented out). It is the excitation only: emission after two-photon
+      is written commented out), applied at `two_photon_peak_wavelength_nm` if given
+      (designs: `two_photon_reference_um`), else at the spectrum's greatest value. FPbase's
+      export (spectra viewer CSV, read 2026-11-13 for EGFP and tdTomato): a byte-order
+      mark, quoted headers, a `Wavelength` column in nm and one `<protein> 2P` column per
+      protein, blank where a spectrum has no value; the values are relative, EGFP's 1.0 at
+      927 nm (610–1095 nm), tdTomato's greatest 1.122 at 684 nm (680–1399 nm), so a
+      cross-section quoted at another wavelength must say which. Among several `2P`
+      columns the protein's own is taken. It is the excitation only: emission after two-photon
       excitation follows the one-photon emission spectrum (Xu et al. 1996, PNAS). Designs
       take `two_photon_spectrum` (relative) shaped by a peak
       `two_photon_cross_section_gm` or `two_photon_action_cross_section_gm`
@@ -171,8 +178,11 @@ the diffusion approximation here; photon transport by Monte Carlo replaces it in
       quantum yield, lifetime and the attribution; a second import under the same id, an
       ambiguous file, an unknown state and broken JSON refused; a relative two-photon
       spectrum shaped by an absorption or an action peak; a two-photon table in GM used
-      as it is, a relative one with a cited action peak, one without a peak left
-      commented out, a peak without its source refused
+      as it is, a relative one with a cited action peak, one with a peak quoted at another
+      wavelength than its greatest (and outside its table, refused), one without a peak
+      left commented out, a peak without its source refused; the export's form (mark,
+      quoted headers, two proteins' columns) in the fixture; the real export read for both
+      proteins from the local corpus
 
 ## M11c Emission and the photon budget
 

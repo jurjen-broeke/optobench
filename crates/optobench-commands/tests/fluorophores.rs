@@ -120,8 +120,8 @@ fn a_protein_is_imported_into_a_design_with_its_attribution() {
 
 /// A two-photon excitation table as a user might export it (made-up values): several
 /// columns, the two-photon one named `2P`, values in GM.
-const TWO_PHOTON: &str =
-    "wavelength,TestFP EX,TestFP 2P\n880,,12\n900,0.1,30\n920,0.05,40\n960,,16\n";
+const TWO_PHOTON: &str = "\u{feff}\"Wavelength\",\"TestFP EM\",\"TestFP 2P\",\"OtherFP 2P\"\n\
+    880,,12,1\n900,0.1,30,2\n920,0.05,40,3\n960,,16,\n";
 
 #[test]
 fn a_two_photon_spectrum_comes_from_its_own_file() {
@@ -147,8 +147,9 @@ fn a_two_photon_spectrum_comes_from_its_own_file() {
     // Values in GM: the peak is the file's, active at once.
     let design = scratch.file("gm.optobench", DESIGN);
     let result = import(json!({ "two_photon_values": "gm" }), &design).expect("imported");
+    assert_eq!(result["fluorophore"]["two_photon_spectrum"]["values"], "gm");
     assert_eq!(
-        result["fluorophore"]["two_photon_spectrum"]["peak_gm"],
+        result["fluorophore"]["two_photon_spectrum"]["greatest"][1],
         40.0
     );
     let scene = read(&design);
@@ -174,11 +175,32 @@ fn a_two_photon_spectrum_comes_from_its_own_file() {
     let scene = read(&design);
     let sigma = scene.fluorophores[0].two_photon.as_ref().expect("σ₂");
     assert!((sigma.at(0.92).expect("in range") - 30e-48).abs() < 1e-60);
-    assert!(
-        scene.fluorophores[0]
-            .source
-            .contains("peak action cross-section 21 GM from a test paper")
-    );
+    assert!(scene.fluorophores[0].source.contains(
+        "scaled by the action cross-section 21 GM at its greatest value from a test paper"
+    ));
+
+    // A published value quoted at a wavelength other than the greatest (as tdTomato's
+    // relative spectrum, above 1 below 700 nm): 15 GM at 900 nm, where the table has 30,
+    // gives 20 GM at 920 nm, where it has 40.
+    let design = scratch.file("reference.optobench", DESIGN);
+    import(
+        json!({ "two_photon_peak_gm": 15.0, "two_photon_peak_wavelength_nm": 900.0,
+                "two_photon_peak_source": "a test paper" }),
+        &design,
+    )
+    .expect("imported");
+    let scene = read(&design);
+    let sigma = scene.fluorophores[0].two_photon.as_ref().expect("σ₂");
+    assert!((sigma.at(0.9).expect("in range") - 15e-48).abs() < 1e-60);
+    assert!((sigma.at(0.92).expect("in range") - 20e-48).abs() < 1e-60);
+    let design = scratch.file("outside.optobench", DESIGN);
+    let error = import(
+        json!({ "two_photon_peak_gm": 15.0, "two_photon_peak_wavelength_nm": 1200.0,
+                "two_photon_peak_source": "a test paper" }),
+        &design,
+    )
+    .expect_err("outside the table");
+    assert!(error.contains("peak's wavelength"), "{error}");
 
     // Relative without a peak: written commented out, so not used.
     let design = scratch.file("relative.optobench", DESIGN);
