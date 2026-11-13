@@ -341,7 +341,8 @@ pub fn golden_periscope() -> String {
     text.replacen(
         "kind = \"sidecar\"\n",
         &format!(
-            "kind = \"sidecar\"\nstep = \"{}\"\n",
+            // A TOML literal string: Windows paths keep their backslashes.
+            "kind = \"sidecar\"\nstep = '{}'\n",
             step.to_string_lossy()
         ),
         1,
