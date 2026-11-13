@@ -97,7 +97,8 @@ pub(crate) fn room(
 /// `max_iterations` (default 100), `report` (true: write the move report next to the
 /// design as `<design>.moves.json` and `.moves.md`; or a path stem), `headroom_warning`
 /// (the share of its travel towards one end beyond which an adjuster is off-centre,
-/// default 0.5) and `data_directory`. Returns each free DOF's start and suggested value,
+/// default 0.5), `small_range_mm` (slides adjusting this little or less either way are
+/// warned about before anything else, default 1) and `data_directory`. Returns each free DOF's start and suggested value,
 /// its adjustment room where it has a range, warnings for adjusters off-centre or at a
 /// limit, and every merit term before and after.
 pub(crate) fn optimize(parameters: &Parameters) -> Result<Value, CommandError> {
@@ -110,9 +111,11 @@ pub(crate) fn optimize(parameters: &Parameters) -> Result<Value, CommandError> {
             "max_iterations",
             "report",
             "headroom_warning",
+            "small_range_mm",
             "data_directory",
         ],
     )?;
+    let small = crate::trace::small_range(parameters)?;
     let warning = match parameters.get("headroom_warning") {
         None => 0.5,
         Some(v) => v
@@ -196,18 +199,19 @@ pub(crate) fn optimize(parameters: &Parameters) -> Result<Value, CommandError> {
             written = json!({ "json": json_path.to_string_lossy(), "markdown": md_path.to_string_lossy() });
         }
     }
-    let warnings: Vec<String> = dofs
-        .iter()
-        .filter(|d| d["room"].is_object() && d["room"]["status"] != "ok")
-        .map(|d| {
-            format!(
-                "`{}` uses {:.0} % of its travel towards one end: {}",
-                d["name"].as_str().unwrap_or("?"),
-                100.0 * d["room"]["used"].as_f64().unwrap_or(0.0).abs(),
-                d["room"]["advice"].as_str().unwrap_or("")
-            )
-        })
-        .collect();
+    let mut warnings = crate::trace::range_warnings(&scene, small);
+    warnings.extend(
+        dofs.iter()
+            .filter(|d| d["room"].is_object() && d["room"]["status"] != "ok")
+            .map(|d| {
+                format!(
+                    "`{}` uses {:.0} % of its travel towards one end: {}",
+                    d["name"].as_str().unwrap_or("?"),
+                    100.0 * d["room"]["used"].as_f64().unwrap_or(0.0).abs(),
+                    d["room"]["advice"].as_str().unwrap_or("")
+                )
+            }),
+    );
     Ok(json!({
         "dofs": dofs,
         "warnings": warnings,

@@ -5,6 +5,11 @@ with the release that introduced them.
 
 ## Unreleased
 
+- Mounts: `[[mount]]` tables describe a mount's adjusters once (kind, axis, `range` or
+  `travel`, `source`); `mount = "<id>"` on an element, source or detector gives it those
+  DOFs before the solve. DOFs take `travel` (the part placed in its middle) and
+  `source`. `trace`, `optimize` and `tolerance` warn about slides that adjust 1 mm or
+  less either way (`small_range_mm`).
 - M14d adjustment range: merit term `headroom` keeps adjusters near the middle of their
   ranges where the optics leave a choice; `optimize` and the move report give each
   ranged DOF's adjustment room (travel used and left, the range after adjusting, a

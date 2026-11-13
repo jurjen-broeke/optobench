@@ -481,6 +481,7 @@ pub(crate) fn command(parameters: &Parameters) -> Result<Value, CommandError> {
         "tolerances": tolerances_json(&design.scene),
         "criteria": criteria_json(&design.tolerancing),
         "compensators": design.tolerancing.compensators,
+        "warnings": crate::trace::range_warnings(&design.scene, crate::trace::small_range(parameters)?),
     });
     match parameters
         .get("mode")

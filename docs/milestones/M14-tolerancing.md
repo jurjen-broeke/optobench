@@ -139,10 +139,31 @@ part's specification), not bundled.
       does. On the local Thorlabs periscope the misaligned design aligns with every
       adjuster within 33 % of its travel (L2_z), headroom moving them slightly
 
+- [x] Mounts (asked for 2026-11-13, with the user's examples: an XY translation mount
+      ±1 mm in X and Y, a translation stage of 12.7 mm, a rotation mount of 360° coarse
+      and ±7° fine, a kinematic mirror mount of ±4° tip and tilt): a `[[mount]]` table
+      (id, `source`, `adjusters` as DOF entries without their item) given to elements,
+      sources and detectors by `mount = "<id>"` or a list (a mount on a mount); each
+      adjuster becomes the DOF `<item>_<name>` in the item's frame, with the mount's
+      source; the item's own DOF entries change it key by key (`optobench_io::mounts`,
+      expanded on the file's tables before anything reads them). DOFs take `travel` (the
+      whole travel, the part placed in its middle) and `source`; a coarse rotation is a
+      DOF without a range beside its fine one
+- [x] Warnings before the solve: `trace`, `optimize` and `tolerance` list the free slides
+      that adjust `small_range_mm` (default 1 mm) or less either way from the middle of
+      their range
+- [x] Checks: the four mounts give their ranges (12.7 mm travel as ±6.35 mm), sources,
+      an unlimited coarse rotation, a mount on a mount; the ±1 mm slides and only they
+      warned (none at 0.5 mm); an item's entry changes the mount's value and adds its
+      own; the solve with headroom keeps every adjuster in range and centres the beam;
+      unknown mounts, mounts without a source, `range` with `travel` refused
+
 ## Open questions
 
 - Part tolerances on STEP solids (a lens body from CAD): its prescription is not
   modelled, only its faces; tolerancing them needs the library prescription (M5c1) or is
   left out.
+- Mounts in the parts library (a mount's adjusters kept with the user's parts, given by
+  its part number), once a design's `[[mount]]` tables have been used for a while.
 - Whether to add more metrics than the merit terms (PSF Strehl, coupling efficiency into
   a fibre from M10) as criteria.

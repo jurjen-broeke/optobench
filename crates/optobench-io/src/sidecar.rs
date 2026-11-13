@@ -681,9 +681,10 @@ fn add_part(
 /// named after a part (tagged automatically unless `[library] automatic = false`).
 pub fn read(text: &str, sidecar: &Path, lookups: &Lookups) -> Result<Read, FileError> {
     check_header(text)?;
-    let root: Table = text
+    let mut root: Table = text
         .parse()
         .map_err(|e: toml::de::Error| error(format!("not valid TOML: {e}")))?;
+    crate::mounts::expand(&mut root)?;
     // Embedded values (`[resolved]`) first, then the user's own data.
     let embedded = crate::resolved::read(&root)?;
     let merged_library = embedded.library(lookups.library)?;

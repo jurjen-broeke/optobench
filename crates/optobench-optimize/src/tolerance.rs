@@ -187,6 +187,7 @@ pub fn apply(scene: &Scene, errors: &[f64]) -> Result<Scene, String> {
                     locked: true,
                     follows: None,
                     value: 0.0,
+                    source: None,
                 });
                 overrides.insert(name, e);
             }

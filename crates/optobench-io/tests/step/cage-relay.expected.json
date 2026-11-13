@@ -130,5 +130,6 @@
     "stopped_w": 0.0
   },
   "parts": [],
-  "rays": 2019
+  "rays": 2019,
+  "warnings": []
 }

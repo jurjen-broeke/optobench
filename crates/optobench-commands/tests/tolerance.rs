@@ -598,11 +598,24 @@ fn an_adjuster_far_off_centre_is_reported_with_its_range_after_adjusting() {
         (after[0] + 1.8).abs() < 1e-6 && (after[1] - 0.2).abs() < 1e-6,
         "{after:?}"
     );
+    // Warned twice: a short range (±1 mm) before the solve, then the room it leaves.
+    let warnings: Vec<&str> = r["warnings"]
+        .as_array()
+        .expect("warnings")
+        .iter()
+        .filter_map(|w| w.as_str())
+        .collect();
     assert!(
-        r["warnings"][0]
-            .as_str()
-            .expect("warning")
-            .contains("re-place the part's mounting by 0.8")
+        warnings
+            .iter()
+            .any(|w| w.contains("adjusts only ±1.000 mm")),
+        "{warnings:?}"
+    );
+    assert!(
+        warnings
+            .iter()
+            .any(|w| w.contains("re-place the part's mounting by 0.8")),
+        "{warnings:?}"
     );
     let markdown = std::fs::read_to_string(dir.join("off.moves.md")).expect("report");
     assert!(
@@ -661,4 +674,155 @@ fn a_compensator_that_runs_out_of_range_fails_the_trial() {
         "{c}"
     );
     assert!((c["mean"].as_f64().expect("mean")).abs() < 0.05);
+}
+
+/// The specifications the user gave (2026-11-13): an XY translation mount ±1 mm in X and
+/// Y; a translation stage of 12.7 mm in one direction; a rotation mount turning freely
+/// (coarse, 360°) with ±7° of fine adjustment; a kinematic mirror mount with ±4° of tip
+/// and tilt.
+const MOUNTS: &str = "[[mount]]\nid = \"XY\"\nsource = \"XY translation mount: ±1 mm in X and Y\"\n\
+    adjusters = [ { name = \"x\", kind = \"slide\", axis = \"x\", range = [-1, 1] },\n\
+                  { name = \"y\", kind = \"slide\", axis = \"y\", range = [-1, 1] } ]\n\n\
+    [[mount]]\nid = \"stage\"\nsource = \"translation stage: 12.7 mm of travel\"\n\
+    adjusters = [ { name = \"z\", kind = \"slide\", axis = \"z\", travel = 12.7 } ]\n\n\
+    [[mount]]\nid = \"rotation\"\nsource = \"rotation mount: 360° coarse, ±7° fine\"\n\
+    adjusters = [ { name = \"coarse\", kind = \"tilt\", axis = \"z\" },\n\
+                  { name = \"fine\", kind = \"tilt\", axis = \"z\", range = [-7, 7] } ]\n\n\
+    [[mount]]\nid = \"kinematic\"\nsource = \"kinematic mirror mount: ±4° tip and tilt\"\n\
+    adjusters = [ { name = \"tip\", kind = \"tilt\", axis = \"x\", range = [-4, 4] },\n\
+                  { name = \"tilt\", kind = \"tilt\", axis = \"y\", range = [-4, 4] } ]\n\n";
+
+fn mounted(lens_extra: &str) -> String {
+    format!(
+        "format = \"optobench/1\"\nkind = \"layout\"\nlayout = \"planar\"\n\n{MOUNTS}\
+         [[source]]\nid = \"beam\"\nkind = \"collimated\"\ndiameter = 2.0\nrings = 6\nat = 0\n\
+         wavelength_um = 0.633\npower_w = 1.0\nmount = \"rotation\"\n\n\
+         [[element]]\nid = \"M\"\nkind = \"mirror\"\nat = 30\nfold = 90\ndiameter = 25\nclear_aperture = 24\nmount = \"kinematic\"\n\n\
+         [[element]]\nid = \"L\"\nkind = \"ideal_lens\"\nat = 50\nfocal_length = 100\nmount = \"XY\"\n{lens_extra}\n\n\
+         [[detector]]\nid = \"D\"\nat = 150\nsize = [10, 10]\npixels = [10, 10]\nmount = [\"stage\", \"XY\"]\n\n\
+         [[merit]]\nkind = \"centring\"\ndetector = \"D\"\n\n[[merit]]\nkind = \"headroom\"\n"
+    )
+}
+
+#[test]
+fn mounts_give_their_adjusters_ranges_before_the_solve() {
+    let r = run_command("trace", &mounted(""), "mounts", serde_json::json!({}));
+    let dofs = r["dofs"].as_array().expect("dofs");
+    let dof = |name: &str| {
+        dofs.iter()
+            .find(|d| d["name"] == name)
+            .unwrap_or_else(|| panic!("{name} in {dofs:?}"))
+    };
+    let range = |name: &str| -> Vec<f64> {
+        dof(name)["range"]
+            .as_array()
+            .map(|a| a.iter().map(|v| v.as_f64().expect("v")).collect())
+            .unwrap_or_default()
+    };
+    assert_eq!(range("L_x"), vec![-1.0, 1.0]);
+    assert_eq!(
+        dof("L_y")["source"],
+        "XY translation mount: ±1 mm in X and Y"
+    );
+    // 12.7 mm of travel, the detector placed in its middle.
+    assert_eq!(range("D_z"), vec![-6.35, 6.35]);
+    assert_eq!(range("D_x"), vec![-1.0, 1.0]);
+    // Coarse rotation unlimited, fine ±7°; tip and tilt ±4°.
+    assert!(dof("beam_coarse").get("range").is_none());
+    assert!((range("beam_fine")[1] - 7.0).abs() < 1e-9);
+    assert!((range("M_tip")[0] + 4.0).abs() < 1e-9 && (range("M_tilt")[1] - 4.0).abs() < 1e-9);
+    // Warned before anything is solved: the ±1 mm slides, not the stage nor the angles.
+    let warnings: Vec<&str> = r["warnings"]
+        .as_array()
+        .expect("warnings")
+        .iter()
+        .filter_map(|w| w.as_str())
+        .collect();
+    for name in ["L_x", "L_y", "D_x", "D_y"] {
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.contains(&format!("`{name}` adjusts only ±1.000 mm"))),
+            "{warnings:?}"
+        );
+    }
+    assert_eq!(warnings.len(), 4, "{warnings:?}");
+    let quiet = run_command(
+        "trace",
+        &mounted(""),
+        "quiet",
+        serde_json::json!({ "small_range_mm": 0.5 }),
+    );
+    assert!(quiet["warnings"].as_array().expect("warnings").is_empty());
+    // An item's own entry changes the mount's key by key.
+    let changed = run_command(
+        "trace",
+        &mounted(
+            "dof = [ { name = \"L_x\", value = 0.25 }, { name = \"L_z\", kind = \"slide\", axis = \"z\", range = [-2, 2] } ]",
+        ),
+        "changed",
+        serde_json::json!({}),
+    );
+    let dofs = changed["dofs"].as_array().expect("dofs");
+    let lx = dofs.iter().find(|d| d["name"] == "L_x").expect("L_x");
+    assert_eq!(lx["value"].as_f64(), Some(0.25));
+    assert_eq!(lx["range"], serde_json::json!([-1.0, 1.0]));
+    assert!(dofs.iter().any(|d| d["name"] == "L_z"));
+}
+
+#[test]
+fn the_solve_keeps_mounted_adjusters_in_their_ranges() {
+    // The lens 0.6 mm off in x: the XY mount and the detector's XY both can take it up;
+    // headroom shares it, every adjuster within its range, the warnings given up front.
+    let r = run_command(
+        "optimize",
+        &mounted("dof = [ { name = \"L_x\", value = 0.6 } ]"),
+        "solve",
+        serde_json::json!({}),
+    );
+    assert!(
+        r["warnings"][0]
+            .as_str()
+            .expect("warning")
+            .contains("adjusts only")
+    );
+    for d in r["dofs"].as_array().expect("dofs") {
+        if let Some(used) = d["room"]["used"].as_f64() {
+            assert!(used.abs() <= 1.0, "{d}");
+        }
+    }
+    let centring = &r["merit"][0]["end"];
+    assert!(centring[0].as_f64().expect("x").abs() < 1e-3, "{r}");
+}
+
+#[test]
+fn mounts_are_checked() {
+    let refused = |text: &str, words: &str| {
+        let path = std::env::temp_dir().join(format!(
+            "optobench-mounts-bad-{}.optobench",
+            std::process::id()
+        ));
+        std::fs::write(&path, text).expect("written");
+        let message = optobench_commands::Registry::standard()
+            .run(
+                "trace",
+                &serde_json::json!({ "path": path.to_string_lossy() }),
+            )
+            .expect_err("refused")
+            .message;
+        let _ = std::fs::remove_file(&path);
+        assert!(message.contains(words), "{message}");
+    };
+    refused(
+        &mounted("").replace("mount = \"XY\"\n", "mount = \"YX\"\n"),
+        "no [[mount]] `YX`",
+    );
+    refused(
+        &mounted("").replace("source = \"XY translation mount: ±1 mm in X and Y\"\n", ""),
+        "say where its ranges come from",
+    );
+    refused(
+        &mounted("").replace("travel = 12.7", "travel = 12.7, range = [0, 1]"),
+        "give `range` or `travel`, not both",
+    );
 }
