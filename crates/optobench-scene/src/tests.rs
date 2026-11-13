@@ -65,6 +65,7 @@ fn empty() -> Scene {
         dofs: Vec::new(),
         fluorophores: Vec::new(),
         thermal: Vec::new(),
+        tolerances: Vec::new(),
     }
 }
 

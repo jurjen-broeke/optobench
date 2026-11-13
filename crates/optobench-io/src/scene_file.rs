@@ -1464,6 +1464,8 @@ pub fn parse_with(text: &str, lookups: &Lookups) -> Result<Scene, FileError> {
             "resolved",
             "merit",
             "fluorophore",
+            "tolerance",
+            "tolerancing",
         ],
         "top level",
     )?;
@@ -1541,6 +1543,7 @@ pub fn parse_with(text: &str, lookups: &Lookups) -> Result<Scene, FileError> {
         dofs: Vec::new(),
         fluorophores: Vec::new(),
         thermal: Vec::new(),
+        tolerances: Vec::new(),
     };
 
     for item in items(&root, "source")? {
@@ -1906,6 +1909,7 @@ pub fn parse_with(text: &str, lookups: &Lookups) -> Result<Scene, FileError> {
     }
     scene.fluorophores = fluorophores(&root, &scene)?;
     check_dofs(&scene)?;
+    scene.tolerances = crate::tolerance::tolerances(&root, &scene)?;
     scene.placed().map_err(|e| error(e.to_string()))
 }
 

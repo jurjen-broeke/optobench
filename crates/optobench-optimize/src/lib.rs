@@ -11,6 +11,7 @@
 #![forbid(unsafe_code)]
 
 pub mod lm;
+pub mod tolerance;
 
 use std::collections::BTreeMap;
 

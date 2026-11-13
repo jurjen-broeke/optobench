@@ -722,6 +722,8 @@ pub fn read(text: &str, sidecar: &Path, lookups: &Lookups) -> Result<Read, FileE
             "merit",
             "library",
             "fluorophore",
+            "tolerance",
+            "tolerancing",
         ],
         "top level",
     )?;
@@ -767,6 +769,7 @@ pub fn read(text: &str, sidecar: &Path, lookups: &Lookups) -> Result<Read, FileE
         dofs: Vec::new(),
         fluorophores: Vec::new(),
         thermal: Vec::new(),
+        tolerances: Vec::new(),
     };
     let mut tagged = vec![false; bodies.len()];
     // Bodies an element names, tagged or not (a library part's mount).
@@ -1144,6 +1147,7 @@ pub fn read(text: &str, sidecar: &Path, lookups: &Lookups) -> Result<Read, FileE
     }
     scene.fluorophores = crate::scene_file::fluorophores(&root, &scene)?;
     crate::scene_file::check_dofs(&scene)?;
+    scene.tolerances = crate::tolerance::tolerances(&root, &scene)?;
     let scene = scene.placed().map_err(|e| error(e.to_string()))?;
     Ok(Read { scene, parts })
 }

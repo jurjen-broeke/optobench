@@ -20,34 +20,37 @@ until then every number in a test is from theory (closed forms of the linear cas
 
 ## M14a The tolerance model and sensitivities
 
-- [ ] Tolerances in layouts and sidecars (`[[tolerance]]`), each with a name, a target
-      (an element, source, detector or, in a sidecar, a CAD occurrence, as DOFs name
-      them) and a limit:
-      - placement (mount) errors: `slide` along an axis (mm) and `tilt` about an axis
-        through a pivot (degrees), as DOF motions but never adjusted; on a DOF itself:
-        an error added to its value (`dof = "<name>"`), for an adjustment that cannot be
-        set exactly
-      - part errors of lens elements: `radius` (of a surface, mm or a fraction), `thickness`
-        (mm), `index` (Δn) and `abbe` later if needed; of an ideal lens: `focal_length`
-      - distribution: `uniform` (default), `normal` (σ = limit / 3, truncated at the
-        limit) or `end` (±limit, equal chances)
-- [ ] Criteria: the merit terms of M6 (focus, centring, pointing, collimation, power at a
-      detector) with a pass limit each (`[[criterion]]`); compensators: DOFs named in
-      `[tolerancing] compensators = [...]`, re-optimised on the file's `[[merit]]`
-- [ ] A seeded random generator in the engine, no new dependency: xoshiro256** seeded by
-      SplitMix64 (D. Blackman and S. Vigna, "Scrambled linear pseudorandom number
-      generators", ACM Trans. Math. Softw. 47, 36 (2021); written from the paper), normal
-      deviates by Box–Muller; the same seed gives the same trials on every platform
-- [ ] Applying a trial to a scene (`optobench_optimize::tolerance`): placement errors as
-      moves of the target on top of its DOFs, part errors on the element's prescription;
-      the nominal scene unchanged
-- [ ] Sensitivity analysis: each tolerance alone at ±limit (with and without
-      compensation), the change of every criterion, its RSS estimate and the ranking
-- [ ] Checks: the generator's statistics (mean, variance, a χ² test of uniformity, the
-      normal's moments and truncation); a decentred ideal lens moves the focus by the
-      decentre, a tilted fold mirror turns the beam by twice its tilt, a lens thickness
-      and radius change moves the paraxial focus as the lensmaker's formula says; a
-      compensator (a focus slide) takes out a despace exactly
+- [x] Tolerances in layouts and sidecars: top-level `[[tolerance]]` tables
+      (`optobench_io::tolerance`, `optobench_scene::tolerance`), each with a name, a kind,
+      a limit and a distribution:
+      - placement errors `slide` (mm) and `tilt` (degrees) of an element, source or
+        detector (`target`; axes in its nominal frame or the scene's, the pivot by default
+        its origin) or of a CAD occurrence (`occurrence`, scene frame, pivot given), never
+        adjusted; `dof`: an error added to a DOF's value
+      - part errors of lens elements: `radius` (mm, or a fraction with `relative`; flat
+        surfaces refused), `thickness` (mm), `index` (Δn); of an ideal lens
+        `focal_length` (mm or a fraction)
+      - `uniform` (default), `normal` (σ = limit / 3, truncated) or `end` (±limit)
+- [x] `[tolerancing]`: `criteria` (merit terms with `max`, the largest magnitude that
+      passes: the residual vector's length) and `compensators` (DOFs re-optimised per
+      evaluation on the design's `[[merit]]`, every other DOF held)
+- [x] The generator (`optobench_optimize::tolerance::Random`): xoshiro256** seeded by
+      SplitMix64, independent streams per trial, Box–Muller normals, draws
+- [x] Applying errors (`tolerance::apply`): placement errors as locked DOFs of their own
+      (`tolerance <name>`, after the target's DOFs), DOF errors on the values, part errors
+      on the prescription (Δn by a shifted material)
+- [x] Sensitivities (`tolerance::sensitivity`): nominal, each tolerance alone at ±limit
+      with compensation, the larger change per criterion, the RSS and the ranking
+- [x] Checks (commands `tests/tolerance.rs`; the generator in its unit tests):
+      SplitMix64's first output for seed 0 as published; uniform mean, variance and χ²;
+      normal moments; the truncated normal's variance 0.9733 (L/3)²; end draws ±L evenly;
+      a decentred ideal lens moves the focus by the decentre (10⁻⁹) and the RSS and
+      ranking follow; a fold mirror tilted θ turns the beam 2θ (10⁻⁹); radius,
+      thickness, index and relative-radius errors of a thick singlet move the
+      compensated detector by the thick-lens formula's change of the back focus
+      (2 µm, best against paraxial focus of a 1 mm beam); a despace and a focal-length
+      error taken out by the detector compensator (to the optimiser's reach on the RMS
+      radius's V-shaped minimum, < 1 µm); refusals
 
 ## M14b Monte Carlo and yield
 

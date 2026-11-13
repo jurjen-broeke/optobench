@@ -5,6 +5,12 @@ with the release that introduced them.
 
 ## Unreleased
 
+- M14a tolerances: layouts and sidecars take `[[tolerance]]` (placement slides and tilts,
+  DOF errors, lens radius, thickness and index, ideal-lens focal length; uniform, normal
+  or end-point) and `[tolerancing]` (criteria with pass limits, compensators). New
+  `optobench_optimize::tolerance`: a seeded generator (xoshiro256**), applying errors,
+  evaluation with compensators re-optimised, and one-at-a-time sensitivities with RSS and
+  ranking.
 - M11 heating benchmark against Podgorski and Ranganathan (2016): the depth and
   field-size dependences agree; the absolute rise per 100 mW is about 4× lower than
   measured (0.47 against 1.86 ± 0.25 °C), reported in the milestone with where the gap
