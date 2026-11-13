@@ -16,19 +16,28 @@
 //! [[source]]
 //! id = "laser"
 //! kind = "collimated"               # or "point" with half_angle_deg, or "gaussian",
-//!                                   # "fiber", "led" (below)
+//!                                   # "fiber", "led", "isotropic" (below)
 //! wavelength_um = 0.633             # optional when spectrum is given
 //! spectrum = [[0.488, 1.0], [0.561, 3.0]]  # optional lines [µm, weight]: power shared by weight
 //! power_w = 0.001
 //! diameter = 2.0
 //! rings = 6                         # optional sampling, default 6
 //! offset = [0.0, 2.0]               # optional lateral offset in the source frame (mm)
+//! reversed = false                  # optional: true points it back along the path
+//!                                   # (an emitter in a sample, facing the objective)
+//! pulse = { repetition_rate_mhz = 80, width_fs = 120, shape = "sech2", prechirp_fs2 = 0 }
+//!                                   # optional, a pulsed laser: power_w is the mean;
+//!                                   # width the transform-limited FWHM; shape "sech2"
+//!                                   # (default) or "gaussian"; prechirp optional
 //! at = 0.0                          # planar; table: hole = [0, 0], height = 75, axis = [1, 0, 0]
 //!
 //! # Other kinds (angle_rings: optional angular sampling, default 3; led 4):
 //! #   gaussian: waist_diameter (1/e² diameter at the source, mm), m_squared (≥ 1, default 1)
 //! #   fiber:    core_diameter (mm), na (< 1): uniform over the core, within the NA
 //! #   led:      size (square side, mm): Lambertian over the hemisphere
+//! #   isotropic: a point emitting equally in every direction (a fluorophore); power_w
+//! #             is the total, rays only within half_angle_deg (default 180) of the
+//! #             axis, so aim it at the objective; rings default 30
 //!
 //! [[element]]
 //! id = "L1"
@@ -61,6 +70,8 @@
 //! immersion = "water"               # design immersion; default 1.0 (dry)
 //! cover_glass = { thickness = 0.17, material = 1.5255 }   # design; omit for none
 //! sample_medium = "water"           # design medium at the focus; default the immersion
+//! group_delay_dispersion_fs2 = 0    # optional: its glass's GDD at the laser wavelength,
+//!                                   # as its maker states it (the ideal objective has none)
 //! dof = [ { name = "OBJ_collar", kind = "collar", range = [-0.04, 0.04] } ]
 //!                                   # correction collar: the change in the cover-glass
 //!                                   # thickness it corrects for (mm); no axis
@@ -72,6 +83,21 @@
 //! above = "water"                   # the immersion above the first face; default the
 //!                                   # surroundings (the objective's rays go on in it)
 //! layers = [ { thickness = 0.17, material = 1.5255 }, { thickness = 5.0, material = "water" } ]
+//!                                   # a turbid layer adds absorption µa (in place of the
+//!                                   # material's own), scattering µs (both 1/mm) and
+//!                                   # anisotropy g, each a number or [[wavelength_um, value], …],
+//!                                   # and says where they come from:
+//!                                   # { thickness = 1.0, material = 1.36, absorption = 0.02,
+//!                                   #   scattering = 20.0, anisotropy = 0.9, source = "…" }
+//!                                   # and thermal properties for heating (M11d):
+//!                                   # thermal = { conductivity_w_per_m_k = 0.527,
+//!                                   #   density_kg_per_m3 = 1040, heat_capacity_j_per_kg_k = 3650,
+//!                                   #   perfusion_per_s = 8.5e-3, blood_density_kg_per_m3 = 1060,
+//!                                   #   blood_heat_capacity_j_per_kg_k = 3600, source = "…" }
+//!                                   # (perfusion and the blood's values optional)
+//! thermal_boundaries = { top = "fixed", bottom = "fixed", side = "insulated" }
+//!                                   # optional, each "fixed" (default), "insulated" or a
+//!                                   # heat transfer coefficient (W m⁻² K⁻¹)
 //! below = 1.0                       # optional; default the surroundings
 //!
 //! [[element]]
@@ -123,6 +149,26 @@
 //! at = 300.0
 //! size = [10, 10]
 //! pixels = [256, 256]
+//! quantum_efficiency = { value = [[0.45, 0.25], [0.55, 0.40]], source = "…" }
+//!                                   # optional: a number or [[wavelength_um, value], …]
+//!                                   # from 0 to 1, and where it comes from
+//!
+//! [[fluorophore]]                   # what a dye or protein absorbs and emits (M11b)
+//! id = "dye"
+//! source = "…"                      # where the values come from (required)
+//! quantum_yield = 0.9
+//! lifetime_ns = 4.0                 # optional
+//! extinction_coefficient = 56000    # optional, L/(mol cm): a number at the peak, shaped
+//! excitation = [[0.45, 0.2], [0.49, 1.0], [0.52, 0.1]]  # by this relative spectrum,
+//!                                   # or a table; or one_photon_cross_section_cm2
+//! two_photon_cross_section_gm = [[0.9, 30.0], [0.94, 25.0]]  # optional, GM
+//!                                   # (10⁻⁵⁰ cm⁴ s), two photons per excitation; or
+//!                                   # two_photon_action_cross_section_gm (η σ₂, as most
+//!                                   # spectra are published), divided by quantum_yield;
+//!                                   # a number with two_photon_spectrum (relative) applies at
+//!                                   # two_photon_reference_um, else at its greatest value
+//! emission = [[0.5, 0.3], [0.52, 1.0], [0.6, 0.1]]      # optional, relative
+//! concentrations = [ { sample = "S", layer = 2, micromolar = 10.0 } ]
 //!
 //! [[merit]]                         # what `optimize` aligns for: see `merit`
 //! kind = "focus"                    # or "centring", "pointing", "collimation", "power"
@@ -139,7 +185,7 @@ use optobench_library::{CoatingSpec, Library, Outline, Part};
 use optobench_scene::dof::{Dof, Motion, Target};
 
 use crate::coatings::CurveLookup;
-use optobench_materials::Medium;
+use optobench_materials::{Medium, Spectrum, Turbid};
 use optobench_math::{Frame, Vec3, radians_from_degrees};
 use optobench_scene::layout::{PlanarLayout, TableLayout};
 use optobench_scene::{
@@ -440,9 +486,10 @@ pub(crate) fn source(
         "gaussian" => (&["waist_diameter", "m_squared", "angle_rings"], 3.0),
         "fiber" => (&["core_diameter", "na", "angle_rings"], 3.0),
         "led" => (&["size", "angle_rings"], 3.0),
+        "isotropic" => (&["half_angle_deg"], 30.0),
         other => {
             return Err(error(format!(
-                "{}: source kind `{other}` is not known; use \"collimated\", \"point\", \"gaussian\", \"fiber\" or \"led\"",
+                "{}: source kind `{other}` is not known; use \"collimated\", \"point\", \"gaussian\", \"fiber\", \"led\" or \"isotropic\"",
                 item.context
             )));
         }
@@ -454,6 +501,7 @@ pub(crate) fn source(
         "power_w",
         "rings",
         "spectrum",
+        "pulse",
         "dof",
     ];
     let allowed: Vec<&str> = common
@@ -479,6 +527,18 @@ pub(crate) fn source(
         },
         "point" => SourceKind::Point {
             half_angle: radians_from_degrees(item.positive("half_angle_deg")?),
+        },
+        "isotropic" => SourceKind::Isotropic {
+            half_angle: {
+                let degrees = item.optional_number("half_angle_deg", 180.0)?;
+                if !(degrees > 0.0 && degrees <= 180.0) {
+                    return Err(error(format!(
+                        "{}: `half_angle_deg` lies above 0 and up to 180",
+                        item.context
+                    )));
+                }
+                radians_from_degrees(degrees)
+            },
         },
         "gaussian" => SourceKind::Gaussian {
             waist_diameter: item.positive("waist_diameter")?,
@@ -567,7 +627,43 @@ pub(crate) fn source(
         power: item.positive("power_w")?,
         rings: whole("rings", default_rings)?,
         spectrum,
+        pulse: pulse(item)?,
     })
+}
+
+/// A source's `pulse = { repetition_rate_mhz, width_fs, shape, prechirp_fs2 }`.
+fn pulse(item: &Item) -> Result<Option<optobench_scene::Pulse>, FileError> {
+    let Some(value) = item.table.get("pulse") else {
+        return Ok(None);
+    };
+    let context = format!("{} `pulse`", item.context);
+    let table = value.as_table().ok_or_else(|| {
+        error(format!(
+            "{context}: write {{ repetition_rate_mhz = …, width_fs = …, shape = \"sech2\" }}"
+        ))
+    })?;
+    check_keys(
+        table,
+        &["repetition_rate_mhz", "width_fs", "shape", "prechirp_fs2"],
+        &context,
+    )?;
+    let inner = Item { table, context };
+    let shape = match table.get("shape").map(|v| v.as_str()) {
+        None | Some(Some("sech2")) => optobench_scene::PulseShape::SechSquared,
+        Some(Some("gaussian")) => optobench_scene::PulseShape::Gaussian,
+        _ => {
+            return Err(error(format!(
+                "{}: `shape` is \"sech2\" (default) or \"gaussian\"",
+                inner.context
+            )));
+        }
+    };
+    Ok(Some(optobench_scene::Pulse {
+        repetition_rate: inner.positive("repetition_rate_mhz")? * 1e6,
+        width: inner.positive("width_fs")? * 1e-15,
+        shape,
+        prechirp: inner.optional_number("prechirp_fs2", 0.0)? * 1e-30,
+    }))
 }
 
 /// The part an element names with `library = "<vendor>/<part>"`, turned around with
@@ -901,12 +997,21 @@ pub(crate) const OBJECTIVE_KEYS: &[&str] = &[
     "cover_glass",
     "sample_medium",
     "diameter",
+    "group_delay_dispersion_fs2",
     "dof",
 ];
 
 /// The keys of a sample besides its placement.
-pub(crate) const SAMPLE_KEYS: &[&str] =
-    &["id", "kind", "layers", "above", "below", "diameter", "dof"];
+pub(crate) const SAMPLE_KEYS: &[&str] = &[
+    "id",
+    "kind",
+    "layers",
+    "above",
+    "below",
+    "diameter",
+    "thermal_boundaries",
+    "dof",
+];
 
 /// An `objective` entry's optics (layouts and sidecars alike).
 pub(crate) fn objective_kind(
@@ -950,10 +1055,108 @@ pub(crate) fn objective_kind(
     };
     let diameter =
         item.optional_number("diameter", (2.0 * objective.pupil_radius() * 1.5).max(20.0))?;
+    let group_delay_dispersion = item.optional_number("group_delay_dispersion_fs2", 0.0)?;
+    if !(group_delay_dispersion.is_finite() && group_delay_dispersion >= 0.0) {
+        return Err(error(format!(
+            "{}: `group_delay_dispersion_fs2` is a number, not negative",
+            item.context
+        )));
+    }
     Ok(ElementKind::Objective {
         objective,
         diameter,
+        group_delay_dispersion: group_delay_dispersion * 1e-30,
     })
+}
+
+/// A layer's optical quantity: a number (1/mm, or none for g), or a table
+/// `[[wavelength_um, value], …]` in increasing wavelength; values not negative (g may be).
+fn spectrum(layer: &Item, key: &str) -> Result<Option<Spectrum>, FileError> {
+    let context = &layer.context;
+    let Some(value) = layer.table.get(key) else {
+        return Ok(None);
+    };
+    let signed = key == "anisotropy";
+    let check = |v: f64| -> Result<f64, FileError> {
+        if v.is_finite() && (signed || v >= 0.0) {
+            Ok(v)
+        } else {
+            Err(error(format!(
+                "{context}: `{key}` must be a finite number{}",
+                if signed { "" } else { ", not negative" }
+            )))
+        }
+    };
+    match value {
+        Value::Float(_) | Value::Integer(_) => {
+            Ok(Some(Spectrum::Constant(check(layer.number(key)?)?)))
+        }
+        Value::Array(rows) => {
+            let mut out = Vec::with_capacity(rows.len());
+            for row in rows {
+                let pair = row
+                    .as_array()
+                    .filter(|r| r.len() == 2)
+                    .and_then(|r| {
+                        let n =
+                            |v: &Value| v.as_float().or_else(|| v.as_integer().map(|i| i as f64));
+                        Some((n(&r[0])?, n(&r[1])?))
+                    })
+                    .ok_or_else(|| {
+                        error(format!(
+                            "{context}: `{key}` is a number or [[wavelength_um, value], …]"
+                        ))
+                    })?;
+                out.push((pair.0, check(pair.1)?));
+            }
+            if out.len() < 2 || out.windows(2).any(|w| w[1].0 <= w[0].0) {
+                return Err(error(format!(
+                    "{context}: `{key}` needs at least two rows in increasing wavelength"
+                )));
+            }
+            Ok(Some(Spectrum::Table(out)))
+        }
+        _ => Err(error(format!(
+            "{context}: `{key}` is a number or [[wavelength_um, value], …]"
+        ))),
+    }
+}
+
+/// A detector's `quantum_efficiency = { value = …, source = "…" }` (layouts and sidecars
+/// alike): a number or a table over wavelength, every value from 0 to 1.
+pub(crate) fn quantum_efficiency(
+    item: &Item,
+) -> Result<Option<optobench_scene::QuantumEfficiency>, FileError> {
+    let Some(value) = item.table.get("quantum_efficiency") else {
+        return Ok(None);
+    };
+    let context = format!("{} `quantum_efficiency`", item.context);
+    let table = value
+        .as_table()
+        .ok_or_else(|| error(format!("{context}: write {{ value = …, source = \"…\" }}")))?;
+    check_keys(table, &["value", "source"], &context)?;
+    let inner = Item {
+        table,
+        context: context.clone(),
+    };
+    let curve = spectrum(&inner, "value")?
+        .ok_or_else(|| error(format!("{context}: `value` is required")))?;
+    let values: Vec<f64> = match &curve {
+        Spectrum::Constant(v) => vec![*v],
+        Spectrum::Table(rows) => rows.iter().map(|r| r.1).collect(),
+    };
+    if values.iter().any(|v| *v > 1.0) {
+        return Err(error(format!("{context}: values lie from 0 to 1")));
+    }
+    let source = match table.get("source") {
+        Some(Value::String(s)) if !s.trim().is_empty() => s.clone(),
+        _ => {
+            return Err(error(format!(
+                "{context}: say where the values come from (`source`, text)"
+            )));
+        }
+    };
+    Ok(Some(optobench_scene::QuantumEfficiency { curve, source }))
 }
 
 /// A `sample` entry's layers (layouts and sidecars alike).
@@ -971,12 +1174,63 @@ pub(crate) fn sample_kind(item: &Item, lookup: &MaterialLookup) -> Result<Elemen
                 ))
             })?;
             let context = format!("{} layer", item.context);
-            check_keys(table, &["thickness", "material"], &context)?;
+            check_keys(
+                table,
+                &[
+                    "thickness",
+                    "material",
+                    "absorption",
+                    "scattering",
+                    "anisotropy",
+                    "source",
+                    "thermal",
+                ],
+                &context,
+            )?;
             let layer = Item { table, context };
-            Ok((
-                layer.positive("thickness")?,
-                medium(layer.get("material")?, lookup, &layer.context)?,
-            ))
+            let base = medium(layer.get("material")?, lookup, &layer.context)?;
+            let optics = ["absorption", "scattering", "anisotropy"]
+                .iter()
+                .any(|k| table.contains_key(*k));
+            let medium = if optics {
+                let source = match table.get("source") {
+                    Some(Value::String(s)) => s.clone(),
+                    Some(_) => {
+                        return Err(error(format!("{}: `source` is text", layer.context)));
+                    }
+                    None => {
+                        return Err(error(format!(
+                            "{}: say where µa, µs and g come from (`source`)",
+                            layer.context
+                        )));
+                    }
+                };
+                let anisotropy = spectrum(&layer, "anisotropy")?.unwrap_or(Spectrum::Constant(0.0));
+                if let Spectrum::Constant(g) = anisotropy {
+                    if !(-1.0..=1.0).contains(&g) {
+                        return Err(error(format!(
+                            "{}: `anisotropy` lies from −1 to 1",
+                            layer.context
+                        )));
+                    }
+                }
+                Medium::from(Turbid {
+                    base,
+                    absorption: spectrum(&layer, "absorption")?,
+                    scattering: spectrum(&layer, "scattering")?.unwrap_or(Spectrum::Constant(0.0)),
+                    anisotropy,
+                    source,
+                })
+            } else {
+                if table.contains_key("source") {
+                    return Err(error(format!(
+                        "{}: `source` goes with `absorption`, `scattering` or `anisotropy`",
+                        layer.context
+                    )));
+                }
+                base
+            };
+            Ok((layer.positive("thickness")?, medium))
         })
         .collect::<Result<Vec<_>, FileError>>()?;
     let material = |key: &str| -> Result<Option<Medium>, FileError> {
@@ -991,6 +1245,136 @@ pub(crate) fn sample_kind(item: &Item, lookup: &MaterialLookup) -> Result<Elemen
         below: material("below")?,
         diameter: item.optional_number("diameter", 50.0)?,
     })
+}
+
+/// A sample's thermal description (layouts and sidecars alike): each layer's
+/// `thermal = { conductivity_w_per_m_k, density_kg_per_m3, heat_capacity_j_per_kg_k,
+/// perfusion_per_s, blood_density_kg_per_m3, blood_heat_capacity_j_per_kg_k, source }`
+/// (perfusion and the blood's values optional, together) and the sample's
+/// `thermal_boundaries = { top, bottom, side }`, each `"fixed"` (default), `"insulated"`
+/// or a heat transfer coefficient in W m⁻² K⁻¹. `None` if no layer has `thermal`.
+pub(crate) fn sample_thermal(
+    item: &Item,
+    id: &str,
+) -> Result<Option<optobench_scene::SampleThermal>, FileError> {
+    use optobench_scene::{HeatBoundary, SampleThermal, ThermalProperties};
+    let Some(layers) = item.table.get("layers").and_then(Value::as_array) else {
+        return Ok(None);
+    };
+    let mut out = Vec::with_capacity(layers.len());
+    for (n, layer) in layers.iter().enumerate() {
+        let Some(value) = layer.get("thermal") else {
+            out.push(None);
+            continue;
+        };
+        let context = format!("{} layer {} `thermal`", item.context, n + 1);
+        let table = value.as_table().ok_or_else(|| {
+            error(format!(
+                "{context}: write {{ conductivity_w_per_m_k = …, … }}"
+            ))
+        })?;
+        check_keys(
+            table,
+            &[
+                "conductivity_w_per_m_k",
+                "density_kg_per_m3",
+                "heat_capacity_j_per_kg_k",
+                "perfusion_per_s",
+                "blood_density_kg_per_m3",
+                "blood_heat_capacity_j_per_kg_k",
+                "source",
+            ],
+            &context,
+        )?;
+        let t = Item { table, context };
+        let source = match table.get("source") {
+            Some(Value::String(s)) if !s.trim().is_empty() => s.clone(),
+            _ => {
+                return Err(error(format!(
+                    "{}: say where the values come from (`source`, text)",
+                    t.context
+                )));
+            }
+        };
+        let blood = ["blood_density_kg_per_m3", "blood_heat_capacity_j_per_kg_k"];
+        let perfusion = match table.get("perfusion_per_s") {
+            None => {
+                if blood.iter().any(|k| table.contains_key(*k)) {
+                    return Err(error(format!(
+                        "{}: the blood's values go with `perfusion_per_s`",
+                        t.context
+                    )));
+                }
+                0.0
+            }
+            Some(_) => {
+                let w = t.number("perfusion_per_s")?;
+                if !(w >= 0.0 && w.is_finite()) {
+                    return Err(error(format!(
+                        "{}: `perfusion_per_s` is a number, not negative",
+                        t.context
+                    )));
+                }
+                // ρ_b c_b w_b in W m⁻³ K⁻¹, to W mm⁻³ K⁻¹.
+                t.positive(blood[0])? * t.positive(blood[1])? * w * 1e-9
+            }
+        };
+        out.push(Some(ThermalProperties {
+            conductivity: t.positive("conductivity_w_per_m_k")? * 1e-3,
+            capacity: t.positive("density_kg_per_m3")?
+                * t.positive("heat_capacity_j_per_kg_k")?
+                * 1e-9,
+            perfusion,
+            source,
+        }));
+    }
+    let boundaries = item.table.get("thermal_boundaries");
+    if out.iter().all(Option::is_none) {
+        if boundaries.is_some() {
+            return Err(error(format!(
+                "{}: `thermal_boundaries` goes with the layers' `thermal`",
+                item.context
+            )));
+        }
+        return Ok(None);
+    }
+    let mut sides = [HeatBoundary::Fixed; 3];
+    if let Some(value) = boundaries {
+        let context = format!("{} `thermal_boundaries`", item.context);
+        let table = value.as_table().ok_or_else(|| {
+            error(format!(
+                "{context}: write {{ top = …, bottom = …, side = … }}"
+            ))
+        })?;
+        check_keys(table, &["top", "bottom", "side"], &context)?;
+        for (slot, key) in sides.iter_mut().zip(["top", "bottom", "side"]) {
+            *slot = match table.get(key) {
+                None => HeatBoundary::Fixed,
+                Some(Value::String(s)) if s == "fixed" => HeatBoundary::Fixed,
+                Some(Value::String(s)) if s == "insulated" => HeatBoundary::Insulated,
+                Some(Value::Float(_) | Value::Integer(_)) => {
+                    let h = Item {
+                        table,
+                        context: context.clone(),
+                    }
+                    .positive(key)?;
+                    HeatBoundary::Transfer(h * 1e-6) // W m⁻² K⁻¹ to W mm⁻² K⁻¹
+                }
+                _ => {
+                    return Err(error(format!(
+                        "{context}: `{key}` is \"fixed\", \"insulated\" or a heat transfer coefficient (W m⁻² K⁻¹)"
+                    )));
+                }
+            };
+        }
+    }
+    Ok(Some(SampleThermal {
+        sample: id.to_owned(),
+        layers: out,
+        top: sides[0],
+        bottom: sides[1],
+        side: sides[2],
+    }))
 }
 
 /// Reads a layout file into a scene. `lookup` resolves material names.
@@ -1079,6 +1463,7 @@ pub fn parse_with(text: &str, lookups: &Lookups) -> Result<Scene, FileError> {
             "trace",
             "resolved",
             "merit",
+            "fluorophore",
         ],
         "top level",
     )?;
@@ -1154,6 +1539,8 @@ pub fn parse_with(text: &str, lookups: &Lookups) -> Result<Scene, FileError> {
         solids: Vec::new(),
         split_cutoff: trace_options(&root)?,
         dofs: Vec::new(),
+        fluorophores: Vec::new(),
+        thermal: Vec::new(),
     };
 
     for item in items(&root, "source")? {
@@ -1165,9 +1552,26 @@ pub fn parse_with(text: &str, lookups: &Lookups) -> Result<Scene, FileError> {
             frame = Frame::new(origin, z, x)
                 .ok_or_else(|| error(format!("{}: degenerate frame", item.context)))?;
         }
-        scene
-            .sources
-            .push(source(&item, &with(position, &["offset"]), frame)?);
+        let reversed = match item.table.get("reversed") {
+            None => false,
+            Some(Value::Boolean(b)) => *b,
+            Some(_) => {
+                return Err(error(format!(
+                    "{}: `reversed` is true or false",
+                    item.context
+                )));
+            }
+        };
+        if reversed {
+            let [x, _, z] = frame.axes();
+            frame = Frame::new(frame.origin(), -z, x)
+                .ok_or_else(|| error(format!("{}: degenerate frame", item.context)))?;
+        }
+        scene.sources.push(source(
+            &item,
+            &with(position, &["offset", "reversed"]),
+            frame,
+        )?);
         let target = Target::Source(item.text("id")?.to_owned());
         scene
             .dofs
@@ -1272,6 +1676,9 @@ pub fn parse_with(text: &str, lookups: &Lookups) -> Result<Scene, FileError> {
             }
             "sample" => {
                 check_keys(item.table, &with(position, SAMPLE_KEYS), &item.context)?;
+                if let Some(thermal) = sample_thermal(item, &id)? {
+                    scene.thermal.push(thermal);
+                }
                 scene.elements.push(Element {
                     id,
                     frame: placement.frame(item)?,
@@ -1474,7 +1881,10 @@ pub fn parse_with(text: &str, lookups: &Lookups) -> Result<Scene, FileError> {
     for item in items(&root, "detector")? {
         check_keys(
             item.table,
-            &with(position, &["id", "size", "pixels", "dof"]),
+            &with(
+                position,
+                &["id", "size", "pixels", "quantum_efficiency", "dof"],
+            ),
             &item.context,
         )?;
         let size = item.pair("size")?;
@@ -1486,6 +1896,7 @@ pub fn parse_with(text: &str, lookups: &Lookups) -> Result<Scene, FileError> {
             frame: placement.frame(&item)?,
             size,
             pixels: item.count_pair("pixels")?,
+            quantum_efficiency: quantum_efficiency(&item)?,
         });
         let frame = scene.detectors[scene.detectors.len() - 1].frame;
         let target = Target::Detector(item.text("id")?.to_owned());
@@ -1493,8 +1904,248 @@ pub fn parse_with(text: &str, lookups: &Lookups) -> Result<Scene, FileError> {
             .dofs
             .extend(dofs(&item, &target, &frame, false, frame.origin())?);
     }
+    scene.fluorophores = fluorophores(&root, &scene)?;
     check_dofs(&scene)?;
     scene.placed().map_err(|e| error(e.to_string()))
+}
+
+/// Avogadro's constant (1/mol), exact in the SI since 2019.
+const AVOGADRO: f64 = 6.022_140_76e23;
+
+/// The `[[fluorophore]]` entries (layouts and sidecars alike), checked against the
+/// scene's samples.
+pub(crate) fn fluorophores(
+    root: &Table,
+    scene: &Scene,
+) -> Result<Vec<optobench_scene::Fluorophore>, FileError> {
+    let mut out: Vec<optobench_scene::Fluorophore> = Vec::new();
+    for item in items(root, "fluorophore")? {
+        check_keys(
+            item.table,
+            &[
+                "id",
+                "source",
+                "quantum_yield",
+                "lifetime_ns",
+                "extinction_coefficient",
+                "excitation",
+                "one_photon_cross_section_cm2",
+                "two_photon_cross_section_gm",
+                "two_photon_action_cross_section_gm",
+                "two_photon_spectrum",
+                "two_photon_reference_um",
+                "emission",
+                "concentrations",
+            ],
+            &item.context,
+        )?;
+        let id = item.text("id")?.to_owned();
+        if out.iter().any(|f| f.id == id) {
+            return Err(error(format!(
+                "{}: a second fluorophore `{id}`",
+                item.context
+            )));
+        }
+        let source = match item.table.get("source") {
+            Some(Value::String(s)) if !s.trim().is_empty() => s.clone(),
+            _ => {
+                return Err(error(format!(
+                    "{}: say where the values come from (`source`, text)",
+                    item.context
+                )));
+            }
+        };
+        let quantum_yield = item.number("quantum_yield")?;
+        if !(0.0..=1.0).contains(&quantum_yield) {
+            return Err(error(format!(
+                "{}: `quantum_yield` lies from 0 to 1",
+                item.context
+            )));
+        }
+        let lifetime = match item.table.get("lifetime_ns") {
+            None => None,
+            Some(_) => Some(item.positive("lifetime_ns")? * 1e-9),
+        };
+        // σ₁ = 1000 ln 10 ε / N_A cm² (ε in L mol⁻¹ cm⁻¹; Beer–Lambert in base 10), ×100 to mm².
+        let per_extinction = 1000.0 * core::f64::consts::LN_10 / AVOGADRO * 100.0;
+        let extinction = spectrum(&item, "extinction_coefficient")?;
+        let excitation = spectrum(&item, "excitation")?;
+        let cross_section = spectrum(&item, "one_photon_cross_section_cm2")?;
+        let scaled = |s: Spectrum, by: f64| match s {
+            Spectrum::Constant(v) => Spectrum::Constant(v * by),
+            Spectrum::Table(rows) => {
+                Spectrum::Table(rows.into_iter().map(|(w, v)| (w, v * by)).collect())
+            }
+        };
+        let one_photon = match (extinction, excitation, cross_section) {
+            (Some(_), _, Some(_)) => {
+                return Err(error(format!(
+                    "{}: give `extinction_coefficient` or `one_photon_cross_section_cm2`, not both",
+                    item.context
+                )));
+            }
+            (None, Some(_), _) => {
+                return Err(error(format!(
+                    "{}: `excitation` shapes `extinction_coefficient` (a number, at the peak), which is missing",
+                    item.context
+                )));
+            }
+            // The peak value spread over the relative excitation spectrum.
+            (Some(Spectrum::Constant(peak)), Some(Spectrum::Table(rows)), None) => {
+                let top = rows.iter().map(|r| r.1).fold(0.0, f64::max);
+                if top <= 0.0 {
+                    return Err(error(format!(
+                        "{}: `excitation` is zero everywhere",
+                        item.context
+                    )));
+                }
+                Some(scaled(Spectrum::Table(rows), peak * per_extinction / top))
+            }
+            (Some(Spectrum::Table(_)), Some(_), None) => {
+                return Err(error(format!(
+                    "{}: with `excitation`, `extinction_coefficient` is one number (at the peak)",
+                    item.context
+                )));
+            }
+            (Some(e), _, None) => Some(scaled(e, per_extinction)),
+            (None, None, Some(c)) => Some(scaled(c, 100.0)),
+            (None, None, None) => None,
+        };
+        // 1 GM = 10⁻⁵⁰ cm⁴ s per photon (Xu, Zipfel, Shear, Williams and Webb, Proc. Natl.
+        // Acad. Sci. USA 93, 10763 (1996), Fig. 1) = 10⁻⁴⁸ mm⁴ s. Most published spectra are
+        // action cross-sections η σ₂ (ibid., Figs. 1 to 4), so σ₂ is that over η.
+        let two_photon = match (
+            spectrum(&item, "two_photon_cross_section_gm")?,
+            spectrum(&item, "two_photon_action_cross_section_gm")?,
+        ) {
+            (Some(_), Some(_)) => {
+                return Err(error(format!(
+                    "{}: give `two_photon_cross_section_gm` or `two_photon_action_cross_section_gm`, not both",
+                    item.context
+                )));
+            }
+            (Some(absorption), None) => Some(scaled(absorption, 1e-48)),
+            (None, Some(action)) => {
+                if quantum_yield <= 0.0 {
+                    return Err(error(format!(
+                        "{}: an action cross-section (η σ₂) needs a quantum yield above 0",
+                        item.context
+                    )));
+                }
+                Some(scaled(action, 1e-48 / quantum_yield))
+            }
+            (None, None) => None,
+        };
+        // A relative two-photon spectrum (as FPbase gives it) shaped by a peak value.
+        let two_photon = match (two_photon, spectrum(&item, "two_photon_spectrum")?) {
+            (any, None) => {
+                if item.table.contains_key("two_photon_reference_um") {
+                    return Err(error(format!(
+                        "{}: `two_photon_reference_um` belongs with `two_photon_spectrum`",
+                        item.context
+                    )));
+                }
+                any
+            }
+            (Some(Spectrum::Constant(peak)), Some(Spectrum::Table(rows))) => {
+                // The number applies at `two_photon_reference_um`, else at the greatest value.
+                let reference = match item.table.get("two_photon_reference_um") {
+                    None => rows.iter().map(|r| r.1).fold(0.0, f64::max),
+                    Some(_) => {
+                        let at = item.positive("two_photon_reference_um")?;
+                        Spectrum::Table(rows.clone()).at(at).map_err(|e| {
+                            error(format!("{}: `two_photon_reference_um`: {e}", item.context))
+                        })?
+                    }
+                };
+                if reference <= 0.0 {
+                    return Err(error(format!(
+                        "{}: `two_photon_spectrum` is zero where its cross-section applies",
+                        item.context
+                    )));
+                }
+                Some(scaled(Spectrum::Table(rows), peak / reference))
+            }
+            (None, Some(_)) => {
+                return Err(error(format!(
+                    "{}: `two_photon_spectrum` is relative: give its peak as a number in \
+                     `two_photon_cross_section_gm` (or `two_photon_action_cross_section_gm`)",
+                    item.context
+                )));
+            }
+            (Some(_), Some(_)) => {
+                return Err(error(format!(
+                    "{}: with `two_photon_spectrum`, the cross-section is one number (at the peak)",
+                    item.context
+                )));
+            }
+        };
+        let emission = spectrum(&item, "emission")?;
+        let mut concentrations = Vec::new();
+        if let Some(value) = item.table.get("concentrations") {
+            let list = value.as_array().ok_or_else(|| {
+                error(format!(
+                    "{}: `concentrations` is a list of {{ sample = …, layer = …, micromolar = … }}",
+                    item.context
+                ))
+            })?;
+            for entry in list {
+                let context = format!("{} concentration", item.context);
+                let table = entry.as_table().ok_or_else(|| {
+                    error(format!(
+                        "{context}: write {{ sample = …, layer = …, micromolar = … }}"
+                    ))
+                })?;
+                check_keys(table, &["sample", "layer", "micromolar"], &context)?;
+                let entry = Item { table, context };
+                let sample = entry.text("sample")?.to_owned();
+                let layer = entry.number("layer")?;
+                let layers =
+                    scene
+                        .elements
+                        .iter()
+                        .find(|e| e.id == sample)
+                        .map(|e| match &e.kind {
+                            ElementKind::Sample { layers, .. } => Some(layers.len()),
+                            _ => None,
+                        });
+                let count = match layers {
+                    None => {
+                        return Err(error(format!("{}: no element `{sample}`", entry.context)));
+                    }
+                    Some(None) => {
+                        return Err(error(format!(
+                            "{}: `{sample}` is not a sample",
+                            entry.context
+                        )));
+                    }
+                    Some(Some(n)) => n,
+                };
+                if !(layer >= 1.0 && layer.fract() == 0.0 && layer as usize <= count) {
+                    return Err(error(format!(
+                        "{}: `layer` is a whole number from 1 to {count} (the layers of `{sample}`)",
+                        entry.context
+                    )));
+                }
+                concentrations.push(optobench_scene::Concentration {
+                    sample,
+                    layer: layer as usize,
+                    molar: entry.positive("micromolar")? * 1e-6,
+                });
+            }
+        }
+        out.push(optobench_scene::Fluorophore {
+            id,
+            one_photon,
+            two_photon,
+            emission,
+            quantum_yield,
+            lifetime,
+            source,
+            concentrations,
+        });
+    }
+    Ok(out)
 }
 
 #[cfg(test)]

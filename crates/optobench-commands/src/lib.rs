@@ -17,8 +17,13 @@
 
 mod edit;
 mod embed;
+mod emission;
+mod excitation;
 mod field;
+mod fluence;
+mod fluorophores;
 mod graph;
+mod heating;
 mod materials;
 mod moves;
 mod optimize;
@@ -184,6 +189,14 @@ const STANDARD: &[Command] = &[
         handler: trace::bodies,
     },
     Command {
+        id: "import-fluorophore",
+        label: "Import Fluorophore",
+        icon: "import-fluorophore",
+        effect: Effect::Write,
+        summary: "import a fluorescent protein from FPbase JSON the user downloaded, terms shown first, as a design's fluorophore",
+        handler: fluorophores::import_fluorophore,
+    },
+    Command {
         id: "import-material",
         label: "Import Material",
         icon: "import-glass",
@@ -270,6 +283,38 @@ const STANDARD: &[Command] = &[
         effect: Effect::Read,
         summary: "carry a beam as a field from a plane to a detector through ideal lenses and mechanics (diffraction), into a fibre and on as rays",
         handler: field::field,
+    },
+    Command {
+        id: "fluence",
+        label: "Fluence",
+        icon: "fluence",
+        effect: Effect::Read,
+        summary: "the light in a sample: the direct beam and the diffuse light it scatters (diffusion approximation), absorbed power by layer and its density",
+        handler: fluence::fluence,
+    },
+    Command {
+        id: "excitation",
+        label: "Excitation",
+        icon: "excitation",
+        effect: Effect::Read,
+        summary: "a fluorophore excited at a laser's focus: one- and two-photon rates, excitations and photons emitted, saturation, the pulse widened along the path",
+        handler: excitation::command,
+    },
+    Command {
+        id: "heating",
+        label: "Heating",
+        icon: "heating",
+        effect: Effect::Read,
+        summary: "the temperature rise of a sample from the light it absorbs: steady or in time, parked or scanned, with perfusion",
+        handler: heating::command,
+    },
+    Command {
+        id: "emission",
+        label: "Emission",
+        icon: "emission",
+        effect: Effect::Read,
+        summary: "the photon budget of an emitter in a sample: collected by the objective, lost in the sample and at each element and filter, counted by the detectors",
+        handler: emission::emission,
     },
     Command {
         id: "sweep",

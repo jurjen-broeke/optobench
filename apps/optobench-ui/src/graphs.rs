@@ -99,15 +99,13 @@ fn key(map: &Map) -> u64 {
 }
 
 fn picture(map: &Map) -> ColorImage {
-    let (low, high) = map.range();
     let mut pixels = Vec::with_capacity(map.columns * map.rows * 4);
     // Image rows run down the screen; map rows run up from low y.
     for r in (0..map.rows).rev() {
         for c in 0..map.columns {
             let v = map.values[r * map.columns + c];
             if v.is_finite() {
-                let t = (v - low) / (high - low);
-                let rgb = colour::scale(map.colours, t, Surface::Dark);
+                let rgb = colour::scale(map.colours, map.level(v), Surface::Dark);
                 pixels.extend_from_slice(&[rgb.0, rgb.1, rgb.2, 255]);
             } else {
                 pixels.extend_from_slice(&[0, 0, 0, 0]);
@@ -403,17 +401,28 @@ pub fn show(
                 colour(colour::scale(m.colours, t, Surface::Dark)),
             );
         }
-        let (low, high) = m.range();
+        let (low, high) = m.colour_range();
         let display = m.value.display(low, high);
+        let log = m.value.scale == Scale::Logarithmic;
+        let middle = if log {
+            (low * high).sqrt()
+        } else {
+            0.5 * (low + high)
+        };
         for (t, at) in [
             (low, bar.bottom()),
-            (0.5 * (low + high), bar.center().y),
+            (middle, bar.center().y),
             (high, bar.top()),
         ] {
+            let text = if log {
+                format!("{t:.0e}")
+            } else {
+                format!("{:.3}", display.shown(t))
+            };
             painter.text(
                 pos2(bar.right() + 3.0, at),
                 Align2::LEFT_CENTER,
-                format!("{:.3}", display.shown(t)),
+                text,
                 small.clone(),
                 colour(ink.muted),
             );
@@ -473,7 +482,7 @@ pub fn show(
             if (0.0..m.columns as f64).contains(&column) && (0.0..m.rows as f64).contains(&row) {
                 let (c, r) = (column as usize, row as usize);
                 let value = m.values[r * m.columns + c];
-                let (low, high) = m.range();
+                let (low, high) = m.colour_range();
                 let cell_x = m.x.0 + (m.x.1 - m.x.0) * (c as f64 + 0.5) / m.columns as f64;
                 let cell_y = m.y.0 + (m.y.1 - m.y.0) * (r as f64 + 0.5) / m.rows as f64;
                 // Crosshair, and the row and column profiles through the cell: the row's
@@ -482,7 +491,7 @@ pub fn show(
                 let at = frame.screen(to_axis(&graph.x, cell_x), to_axis(&graph.y, cell_y));
                 clipped.line_segment([pos2(plot.left(), at.y), pos2(plot.right(), at.y)], cross);
                 clipped.line_segment([pos2(at.x, plot.top()), pos2(at.x, plot.bottom())], cross);
-                let level = |v: f64| ((v - low) / (high - low)).clamp(0.0, 1.0) as f32;
+                let level = |v: f64| m.level(v) as f32;
                 let profile = Stroke::new(1.5, colour(ink.primary));
                 let row_points: Vec<Pos2> = (0..m.columns)
                     .filter_map(|i| {

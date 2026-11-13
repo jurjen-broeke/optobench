@@ -7,7 +7,7 @@ also listed in `assets/manifest.toml`, which CI checks.
 
 | What | Where in this repo | Source | Licence | Notes |
 | --- | --- | --- | --- | --- |
-| Water n and k at 25 °C, 0.2–200 µm (table) | `assets/materials/water-hale-querry-1973.csv` | G. M. Hale and M. R. Querry, Appl. Opt. 12, 555–563 (1973), transcribed from the refractiveindex.info database, `main/H2O/nk/Hale.yml` | CC0-1.0 | not yet verified against the original paper |
+| Water n and k at 25 °C, 0.2–200 µm (table) | `assets/materials/water-hale-querry-1973.csv` | G. M. Hale and M. R. Querry, Appl. Opt. 12, 555–563 (1973), transcribed from the refractiveindex.info database, `main/H2O/nk/Hale.yml` | CC0-1.0 | verified against the paper's Table I (2026-11-12): every row 0.2–3.35 µm, spot checks to 200 µm |
 | Water index, Sellmeier coefficients at 19, 20, 21.5, 24 °C | `crates/optobench-materials/src/bundled.rs` | M. Daimon and A. Masumura, Appl. Opt. 46, 3811–3820 (2007), transcribed from the refractiveindex.info database, `main/H2O/nk/Daimon-*.yml` | CC0-1.0 | not yet verified against the original paper |
 | Fused silica, Sellmeier coefficients | `crates/optobench-materials/src/bundled.rs` | I. H. Malitson, J. Opt. Soc. Am. 55, 1205–1208 (1965), transcribed from the refractiveindex.info database, `main/SiO2/nk/Malitson.yml` | CC0-1.0 | not yet verified against the original paper |
 | Standard air, dispersion formula | `crates/optobench-materials/src/bundled.rs` | P. E. Ciddor, Appl. Opt. 35, 1566–1573 (1996), transcribed from the refractiveindex.info database, `other/mixed gases/air/nk/Ciddor.yml` | CC0-1.0 | not yet verified against the original paper |

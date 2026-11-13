@@ -186,6 +186,10 @@ impl Material for Composite {
             None => Ok(0.0),
         }
     }
+
+    fn smooth_index(&self) -> bool {
+        self.index.smooth_index()
+    }
 }
 
 #[cfg(test)]

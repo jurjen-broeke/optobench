@@ -17,7 +17,7 @@ pub mod layout;
 
 use std::sync::Arc;
 
-use optobench_materials::Medium;
+use optobench_materials::{Medium, Spectrum};
 use optobench_math::{Frame, Vec3};
 use optobench_surfaces::brep::{BrepFace, FaceSurface};
 use optobench_surfaces::{Plane, Sphere, Surface};
@@ -116,6 +116,10 @@ pub enum ElementKind {
         /// The barrel's diameter at the pupil (mm): rays inside it but beyond the pupil
         /// are stopped, rays outside it pass by.
         diameter: f64,
+        /// The group-delay dispersion of its glass (s²), as its maker states it at the
+        /// laser's wavelength: the ideal objective has no glass of its own, so pulses
+        /// through it pick up this much (M11b). 0 if unknown.
+        group_delay_dispersion: f64,
     },
     /// A sample: flat layers from the frame's origin along +z, between the medium above
     /// the first face (the immersion) and the one below the last.
@@ -179,6 +183,15 @@ pub enum SourceKind {
         /// Sampling of directions: rings of the direction-cosine grid.
         angle_rings: usize,
     },
+    /// A point emitting the same power into every solid angle (a fluorophore, M11c),
+    /// traced within `half_angle` of local +z (π for every direction). `power` is the
+    /// total over all directions; the rays carry the cone's share, (1 − cos θ) / 2 of it.
+    /// Directions are equal solid angles: the disk samples mapped onto the cap by
+    /// cos θ = 1 − ρ² (1 − cos θ_max), which keeps areas in proportion.
+    Isotropic {
+        /// The traced cone's half-angle (radians, up to π).
+        half_angle: f64,
+    },
     /// A Lambertian emitter: a square of side `size` across local +z, radiance the same
     /// in every direction of the forward hemisphere (directions uniform in direction
     /// cosines, which is exactly Lambertian for rays of equal power).
@@ -209,6 +222,110 @@ pub struct Source {
     /// Spectral lines as (wavelength µm, relative weight): the power is shared between
     /// them in proportion to the weights. Empty for a single `wavelength`.
     pub spectrum: Vec<(f64, f64)>,
+    /// For a pulsed laser, its pulses (M11b); `power` is then the mean power. `None` for
+    /// continuous light.
+    pub pulse: Option<Pulse>,
+}
+
+/// The shape of a laser pulse's intensity in time.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PulseShape {
+    /// exp(−4 ln 2 t² / τ²).
+    Gaussian,
+    /// sech²(1.7627 t / τ), as from a mode-locked Ti:sapphire laser.
+    SechSquared,
+}
+
+/// The pulses of a pulsed laser (M11b).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Pulse {
+    /// Pulses per second (Hz).
+    pub repetition_rate: f64,
+    /// Full width at half maximum of the intensity as the laser makes it, transform
+    /// limited (s).
+    pub width: f64,
+    /// The shape in time.
+    pub shape: PulseShape,
+    /// Group-delay dispersion the pulses carry as they leave the source (s²), such as a
+    /// negative prechirp that cancels the path's; 0 for transform-limited pulses.
+    pub prechirp: f64,
+}
+
+/// A fluorophore (M11b): what it absorbs and emits, from the user's data with its
+/// source, and where in the samples it is.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Fluorophore {
+    /// Unique id within the scene.
+    pub id: String,
+    /// One-photon absorption cross-section σ₁ (mm²) against vacuum wavelength (µm);
+    /// `None` if not given.
+    pub one_photon: Option<Spectrum>,
+    /// Two-photon absorption cross-section σ₂ (mm⁴ s) against the laser's vacuum
+    /// wavelength (µm), counting two photons per excitation (1 GM = 10⁻⁴⁸ mm⁴ s); `None`
+    /// if not given.
+    pub two_photon: Option<Spectrum>,
+    /// Emission spectrum (relative) against vacuum wavelength (µm); `None` if not given.
+    pub emission: Option<Spectrum>,
+    /// Photons emitted per excitation.
+    pub quantum_yield: f64,
+    /// Lifetime of the excited state (s); `None` if not given.
+    pub lifetime: Option<f64>,
+    /// Where the values come from.
+    pub source: String,
+    /// Where it is, and how much.
+    pub concentrations: Vec<Concentration>,
+}
+
+/// A boundary of a sample's thermal domain (M11d).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum HeatBoundary {
+    /// Held at the starting temperature.
+    Fixed,
+    /// No heat crosses it.
+    Insulated,
+    /// A heat transfer coefficient to a bath at the starting temperature (W mm⁻² K⁻¹).
+    Transfer(f64),
+}
+
+/// The thermal properties of one layer of a sample (M11d).
+#[derive(Debug, Clone, PartialEq)]
+pub struct ThermalProperties {
+    /// Thermal conductivity k (W mm⁻¹ K⁻¹).
+    pub conductivity: f64,
+    /// Volumetric heat capacity ρc (J mm⁻³ K⁻¹).
+    pub capacity: f64,
+    /// Perfusion ρ_b c_b w_b (W mm⁻³ K⁻¹); 0 without.
+    pub perfusion: f64,
+    /// Where the values come from.
+    pub source: String,
+}
+
+/// A sample's thermal description (M11d): per layer its properties, and the boundaries of
+/// the domain the layers make (the first face, the last and the side at the sample's
+/// radius).
+#[derive(Debug, Clone, PartialEq)]
+pub struct SampleThermal {
+    /// The sample element's id.
+    pub sample: String,
+    /// Per layer, in order; `None` where not given.
+    pub layers: Vec<Option<ThermalProperties>>,
+    /// At the first face.
+    pub top: HeatBoundary,
+    /// At the last face.
+    pub bottom: HeatBoundary,
+    /// At the side.
+    pub side: HeatBoundary,
+}
+
+/// How much of a fluorophore is in one layer of a sample.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Concentration {
+    /// The sample element's id.
+    pub sample: String,
+    /// The layer, counted from 1.
+    pub layer: usize,
+    /// mol/L.
+    pub molar: f64,
 }
 
 /// A mechanical proxy: absorbs whatever hits it.
@@ -241,6 +358,16 @@ pub struct Proxy {
     pub kind: ProxyKind,
 }
 
+/// A detector's quantum efficiency: the fraction of arriving photons it counts, as a
+/// number or over wavelength, and where it comes from (a datasheet, a measurement).
+#[derive(Debug, Clone, PartialEq)]
+pub struct QuantumEfficiency {
+    /// From 0 to 1.
+    pub curve: optobench_materials::Spectrum,
+    /// Where the values come from.
+    pub source: String,
+}
+
 /// A detector: a rectangle across the axis that absorbs and records.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Detector {
@@ -252,6 +379,8 @@ pub struct Detector {
     pub size: (f64, f64),
     /// Pixels along local x and y.
     pub pixels: (usize, usize),
+    /// What fraction of the photons it counts (M11c); `None` where only power matters.
+    pub quantum_efficiency: Option<QuantumEfficiency>,
 }
 
 /// What a solid from CAD (STEP) does.
@@ -324,6 +453,10 @@ pub struct Scene {
     pub split_cutoff: Option<f64>,
     /// Degrees of freedom (see [`dof`]).
     pub dofs: Vec<dof::Dof>,
+    /// Fluorophores in the samples (M11b).
+    pub fluorophores: Vec<Fluorophore>,
+    /// The samples' thermal descriptions (M11d).
+    pub thermal: Vec<SampleThermal>,
 }
 
 /// Default splitting cutoff, as a fraction of the total source power.
@@ -349,6 +482,22 @@ pub struct Built {
     pub system: NonSequentialSystem,
     /// `owners[face.owner]` for every face.
     pub owners: Vec<Owner>,
+    /// The media of samples' layers: (element index, part, medium index), the part
+    /// `above`, `layer 1`, `layer 2`, … or `below`.
+    pub sample_media: Vec<(usize, String, usize)>,
+}
+
+/// What the direct light left in one part of a sample (W).
+#[derive(Debug, Clone, PartialEq)]
+pub struct LayerAccount {
+    /// The sample's id.
+    pub sample: String,
+    /// `above`, `layer 1`, …, `below`.
+    pub part: String,
+    /// Absorbed in its bulk.
+    pub absorbed: f64,
+    /// Scattered out of the direct beam (the diffuse light's source).
+    pub scattered: f64,
 }
 
 /// Points in the unit disk with the area each stands for, normalised to sum to 1: the
@@ -432,6 +581,7 @@ impl Scene {
         let air = 0;
         // The first face of each sample, for finding what is in front of an objective.
         let mut sample_tops: Vec<usize> = Vec::new();
+        let mut sample_media: Vec<(usize, String, usize)> = Vec::new();
 
         for (index, element) in self.elements.iter().enumerate() {
             let owner = owners.len();
@@ -559,6 +709,7 @@ impl Scene {
                 ElementKind::Objective {
                     objective,
                     diameter,
+                    ..
                 } => {
                     let id = &element.id;
                     if !(objective.focal_length > 0.0
@@ -593,6 +744,25 @@ impl Scene {
                         positive_medium: air,
                         owner,
                     });
+                    // Its front plane, for light coming back from the sample (M11c).
+                    system.faces.push(Face {
+                        shape: Shape::Profile(flat.shape()),
+                        placement: transform
+                            * optobench_math::Transform::from_translation(Vec3::new(
+                                0.0,
+                                0.0,
+                                objective.pupil_distance,
+                            )),
+                        region: Region::Disk {
+                            radius: diameter / 2.0,
+                        },
+                        role: Role::ObjectiveFront {
+                            objective: std::sync::Arc::new(objective.clone()),
+                        },
+                        negative_medium: air,
+                        positive_medium: air,
+                        owner,
+                    });
                 }
                 ElementKind::Sample {
                     layers,
@@ -618,6 +788,14 @@ impl Scene {
                         media.push(system.add_medium(m.clone()));
                     }
                     media.push(medium_or_air(below, &mut system));
+                    let parts = std::iter::once("above".to_owned())
+                        .chain((1..=layers.len()).map(|k| format!("layer {k}")))
+                        .chain(std::iter::once("below".to_owned()));
+                    for (part, &m) in parts.zip(&media) {
+                        if m != air {
+                            sample_media.push((index, part, m));
+                        }
+                    }
                     let mut z = 0.0;
                     for i in 0..=layers.len() {
                         if i == 0 {
@@ -808,7 +986,11 @@ impl Scene {
         let total: f64 = self.sources.iter().map(|s| s.power).sum();
         system.split_cutoff = self.split_cutoff.map(|fraction| fraction * total);
         system.build_index();
-        Ok(Built { system, owners })
+        Ok(Built {
+            system,
+            owners,
+            sample_media,
+        })
     }
 
     /// The rays a source launches, sharing its power: for each spectral line, every
@@ -855,6 +1037,28 @@ impl Scene {
                                 Vec3::ZERO,
                                 Vec3::new(a, b, (1.0 - a * a - b * b).sqrt()),
                                 each,
+                            )
+                        })
+                        .collect()
+                }
+                SourceKind::Isotropic { half_angle } => {
+                    let cap = 1.0 - half_angle.min(core::f64::consts::PI).cos();
+                    disk_samples(source.rings)
+                        .into_iter()
+                        .map(|(u, v, a)| {
+                            let rho2 = u * u + v * v;
+                            let cos = 1.0 - rho2 * cap;
+                            let sin = (1.0 - cos * cos).max(0.0).sqrt();
+                            let (cu, su) = if rho2 > 0.0 {
+                                let rho = rho2.sqrt();
+                                (u / rho, v / rho)
+                            } else {
+                                (1.0, 0.0)
+                            };
+                            (
+                                Vec3::ZERO,
+                                Vec3::new(sin * cu, sin * su, cos),
+                                a * cap / 2.0,
                             )
                         })
                         .collect()
@@ -937,11 +1141,59 @@ impl Scene {
         rays
     }
 
+    /// The medium a source's rays start in: a sample layer's, if the source sits inside
+    /// one (an emitter in the sample, M11c), else the system's start medium. The media
+    /// above and below a sample reach without end in the model, so a source there is
+    /// taken to be in the surroundings.
+    pub fn start_medium(&self, built: &Built, source: &Source) -> usize {
+        let origin = source.frame.origin();
+        for (index, element) in self.elements.iter().enumerate() {
+            let ElementKind::Sample {
+                layers, diameter, ..
+            } = &element.kind
+            else {
+                continue;
+            };
+            let local = element.frame.to_local_point(origin);
+            if local.x.hypot(local.y) > diameter / 2.0 {
+                continue;
+            }
+            let mut z = 0.0;
+            for (k, (thickness, _)) in layers.iter().enumerate() {
+                if local.z > z && local.z < z + thickness {
+                    let part = format!("layer {}", k + 1);
+                    if let Some((_, _, medium)) = built
+                        .sample_media
+                        .iter()
+                        .find(|(e, p, _)| *e == index && *p == part)
+                    {
+                        return *medium;
+                    }
+                }
+                z += thickness;
+            }
+        }
+        built.system.start_medium
+    }
+
     /// Builds the scene, traces every source and collects the results.
     pub fn trace(&self) -> Result<SceneTrace, SceneError> {
         let built = self.build()?;
-        let rays: Vec<Ray> = self.sources.iter().flat_map(Self::launch).collect();
-        let (records, ledger) = built.system.trace_all(rays);
+        Ok(self.trace_built(&built))
+    }
+
+    /// Traces every source through `built` (this scene's [`Scene::build`]) and collects
+    /// the results.
+    pub fn trace_built(&self, built: &Built) -> SceneTrace {
+        let rays: Vec<(Ray, usize)> = self
+            .sources
+            .iter()
+            .flat_map(|s| {
+                let medium = self.start_medium(built, s);
+                Self::launch(s).into_iter().map(move |r| (r, medium))
+            })
+            .collect();
+        let (records, ledger) = built.system.trace_all_from(rays);
 
         let detectors = self
             .detectors
@@ -975,14 +1227,34 @@ impl Scene {
                 }),
             }
         }
-        let footprints = self.footprints(&built, &records);
-        Ok(SceneTrace {
+        let footprints = self.footprints(built, &records);
+        let layers = built
+            .sample_media
+            .iter()
+            .map(|(element, part, medium)| {
+                let (mut absorbed, mut scattered) = (0.0, 0.0);
+                for d in records.iter().flat_map(|r| &r.deposits) {
+                    if d.medium == *medium {
+                        absorbed += d.absorbed;
+                        scattered += d.scattered;
+                    }
+                }
+                LayerAccount {
+                    sample: self.elements[*element].id.clone(),
+                    part: part.clone(),
+                    absorbed,
+                    scattered,
+                }
+            })
+            .collect();
+        SceneTrace {
             records,
             ledger,
             detectors,
             clipping,
             footprints,
-        })
+            layers,
+        }
     }
 }
 
@@ -1271,6 +1543,8 @@ pub struct SceneTrace {
     pub clipping: Vec<Clipping>,
     /// Per optical element that light reached.
     pub footprints: Vec<Footprint>,
+    /// Per part of each sample: what the direct light left there.
+    pub layers: Vec<LayerAccount>,
 }
 
 #[cfg(test)]

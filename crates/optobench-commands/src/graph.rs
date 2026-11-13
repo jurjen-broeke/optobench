@@ -34,6 +34,13 @@ const KINDS: &[&str] = &[
     "field",
     "field-phase",
     "field-difference",
+    "fluence-depth",
+    "absorption",
+    "excitation-depth",
+    "excitation-map",
+    "pulse-width",
+    "temperature-map",
+    "temperature-time",
 ];
 
 /// The parameters of `of = "sweep"` and `of = "optimize"`, passed on to those commands.
@@ -349,6 +356,76 @@ fn of_design(parameters: &Parameters, kind: &str) -> Result<Graph, CommandError>
             }
         };
     }
+    if matches!(kind, "fluence-depth" | "absorption") {
+        let light = crate::fluence::light(parameters)?;
+        return Ok(if kind == "absorption" {
+            graphs::absorption_map(&light)
+        } else {
+            graphs::fluence_depth(&light)
+        });
+    }
+    if matches!(kind, "excitation-depth" | "excitation-map") {
+        let section = (kind == "excitation-map").then_some((121, 161));
+        let e = crate::excitation::compute(parameters, section)?;
+        let graph = if kind == "excitation-map" {
+            graphs::excitation_map(&e)
+        } else {
+            graphs::excitation_depth(&e)
+        };
+        return graph.ok_or_else(|| {
+            failed(format!(
+                "`{}` has no cross-section at {} µm{}",
+                e.fluorophore,
+                e.wavelength,
+                if kind == "excitation-depth" && e.molar.is_none() {
+                    ", or is not where the focus is"
+                } else {
+                    ""
+                }
+            ))
+        });
+    }
+    if matches!(kind, "temperature-map" | "temperature-time") {
+        let mut heating_parameters = parameters.clone();
+        let extent = heating_parameters.remove("extent_mm");
+        let h = crate::heating::compute(&heating_parameters)?;
+        if kind == "temperature-time" {
+            return graphs::temperature_time(&h).ok_or_else(|| {
+                invalid("`temperature-time` needs a time course: give `duration_s`")
+            });
+        }
+        let extent = match extent {
+            None => (
+                h.peak.1 + 2.0 * h.focal_depth.max(0.5),
+                2.0 * h.focal_depth.max(0.5),
+            ),
+            Some(v) => v
+                .as_array()
+                .filter(|a| a.len() == 2)
+                .and_then(|a| Some((a[0].as_f64()?, a[1].as_f64()?)))
+                .filter(|(r, z)| *r > 0.0 && *z > 0.0)
+                .ok_or_else(|| invalid("`extent_mm` is [radius, depth] in mm"))?,
+        };
+        return Ok(graphs::temperature_map(&h, extent));
+    }
+    if kind == "pulse-width" {
+        let (scene, path) = moved_scene(parameters)?;
+        let source = match text(parameters, "source")? {
+            Some(id) => scene
+                .sources
+                .iter()
+                .position(|s| s.id == id)
+                .ok_or_else(|| invalid(format!("no source `{id}`")))?,
+            None => scene
+                .sources
+                .iter()
+                .position(|s| s.pulse.is_some())
+                .ok_or_else(|| invalid(format!("{path}: the design has no pulsed source")))?,
+        };
+        let pulse = optobench_analysis::excitation::pulse_path(&scene, source)
+            .map_err(|e| failed(format!("{path}: {e}")))?;
+        return Ok(graphs::pulse_width(&pulse));
+    }
     if kind == "optimize" {
         let mut keys = base.to_vec();
         keys.extend_from_slice(OPTIMIZE_KEYS);
@@ -467,6 +544,12 @@ pub(crate) fn graph(parameters: &Parameters) -> Result<Value, CommandError> {
     keys.extend_from_slice(SWEEP_KEYS);
     keys.extend_from_slice(OPTIMIZE_KEYS);
     keys.extend_from_slice(crate::field::FIELD_KEYS);
+    keys.extend_from_slice(crate::fluence::LIGHT_KEYS);
+    keys.extend_from_slice(crate::excitation::EXCITATION_KEYS);
+    keys.extend_from_slice(crate::heating::HEATING_KEYS);
+    keys.push("extent_mm");
+    keys.sort_unstable();
+    keys.dedup();
     check_keys(parameters, &keys)?;
     let mut graph = match (text(parameters, "saved")?, text(parameters, "of")?) {
         (Some(from), None) => {

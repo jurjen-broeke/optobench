@@ -116,6 +116,7 @@
       "radius_mm": 3.122467726219148
     }
   ],
+  "layers": [],
   "ledger": {
     "absorbed_w": 1.7031951893149948e-19,
     "below_cutoff_w": 2.469404119397845e-07,
@@ -125,6 +126,7 @@
     "imbalance_w": -3.686287386450715e-18,
     "launched_w": 0.0009999999999999966,
     "reflected_w": 0.0,
+    "scattered_w": 0.0,
     "stopped_w": 0.0
   },
   "parts": [],

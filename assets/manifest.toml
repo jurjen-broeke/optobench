@@ -15,4 +15,4 @@ allowed = ["CC0-1.0", "CC-BY-4.0", "MIT", "Apache-2.0", "MIT OR Apache-2.0"]
 path = "assets/materials/water-hale-querry-1973.csv"
 licence = "CC0-1.0"
 source = "Hale & Querry, Appl. Opt. 12, 555 (1973), via refractiveindex.info database/data/main/H2O/nk/Hale.yml"
-verified = false   # not yet checked against the original paper (docs/licence-review.md)
+verified = true    # against Table I of the paper, 2026-11-12: every row 0.2-3.35 um, spot checks to 200 um

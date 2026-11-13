@@ -496,7 +496,7 @@ impl Document {
             "parts" | "curves" | "materials" => Ok(json!({})),
             "graph" => Ok(json!({ "path": path, "of": self.graph_kind })),
             "edit" => Ok(json!({ "path": path })),
-            "import-part" | "import-curve" | "import-material" => {
+            "import-part" | "import-curve" | "import-material" | "import-fluorophore" => {
                 Err("drop the file on the window to import it (coming with M8c)".into())
             }
             other => Err(format!("`{other}` has no button yet")),

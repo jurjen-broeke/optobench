@@ -81,6 +81,51 @@ paper reports agreement within 6 × 10⁻⁶ with the 1938 formula of Tilton and
 - Its material library is built on refractiveindex.info, so its material data carries
   the same split as above.
 
+### FPbase (fluorescent protein data, M11b3)
+
+Reviewed 2026-11-13 from the site's own pages (<https://www.fpbase.org/terms/>,
+<https://www.fpbase.org/about/>, <https://www.fpbase.org/cite/>) and its API
+documentation (<https://www.fpbase.org/api/>, `/api/openapi.json`). FPbase's source code
+is GPL-3.0 and was not opened; the reader is written from the API documentation and the
+API's own JSON output.
+
+- **Data.** /terms/, "Policy": "The data contained in the FPbase are free of all
+  copyright restrictions and made fully and freely available for both non-commercial and
+  commercial use." and "Users of the data should attribute the original authors of the
+  corresponding data (referenced on the corresponding protein page)." Also: the data
+  "are provided on an "as is" basis" and "do not contain any information on intellectual
+  property claims".
+- **Disclaimer.** /terms/: "We cannot provide unrestricted permission regarding the use
+  of the data, as some data may be covered by patents or other rights."
+- **Site.** /terms/, "License": "FPbase is created by Talley Lambert and is licensed
+  under a Creative Commons Attribution-ShareAlike 4.0 International License." The page
+  footers carry the same CC BY-SA 4.0 badge. Neither says whether this covers the
+  database's contents or only the site's text and code; the Policy above speaks to the
+  data.
+- **Citation.** /cite/: cite T. J. Lambert, "FPbase: a community-editable fluorescent
+  protein database", Nat. Methods 16, 277–278 (2019), doi:10.1038/s41592-019-0352-8;
+  "For referencing individual fluorescent proteins, please reference the original
+  papers".
+- **What the API gives** (checked on its JSON output, 2026-11-13): per protein its name,
+  slug, a `doi` (the primary reference) and states with `ex_max`, `em_max` (nm),
+  `ext_coeff` (M⁻¹ cm⁻¹), `qy`, `lifetime` (ns); per state spectra as `[wavelength nm,
+  value]` normalised to a peak of 1 (observed, not documented). No two-photon data: the
+  schema lists a `2p` spectrum subtype, but the responses for EGFP and tdTomato hold only
+  the one-photon excitation and emission spectra and no two-photon field. FPbase's
+  website shows two-photon excitation spectra for some proteins (avGFP, EGFP, tdTomato);
+  exported by the user, they fall under the same terms. The API "is still a work
+  in development and is subject to change", so the reader checks every field it uses.
+
+Recommendation 5. **Import by the user, never bundle**, as decided 2026-11-12
+(docs/milestones/M11-sample-fluorescence-heating.md): the user downloads a protein's
+JSON from the API and imports it; the import shows the terms above and the protein's
+reference and stores nothing until the user accepts. The values go into the design as
+a `[[fluorophore]]` entry whose `source` names FPbase (with its citation), the protein,
+its state and its primary reference (DOI), so the attribution travels with them. On the
+Policy's own words they may be shared in designs; the open point is whether the site's
+CC BY-SA 4.0 is meant to cover the data too, in which case share-alike would reach the
+designs that carry them.
+
 ## Recommendation
 
 1. **Bundle** (as code constants or small asset files with a manifest entry and an
@@ -102,6 +147,10 @@ paper reports agreement within 6 × 10⁻⁶ with the 1938 formula of Tilton and
 - [x] Approve recommendation 1 (bundle four literature datasets as CC0 transcriptions).
 - [x] Approve recommendation 2 (manufacturer catalogues are fetch-only, `redistribute = false`).
 - [x] Approve recommendation 3 (fetch from the literature part of refractiveindex.info).
+- [x] Recommendation 5 (FPbase imported by the user, never bundled; decided 2026-11-12).
+- [ ] FPbase: whether CC BY-SA 4.0 covers the data (share-alike in designs carrying
+      them) or only the site, as its Policy suggests. Until settled, imported values carry
+      the attribution and the question is shown with the notice at import.
 - [ ] Original papers available for verification (Malitson 1965, Daimon & Masumura 2007,
       Hale & Querry 1973, Ciddor 1996), placed in the local `corpus/`. Not available yet.
 
@@ -117,3 +166,4 @@ before bundling, and the papers are not available yet. Decided 2026-11-07: bundl
 | --- | --- | --- |
 | 2026-11-07 | Recommendations 1, 2 and 3 approved. Original papers not available yet. | Jurjen Broeke |
 | 2026-11-07 | Bundle the four datasets now as transcriptions from the CC0 database, each marked "not yet verified against the original paper" in its provenance, `ATTRIBUTION.md` and `assets/manifest.toml`. The M2 exit criterion for water stays open until the values are checked against the papers. | Jurjen Broeke |
+| 2026-11-12 | FPbase data imported by the user, notice shown, never bundled (M11 plan). | Jurjen Broeke |

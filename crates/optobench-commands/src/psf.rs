@@ -132,6 +132,9 @@ pub(crate) fn request(
         lateral,
         points: count("points", 3)?,
         section: None,
+        attenuated: false,
+        volume: None,
+        cloud: None,
     };
     Ok((source, detector, settings))
 }

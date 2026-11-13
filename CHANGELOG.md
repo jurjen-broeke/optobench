@@ -5,6 +5,77 @@ with the release that introduced them.
 
 ## Unreleased
 
+- M11 heating benchmark against Podgorski and Ranganathan (2016): the depth and
+  field-size dependences agree; the absolute rise per 100 mW is about 4× lower than
+  measured (0.47 against 1.86 ± 0.25 °C), reported in the milestone with where the gap
+  may lie. The light in a sample now uses the delta-Eddington primary by default (the
+  forward-scattered part kept in the primary beam), which the benchmark showed is needed
+  for strongly forward-scattering tissue; `fluence` takes `primary = "ballistic"` for the
+  former behaviour.
+- M11d2 heating of a sample: sample layers take `thermal` properties (with their source)
+  and samples `thermal_boundaries`; new command `heating` gives the temperature rise from
+  the light the sample absorbs, steady or in time, parked or over a scanned field, with
+  perfusion: power at the surface and the focal plane, peak and field-averaged rise, the
+  heat balance, warnings; graph kinds `temperature-map` and `temperature-time`. Fixed:
+  `fluence` refused a sample with no scattering layer.
+- M11d1 the thermal solver: `optobench_analysis::thermal` gives the temperature rise from
+  an absorbed power density, steady or in time (Crank–Nicolson, with an on/off or duty
+  drive), with Pennes perfusion and fixed, insulated or heat-transfer boundaries, on a
+  graded grid of rings; checked against the Gaussian source, its time course, the image
+  method and the Pennes kernel.
+- M11c emitters through the excited volume: `emission` with `excited_by`, `focus` and
+  `fluorophore` spreads the emitter over a grid around a laser's focus weighted by I²,
+  its photons those of the two-photon excitation, and adds up the budgets. The PSF can
+  give intensities on a grid around its peak (`cloud`).
+- M11b3 FPbase: new command `import-fluorophore` reads a fluorescent protein from the
+  JSON the user downloaded from FPbase's API (spectra, extinction coefficient, quantum
+  yield, lifetime, primary reference), shows FPbase's terms first, stores the files with
+  their provenance and gives (or appends to a design) a `[[fluorophore]]` entry carrying
+  FPbase's citation and the protein's DOI. The API has no two-photon data: a two-photon
+  excitation spectrum exported from FPbase's website is imported from its own file
+  (`two_photon`, the protein's `2P` column of FPbase's CSV export; relative with a
+  cited peak, applied at the wavelength it was quoted at, or in GM). Fluorophores take
+  `two_photon_spectrum` (relative) shaped by a peak cross-section. Licence review entry
+  for FPbase.
+- M11b2 the excitation volume: new command `excitation` gives a fluorophore's one- and
+  two-photon excitation at a laser's focus (rates per molecule at the peak, saturation
+  and per-pulse checks, two-photon excitations in the focus and photons emitted,
+  one-photon excitations per depth, the pulse width at the focus). New graph kinds
+  `excitation-depth`, `excitation-map` and `pulse-width`. The PSF can attenuate each
+  plane wave by its ray's ballistic loss (`attenuated`), reports that transmission and
+  the widths of I², and integrates I and I² over planes and the whole depth (`volume`);
+  checked against Xu and Webb's (1996) thick-sample closed forms.
+- M11b1 fluorophores, lasers and excitation rates: layouts and sidecars take
+  `[[fluorophore]]` entries (quantum yield, lifetime, extinction coefficient with a
+  relative excitation spectrum or a one-photon cross-section, two-photon cross-section
+  in GM or as an action cross-section η σ₂, emission spectrum, concentrations in sample layers; a `source` is required).
+  Sources take `pulse = { repetition_rate_mhz, width_fs, shape, prechirp_fs2 }`;
+  objectives take `group_delay_dispersion_fs2`. New `optobench_materials::dispersion`
+  (group index and group-velocity dispersion from a material's own formula; tables are
+  refused) and `optobench_analysis::excitation` (one- and two-photon rates, pulse
+  factors, Gaussian pulse broadening, the dispersion along a pulsed source's chief ray).
+  Ray records gain `media`.
+- M11c emission and photon budget: new command `emission` traces an emitter in a sample
+  on its own and gives its photon budget in watts and photons per second: emitted,
+  collected by the objective, lost in each part of the sample, at each element's faces
+  (Fresnel, filter rejection) and clipped by each item, arriving at and counted by each
+  detector, and where the rest ended; it closes. New source kind `isotropic` (equal
+  solid angles into a cone of up to 180°; `power_w` is the total over all directions);
+  layout sources may be `reversed`; detectors take an optional `quantum_efficiency`
+  (number or table, with its source). An ideal objective now also takes light back from
+  the sample through its front plane within its NA (sine condition reversed), where it
+  used to clip it; a source inside a sample layer starts in that layer's medium. Ray
+  records gain `face_losses`.
+- M11a2 diffuse light: new command `fluence` gives the light in a sample, the direct beam
+  from the traced rays and the diffuse light it scatters (diffusion approximation on rings
+  about the axis, partial-current faces from the index step), with the absorbed power by
+  layer and its density; new `graph` kinds `fluence-depth` and `absorption` (an x–z map on
+  a log scale). Map colours are now computed once for files and the window alike.
+- M11a1 turbid sample layers: a sample layer may give absorption µa, scattering µs and
+  anisotropy g (numbers or spectra, with their source); the direct beam loses power at
+  µa + µs, and the trace reports what it left in each part of each sample (absorbed,
+  scattered); the power ledger gains `scattered_w`. The bundled water absorption is
+  verified against Hale & Querry's Table I.
 - M10c rays to fields and back: new command `field` carries a beam as a field from the
   source (its exact field) or a detector (from the traced rays) to a target detector,
   through ideal lenses and mechanics (plates, tube bores), with fibre coupling at the

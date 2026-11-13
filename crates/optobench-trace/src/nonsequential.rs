@@ -161,6 +161,14 @@ pub enum Role {
         /// The medium in front of the front plane.
         exit_medium: usize,
     },
+    /// The front plane of an ideal objective, for light coming back from the sample
+    /// (M11c): a ray arriving from the local +z side within the NA leaves from the
+    /// objective's pupil (`IdealObjective::pass_back`), `pupil_distance` behind, into the
+    /// face's −z medium; other rays are clipped.
+    ObjectiveFront {
+        /// The objective.
+        objective: Arc<crate::objective::IdealObjective>,
+    },
     /// Absorbs and records a detection, for detector `detector`.
     Detector {
         /// The detector's index (meaning set by the caller).
@@ -173,7 +181,10 @@ impl Role {
     /// optical path the face adds (an ideal objective, an ideal lens). Readers that walk
     /// a record's faces skip the second entry.
     pub fn records_twice(&self) -> bool {
-        matches!(self, Role::Objective { .. } | Role::IdealLens { .. })
+        matches!(
+            self,
+            Role::Objective { .. } | Role::ObjectiveFront { .. } | Role::IdealLens { .. }
+        )
     }
 }
 
@@ -397,14 +408,41 @@ pub struct RayRecord {
     pub split_power: f64,
     /// Power absorbed in media and coatings (W).
     pub absorbed_power: f64,
+    /// Power scattered out of the ray by turbid media (W): no longer in the direct beam,
+    /// handed to the diffuse light (not followed as rays).
+    pub scattered_power: f64,
+    /// Per medium the ray crossed: the power absorbed and scattered in its bulk (coatings
+    /// not included), for accounts by layer.
+    pub deposits: Vec<Deposit>,
     /// For a detected ray: the hit in the detector face's local frame (x, y).
     pub detector_point: Option<(f64, f64)>,
     /// The face of each hit, in the order of `points[1..]` (an objective's face twice).
     pub faces: Vec<usize>,
     /// The power arriving at each hit (W), in the order of `points[1..]`.
     pub powers: Vec<f64>,
+    /// The medium (index into the system's media) the ray crossed to reach each hit, in
+    /// the order of `points[1..]`; [`NO_MEDIUM`] for the step through an ideal objective
+    /// (from its pupil to its front plane, or back), which holds no modelled medium.
+    pub media: Vec<usize>,
+    /// At each refracting face crossed: (face, power not transmitted there), that is
+    /// reflected (followed as a child ray or not) and absorbed in its coating (W).
+    pub face_losses: Vec<(usize, f64)>,
     /// 0 for a launched ray, 1 for a ray split off a launched ray, and so on.
     pub generation: usize,
+}
+
+/// In [`RayRecord::media`]: the step through an ideal objective, no medium.
+pub const NO_MEDIUM: usize = usize::MAX;
+
+/// What a ray left in one medium's bulk (W).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Deposit {
+    /// The medium (index into the system's media).
+    pub medium: usize,
+    /// Absorbed.
+    pub absorbed: f64,
+    /// Scattered out of the ray.
+    pub scattered: f64,
 }
 
 /// Power totals over many rays (W).
@@ -418,6 +456,8 @@ pub struct Ledger {
     pub clipped: f64,
     /// Absorbed in media.
     pub absorbed: f64,
+    /// Scattered out of the direct beam by turbid media (handed to the diffuse light).
+    pub scattered: f64,
     /// Reflected out of the path at uncoated faces.
     pub reflected: f64,
     /// Left the scene.
@@ -435,6 +475,7 @@ impl Ledger {
             - (self.detected
                 + self.clipped
                 + self.absorbed
+                + self.scattered
                 + self.reflected
                 + self.escaped
                 + self.stopped
@@ -447,6 +488,7 @@ impl Ledger {
             self.launched += record.launched.power;
         }
         self.absorbed += record.absorbed_power;
+        self.scattered += record.scattered_power;
         self.reflected += record.reflected_power;
         self.below_cutoff += record.below_cutoff_power;
         let remaining = record.ray.power;
@@ -498,7 +540,8 @@ impl NonSequentialSystem {
         self.media.len() - 1
     }
 
-    fn medium(&self, index: usize, wavelength: f64) -> Result<(f64, f64), End> {
+    /// The index, absorption coefficient and scattering coefficient of a medium (1/mm).
+    fn medium(&self, index: usize, wavelength: f64) -> Result<(f64, f64, f64), End> {
         let material = self.media[index].material();
         let fail = |error| End::MaterialUndefined {
             medium: index,
@@ -506,7 +549,8 @@ impl NonSequentialSystem {
         };
         let n = material.refractive_index(wavelength).map_err(fail)?;
         let alpha = material.absorption_coefficient(wavelength).map_err(fail)?;
-        Ok((n, alpha))
+        let scattering = material.scattering_coefficient(wavelength).map_err(fail)?;
+        Ok((n, alpha, scattering))
     }
 
     /// Builds the search index over the faces. Call it again after changing `faces`;
@@ -606,15 +650,19 @@ impl NonSequentialSystem {
             below_cutoff_power: 0.0,
             split_power: 0.0,
             absorbed_power: 0.0,
+            scattered_power: 0.0,
+            deposits: Vec::new(),
             detector_point: None,
             faces: Vec::new(),
             powers: Vec::new(),
+            media: Vec::new(),
+            face_losses: Vec::new(),
             generation: branch.generation,
         };
         let mut medium = branch.medium;
         let mut skip: Vec<usize> = branch.skip;
         for _ in 0..self.interaction_limit {
-            let (index_here, alpha) = match self.medium(medium, launched.wavelength) {
+            let (index_here, alpha, scattering) = match self.medium(medium, launched.wavelength) {
                 Ok(values) => values,
                 Err(end) => {
                     record.end = end;
@@ -639,13 +687,33 @@ impl NonSequentialSystem {
 
             // Propagate to the hit.
             ray.optical_path += index_here * hit.distance;
-            let kept = (-alpha * hit.distance).exp();
-            record.absorbed_power += ray.power * (1.0 - kept);
-            ray.power *= kept;
+            // Beer–Lambert with extinction µa + µs; the loss shared in proportion.
+            let extinction = alpha + scattering;
+            if extinction > 0.0 {
+                let kept = (-extinction * hit.distance).exp();
+                let lost = ray.power * (1.0 - kept);
+                let (absorbed, scattered) =
+                    (lost * alpha / extinction, lost * scattering / extinction);
+                record.absorbed_power += absorbed;
+                record.scattered_power += scattered;
+                match record.deposits.iter_mut().find(|d| d.medium == medium) {
+                    Some(d) => {
+                        d.absorbed += absorbed;
+                        d.scattered += scattered;
+                    }
+                    None => record.deposits.push(Deposit {
+                        medium,
+                        absorbed,
+                        scattered,
+                    }),
+                }
+                ray.power *= kept;
+            }
             ray.position = face.placement.apply_point(hit.point);
             record.points.push(ray.position);
             record.faces.push(face_index);
             record.powers.push(ray.power);
+            record.media.push(medium);
             record.optical_paths.push(ray.optical_path);
 
             let r = hit.point.x.hypot(hit.point.y);
@@ -690,6 +758,7 @@ impl NonSequentialSystem {
                         record.points.push(ray.position);
                         record.faces.push(face_index);
                         record.powers.push(ray.power);
+                        record.media.push(medium);
                         record.optical_paths.push(ray.optical_path);
                     }
                 }
@@ -699,7 +768,7 @@ impl NonSequentialSystem {
                 } => {
                     let to_local = face.placement.inverse();
                     let exit_index = match self.medium(*exit_medium, launched.wavelength) {
-                        Ok((n, _)) => n,
+                        Ok((n, _, _)) => n,
                         Err(end) => {
                             record.end = end;
                             return record;
@@ -724,6 +793,7 @@ impl NonSequentialSystem {
                             record.points.push(ray.position);
                             record.faces.push(face_index);
                             record.powers.push(ray.power);
+                            record.media.push(NO_MEDIUM);
                             record.optical_paths.push(ray.optical_path);
                             medium = *exit_medium;
                             // It leaves from another place: nothing to skip there.
@@ -738,6 +808,49 @@ impl NonSequentialSystem {
                                 medium: *exit_medium,
                                 error,
                             };
+                            return record;
+                        }
+                    }
+                }
+                Role::ObjectiveFront { objective } => {
+                    let to_local = face.placement.inverse();
+                    let local = to_local.apply_point(ray.position);
+                    let passage = objective.pass_back(
+                        local,
+                        to_local.apply_vector(ray.direction),
+                        launched.wavelength,
+                        index_here,
+                    );
+                    match passage {
+                        Ok(crate::objective::Passage::Leaves {
+                            position,
+                            direction,
+                            optical_path,
+                        }) => {
+                            // `position` is on the pupil plane, `pupil_distance` behind
+                            // this face's plane.
+                            let pupil = Vec3::new(
+                                position.x,
+                                position.y,
+                                local.z - objective.pupil_distance,
+                            );
+                            ray.position = face.placement.apply_point(pupil);
+                            ray.direction = face.placement.apply_vector(direction);
+                            ray.optical_path += optical_path;
+                            record.points.push(ray.position);
+                            record.faces.push(face_index);
+                            record.powers.push(ray.power);
+                            record.media.push(NO_MEDIUM);
+                            record.optical_paths.push(ray.optical_path);
+                            medium = face.negative_medium;
+                            skip.clear();
+                        }
+                        Ok(_) => {
+                            record.end = End::Clipped { face: face_index };
+                            return record;
+                        }
+                        Err(error) => {
+                            record.end = End::MaterialUndefined { medium, error };
                             return record;
                         }
                     }
@@ -783,7 +896,7 @@ impl NonSequentialSystem {
                         self.medium(from, launched.wavelength),
                         self.medium(to, launched.wavelength),
                     ) {
-                        (Ok((n1, _)), Ok((n2, _))) => (n1, n2),
+                        (Ok((n1, _, _)), Ok((n2, _, _))) => (n1, n2),
                         (Err(end), _) | (_, Err(end)) => {
                             record.end = end;
                             return record;
@@ -806,6 +919,9 @@ impl NonSequentialSystem {
                                 }
                             };
                             let reflected = ray.power * response.reflectance;
+                            record
+                                .face_losses
+                                .push((face_index, ray.power * (1.0 - response.transmittance)));
                             record.absorbed_power += ray.power * response.absorptance();
                             match self.split_cutoff {
                                 Some(cutoff) if reflected > 0.0 && reflected >= cutoff => {
@@ -845,10 +961,24 @@ impl NonSequentialSystem {
     /// Traces many rays, and with splitting every ray split off them, and totals their
     /// power.
     pub fn trace_all(&self, rays: impl IntoIterator<Item = Ray>) -> (Vec<RayRecord>, Ledger) {
+        self.trace_all_from(rays.into_iter().map(|r| (r, self.start_medium)))
+    }
+
+    /// As [`Self::trace_all`], each ray starting in its own medium (a source inside a
+    /// sample's layer).
+    pub fn trace_all_from(
+        &self,
+        rays: impl IntoIterator<Item = (Ray, usize)>,
+    ) -> (Vec<RayRecord>, Ledger) {
         let mut ledger = Ledger::default();
         let mut records = Vec::new();
-        for ray in rays {
-            for record in self.trace_tree(ray) {
+        for (ray, medium) in rays {
+            let mut pending = vec![Branch::root(ray, medium)];
+            let mut tree = Vec::new();
+            while let Some(branch) = pending.pop() {
+                tree.push(self.trace_branch(branch, &mut pending));
+            }
+            for record in tree {
                 ledger.add(&record);
                 records.push(record);
             }

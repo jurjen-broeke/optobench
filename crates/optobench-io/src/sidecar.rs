@@ -45,7 +45,7 @@
 //!
 //! [[source]]
 //! id = "fiber"
-//! kind = "point"                    # or "collimated", "gaussian", "fiber", "led": the keys
+//! kind = "point"                    # or "collimated", "gaussian", "fiber", "led", "isotropic": the keys
 //!                                   # and `spectrum` as in layout files (scene_file)
 //! wavelength_um = 0.633
 //! power_w = 0.001
@@ -60,6 +60,7 @@
 //! axis = [0, -1, 0]
 //! size = [10, 10]
 //! pixels = [100, 100]
+//! # quantum_efficiency = { value = 0.3, source = "…" }   # optional, as in layout files
 //!
 //! [[merit]]                         # what `optimize` aligns for, as in layout files
 //! kind = "centring"
@@ -720,6 +721,7 @@ pub fn read(text: &str, sidecar: &Path, lookups: &Lookups) -> Result<Read, FileE
             "resolved",
             "merit",
             "library",
+            "fluorophore",
         ],
         "top level",
     )?;
@@ -763,6 +765,8 @@ pub fn read(text: &str, sidecar: &Path, lookups: &Lookups) -> Result<Read, FileE
         solids: Vec::new(),
         split_cutoff: crate::scene_file::trace_options(&root)?,
         dofs: Vec::new(),
+        fluorophores: Vec::new(),
+        thermal: Vec::new(),
     };
     let mut tagged = vec![false; bodies.len()];
     // Bodies an element names, tagged or not (a library part's mount).
@@ -805,6 +809,9 @@ pub fn read(text: &str, sidecar: &Path, lookups: &Lookups) -> Result<Read, FileE
             let element_kind = if objective {
                 objective_kind(&item, lookup)?
             } else {
+                if let Some(thermal) = crate::scene_file::sample_thermal(&item, &id)? {
+                    scene.thermal.push(thermal);
+                }
                 sample_kind(&item, lookup)?
             };
             scene.dofs.extend(dofs(
@@ -1112,7 +1119,10 @@ pub fn read(text: &str, sidecar: &Path, lookups: &Lookups) -> Result<Read, FileE
     for item in items(&root, "detector")? {
         check_keys(
             item.table,
-            &with(&position, &["id", "size", "pixels", "dof"]),
+            &with(
+                &position,
+                &["id", "size", "pixels", "quantum_efficiency", "dof"],
+            ),
             &item.context,
         )?;
         let size = item.pair("size")?;
@@ -1125,12 +1135,14 @@ pub fn read(text: &str, sidecar: &Path, lookups: &Lookups) -> Result<Read, FileE
             frame,
             size,
             pixels: item.count_pair("pixels")?,
+            quantum_efficiency: crate::scene_file::quantum_efficiency(&item)?,
         });
         let target = Target::Detector(item.text("id")?.to_owned());
         scene
             .dofs
             .extend(dofs(&item, &target, &frame, false, frame.origin())?);
     }
+    scene.fluorophores = crate::scene_file::fluorophores(&root, &scene)?;
     crate::scene_file::check_dofs(&scene)?;
     let scene = scene.placed().map_err(|e| error(e.to_string()))?;
     Ok(Read { scene, parts })

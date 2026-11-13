@@ -573,6 +573,72 @@ pub fn draw(painter: &Painter, rect: Rect, id: &str, enabled: bool) {
                 c.line(&arc, if radius < 15.0 { ACTION } else { 1.8 }, r.beam);
             }
         }
+        "fluence" => {
+            // A beam entering a slab and glowing out into it.
+            c.line(&[pos2(6.0, 22.0), pos2(58.0, 22.0)], 2.4, r.a3);
+            for radius in [8.0, 16.0, 24.0] {
+                let arc = c.arc(pos2(32.0, 22.0), radius, 0.0, 180.0);
+                c.line(&arc, if radius < 10.0 { ACTION } else { 1.8 }, r.beam);
+            }
+            c.line(&[pos2(32.0, 2.0), pos2(32.0, 30.0)], ACTION, r.beam);
+        }
+        "heating" => {
+            // A slab warming under a beam: the beam, and rising heat lines.
+            c.line(&[pos2(6.0, 40.0), pos2(58.0, 40.0)], 1.8, r.a3);
+            c.line(&[pos2(32.0, 4.0), pos2(32.0, 48.0)], ACTION, r.beam);
+            for x in [18.0, 46.0] {
+                let wave: Vec<_> = (0..=12)
+                    .map(|k| {
+                        let y = 36.0 - 26.0 * k as f32 / 12.0;
+                        pos2(x + 3.0 * (k as f32 * 0.9).sin(), y)
+                    })
+                    .collect();
+                c.line(&wave, 1.8, r.beam);
+            }
+        }
+        "import-fluorophore" => {
+            // A molecule (a ring) glowing, and an arrow into the design.
+            let centre = pos2(24.0, 26.0);
+            let ring = c.arc(centre, 10.0, 0.0, 360.0);
+            c.line(&ring, ACTION, r.beam);
+            for (dx, dy) in [(0.0, -16.0), (14.0, -8.0), (-14.0, -8.0)] {
+                c.line(
+                    &[
+                        pos2(24.0 + dx * 0.8, 26.0 + dy * 0.8),
+                        pos2(24.0 + dx, 26.0 + dy),
+                    ],
+                    1.8,
+                    r.beam,
+                );
+            }
+            c.line(&[pos2(40.0, 46.0), pos2(56.0, 46.0)], ACTION, r.a3);
+            c.line(
+                &[pos2(50.0, 40.0), pos2(56.0, 46.0), pos2(50.0, 52.0)],
+                ACTION,
+                r.a3,
+            );
+        }
+        "excitation" => {
+            // A cone converging into a sample, a bright spot at its tip.
+            c.line(&[pos2(6.0, 28.0), pos2(58.0, 28.0)], 1.8, r.a3);
+            let tip = pos2(32.0, 44.0);
+            c.line(&[pos2(12.0, 6.0), tip], ACTION, r.beam);
+            c.line(&[pos2(52.0, 6.0), tip], ACTION, r.beam);
+            for radius in [3.0, 7.0] {
+                let arc = c.arc(tip, radius, 0.0, 360.0);
+                c.line(&arc, if radius < 5.0 { ACTION } else { 1.8 }, r.beam);
+            }
+        }
+        "emission" => {
+            // A point in the sample glowing back up into a cone towards the objective.
+            c.line(&[pos2(6.0, 40.0), pos2(58.0, 40.0)], 1.8, r.a3);
+            let tip = pos2(32.0, 48.0);
+            c.line(&[tip, pos2(14.0, 10.0)], ACTION, r.beam);
+            c.line(&[tip, pos2(50.0, 10.0)], ACTION, r.beam);
+            c.line(&[tip, pos2(32.0, 6.0)], 1.8, r.beam);
+            let arc = c.arc(tip, 6.0, 0.0, 360.0);
+            c.line(&arc, ACTION, r.beam);
+        }
         "psf" => {
             // The focal intensity: a central peak and its first rings (sinc²).
             let profile: Vec<_> = (0..=48)
@@ -820,6 +886,10 @@ pub const ALL: &[&str] = &[
     "gaussian",
     "psf",
     "field",
+    "fluence",
+    "excitation",
+    "heating",
+    "emission",
     "graph",
     "sweep",
     "check-moves",
@@ -830,6 +900,7 @@ pub const ALL: &[&str] = &[
     "import-glass",
     "curve",
     "import-curve",
+    "import-fluorophore",
     "part",
     "import-part",
     "embed",

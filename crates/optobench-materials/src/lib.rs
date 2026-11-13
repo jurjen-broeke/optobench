@@ -17,6 +17,7 @@
 #![forbid(unsafe_code)]
 
 pub mod bundled;
+pub mod dispersion;
 mod formula;
 
 pub use formula::{Composite, DispersionFormula, FormulaKind};
@@ -38,6 +39,12 @@ pub enum MaterialError {
         /// The requested wavelength (µm).
         wavelength: f64,
     },
+    /// The index is a table, interpolated linearly: it has no second derivative, so no
+    /// group-delay dispersion ([`dispersion`]).
+    NotSmooth {
+        /// The requested wavelength (µm).
+        wavelength: f64,
+    },
 }
 
 impl core::fmt::Display for MaterialError {
@@ -51,6 +58,11 @@ impl core::fmt::Display for MaterialError {
             MaterialError::Undefined { wavelength } => {
                 write!(f, "no real refractive index at {wavelength} µm")
             }
+            MaterialError::NotSmooth { wavelength } => write!(
+                f,
+                "the index at {wavelength} µm comes from a table, which gives no dispersion \
+                 (d²n/dλ²); use a dispersion formula"
+            ),
         }
     }
 }
@@ -71,6 +83,110 @@ pub trait Material: core::fmt::Debug + Send + Sync {
     fn absorption_coefficient(&self, wavelength: f64) -> Result<f64, MaterialError> {
         let k = self.extinction(wavelength)?;
         Ok(4.0 * core::f64::consts::PI * k / (wavelength * 1e-3))
+    }
+
+    /// Scattering coefficient µs, in 1/mm: the rate at which light leaves the direct beam
+    /// by scattering. Zero for a clear medium.
+    fn scattering_coefficient(&self, wavelength: f64) -> Result<f64, MaterialError> {
+        self.refractive_index(wavelength).map(|_| 0.0)
+    }
+
+    /// Anisotropy g, the mean cosine of the scattering angle (−1 to 1; 0 isotropic).
+    fn anisotropy(&self, wavelength: f64) -> Result<f64, MaterialError> {
+        self.refractive_index(wavelength).map(|_| 0.0)
+    }
+
+    /// Whether the index is a smooth function of wavelength (a formula), so that its
+    /// derivatives, and the dispersion of a pulse ([`dispersion`]), are defined. False for
+    /// a linearly interpolated table.
+    fn smooth_index(&self) -> bool {
+        true
+    }
+}
+
+/// A quantity over wavelength: one value, or a table (vacuum wavelength µm, value)
+/// interpolated linearly between its rows, undefined outside them.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Spectrum {
+    /// The same at every wavelength.
+    Constant(f64),
+    /// Rows in increasing wavelength.
+    Table(Vec<(f64, f64)>),
+}
+
+impl Spectrum {
+    /// The value at `wavelength` (µm).
+    pub fn at(&self, wavelength: f64) -> Result<f64, MaterialError> {
+        match self {
+            Spectrum::Constant(v) => Ok(*v),
+            Spectrum::Table(rows) => {
+                let (first, last) = match (rows.first(), rows.last()) {
+                    (Some(f), Some(l)) => (f.0, l.0),
+                    _ => return Err(MaterialError::Undefined { wavelength }),
+                };
+                check_range(wavelength, (first, last))?;
+                let i = rows.partition_point(|r| r.0 < wavelength);
+                if i == 0 {
+                    return Ok(rows[0].1);
+                }
+                let (a, b) = (rows[i - 1], rows[i.min(rows.len() - 1)]);
+                // Rows not increasing (made in code, not read from a file): take the later.
+                if b.0 <= a.0 {
+                    return Ok(b.1);
+                }
+                Ok(a.1 + (b.1 - a.1) * (wavelength - a.0) / (b.0 - a.0))
+            }
+        }
+    }
+}
+
+/// A turbid medium (tissue, a scattering phantom): a base medium for the index, with
+/// absorption µa (in place of the base's own, if given), scattering µs and anisotropy g,
+/// each in 1/mm or as a spectrum, and where those values come from.
+#[derive(Debug, Clone)]
+pub struct Turbid {
+    /// The medium that gives the index (and the absorption, if `absorption` is `None`).
+    pub base: Medium,
+    /// µa (1/mm), in place of the base's.
+    pub absorption: Option<Spectrum>,
+    /// µs (1/mm).
+    pub scattering: Spectrum,
+    /// g.
+    pub anisotropy: Spectrum,
+    /// Where the values come from (a paper, a measurement).
+    pub source: String,
+}
+
+impl Material for Turbid {
+    fn refractive_index(&self, wavelength: f64) -> Result<f64, MaterialError> {
+        self.base.material().refractive_index(wavelength)
+    }
+
+    fn extinction(&self, wavelength: f64) -> Result<f64, MaterialError> {
+        match &self.absorption {
+            None => self.base.material().extinction(wavelength),
+            // k from µa = 4πk/λ.
+            Some(a) => Ok(a.at(wavelength)? * wavelength * 1e-3 / (4.0 * core::f64::consts::PI)),
+        }
+    }
+
+    fn absorption_coefficient(&self, wavelength: f64) -> Result<f64, MaterialError> {
+        match &self.absorption {
+            None => self.base.material().absorption_coefficient(wavelength),
+            Some(a) => a.at(wavelength),
+        }
+    }
+
+    fn scattering_coefficient(&self, wavelength: f64) -> Result<f64, MaterialError> {
+        self.scattering.at(wavelength)
+    }
+
+    fn anisotropy(&self, wavelength: f64) -> Result<f64, MaterialError> {
+        self.anisotropy.at(wavelength)
+    }
+
+    fn smooth_index(&self) -> bool {
+        self.base.material().smooth_index()
     }
 }
 
@@ -253,6 +369,10 @@ impl Material for Tabulated {
     fn extinction(&self, wavelength: f64) -> Result<f64, MaterialError> {
         self.evaluate(wavelength).map(|(_, k)| k)
     }
+
+    fn smooth_index(&self) -> bool {
+        false
+    }
 }
 
 /// A shared handle to any material, as stored in systems and scenes.
@@ -273,6 +393,12 @@ impl Medium {
     /// Whether two handles share one material (the same model, not merely equal values).
     pub fn same(&self, other: &Medium) -> bool {
         Arc::ptr_eq(&self.0, &other.0)
+    }
+}
+
+impl From<Turbid> for Medium {
+    fn from(material: Turbid) -> Self {
+        Self::new(material)
     }
 }
 

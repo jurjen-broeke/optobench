@@ -405,7 +405,6 @@ pub fn svg(graph: &Graph) -> String {
 const MAP_CELLS: usize = 240;
 
 fn map_cells(m: &Map, left: f64, top: f64, width: f64, height: f64) -> String {
-    let (low, high) = m.range();
     let columns = m.columns.min(MAP_CELLS);
     let rows = m.rows.min(MAP_CELLS);
     let (w, h) = (width / columns as f64, height / rows as f64);
@@ -421,12 +420,7 @@ fn map_cells(m: &Map, left: f64, top: f64, width: f64, height: f64) -> String {
             if !v.is_finite() {
                 continue;
             }
-            let t = if m.value.scale == Scale::Logarithmic {
-                let floor = high * 1e-6;
-                ((v.max(floor)).log10() - floor.log10()) / (high.log10() - floor.log10())
-            } else {
-                (v - low) / (high - low)
-            };
+            let t = m.level(v);
             let c = colour::scale(m.colours, t, Surface::Light);
             // Row j counts from low y, drawn from the bottom up.
             out.push_str(&format!(
@@ -445,7 +439,7 @@ fn map_cells(m: &Map, left: f64, top: f64, width: f64, height: f64) -> String {
 
 fn colour_bar(m: &Map, left: f64, top: f64, height: f64) -> String {
     let ink = colour::ink(Surface::Light);
-    let (low, high) = m.range();
+    let (low, high) = m.colour_range();
     let steps = 64;
     let mut out = String::from("<g shape-rendering='crispEdges'>\n");
     for k in 0..steps {

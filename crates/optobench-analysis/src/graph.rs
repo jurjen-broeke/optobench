@@ -29,8 +29,18 @@ pub enum Unit {
     Irradiance,
     /// Optical path in waves.
     Wave,
+    /// Power per volume (W/mm³): absorbed power density, heat sources.
+    PowerDensity,
     /// A plain number (a ratio, a count, a Strehl ratio).
     Number,
+    /// Time (s): pulse widths.
+    Time,
+    /// Events per second (1/s): excitation rates.
+    Rate,
+    /// Events per second per mm of depth (1/(s mm)).
+    RatePerLength,
+    /// A temperature difference (K).
+    Temperature,
 }
 
 impl Unit {
@@ -43,7 +53,12 @@ impl Unit {
             Unit::Power => "power",
             Unit::Irradiance => "irradiance",
             Unit::Wave => "wave",
+            Unit::PowerDensity => "power-density",
             Unit::Number => "number",
+            Unit::Time => "time",
+            Unit::Rate => "rate",
+            Unit::RatePerLength => "rate-per-length",
+            Unit::Temperature => "temperature",
         }
     }
 
@@ -56,7 +71,12 @@ impl Unit {
             Unit::Power,
             Unit::Irradiance,
             Unit::Wave,
+            Unit::PowerDensity,
             Unit::Number,
+            Unit::Time,
+            Unit::Rate,
+            Unit::RatePerLength,
+            Unit::Temperature,
         ]
         .into_iter()
         .find(|u| u.name() == name)
@@ -70,7 +90,12 @@ impl Unit {
             Unit::Power => "W",
             Unit::Irradiance => "W/mm²",
             Unit::Wave => "waves",
+            Unit::PowerDensity => "W/mm³",
             Unit::Number => "",
+            Unit::Time => "s",
+            Unit::Rate => "1/s",
+            Unit::RatePerLength => "1/(s mm)",
+            Unit::Temperature => "K",
         }
     }
 }
@@ -188,13 +213,38 @@ impl Axis {
             Unit::Power => ("W", 1.0),
             Unit::Irradiance => ("W/mm²", 1.0),
             Unit::Wave => ("waves", 1.0),
+            Unit::PowerDensity => ("W/mm³", 1.0),
             Unit::Number => ("", 1.0),
+            Unit::Time => {
+                if size < 1e-12 {
+                    ("fs", 1e15)
+                } else if size < 1e-9 {
+                    ("ps", 1e12)
+                } else if size < 1e-6 {
+                    ("ns", 1e9)
+                } else if size < 1e-3 {
+                    ("µs", 1e6)
+                } else if size < 1.0 {
+                    ("ms", 1e3)
+                } else {
+                    ("s", 1.0)
+                }
+            }
+            Unit::Rate => ("1/s", 1.0),
+            Unit::RatePerLength => ("1/(s mm)", 1.0),
+            Unit::Temperature => {
+                if size < 1.0 {
+                    ("mK", 1e3)
+                } else {
+                    ("K", 1.0)
+                }
+            }
         };
         let shown = size * factor;
         let exponent = if self.scale == Scale::Logarithmic
             || matches!(
                 self.unit,
-                Unit::Length | Unit::Angle | Unit::Phase | Unit::Wave
+                Unit::Length | Unit::Angle | Unit::Phase | Unit::Wave | Unit::Time
             )
             || shown == 0.0
             || !shown.is_finite()
@@ -294,6 +344,30 @@ pub struct Map {
 }
 
 impl Map {
+    /// The range the colour scale spans: as [`Map::range`], or on a logarithmic value
+    /// axis six whole decades up to the decade above the peak.
+    pub fn colour_range(&self) -> (f64, f64) {
+        let (low, high) = self.range();
+        if self.value.scale == Scale::Logarithmic && high > 0.0 {
+            let top = 10f64.powf(high.log10().ceil());
+            (top * 1e-6, top)
+        } else {
+            (low, high)
+        }
+    }
+
+    /// Where a value falls on the colour scale, 0 to 1 (renderers share this, so files and
+    /// the interface colour alike).
+    pub fn level(&self, value: f64) -> f64 {
+        let (low, high) = self.colour_range();
+        let t = if self.value.scale == Scale::Logarithmic && high > 0.0 {
+            (value.max(low).log10() - low.log10()) / (high.log10() - low.log10())
+        } else {
+            (value - low) / (high - low)
+        };
+        t.clamp(0.0, 1.0)
+    }
+
     /// The least and greatest finite value; for a diverging scale, symmetric about zero;
     /// for a cyclic one, −π to π.
     pub fn range(&self) -> (f64, f64) {
@@ -679,6 +753,188 @@ pub fn psf_wavefront(psf: &Psf) -> Graph {
     }
 }
 
+/// Excitation against depth through a focus (M11b): per plane across the focus line,
+/// excitations per second per mm of depth, ∫ rate C dA, two-photon and one-photon
+/// (one-photon stays level through the cone; two-photon is confined to the focus).
+pub fn excitation_depth(excitation: &crate::excitation::Excitation) -> Option<Graph> {
+    let volume = excitation.psf.volume.as_ref()?;
+    let molecules = excitation.molar? * 6.022_140_76e23 * 1e-6;
+    let energy = crate::excitation::photon_energy(excitation.wavelength);
+    let mut series = Vec::new();
+    if let Some(two) = &excitation.two_photon {
+        let factor = 0.5 * two.cross_section * molecules * excitation.timing.squared_mean_ratio()
+            / (energy * energy);
+        series.push(Series {
+            label: "two-photon".into(),
+            points: volume.planes.iter().map(|p| (p.0, factor * p.2)).collect(),
+            mark: Mark::Line,
+            reference: false,
+        });
+    }
+    if let Some(one) = &excitation.one_photon {
+        let factor = one.cross_section * molecules / energy;
+        series.push(Series {
+            label: "one-photon".into(),
+            points: volume.planes.iter().map(|p| (p.0, factor * p.1)).collect(),
+            mark: Mark::Line,
+            reference: false,
+        });
+    }
+    if series.is_empty() {
+        return None;
+    }
+    let mut notes = excitation_notes(excitation);
+    notes.push(format!(
+        "planes to ±{:.4} µm from the peak; the two-photon total includes the tails beyond",
+        volume.reach * 1e3
+    ));
+    Some(Graph {
+        title: format!(
+            "Excitation of `{}` against depth through the focus",
+            excitation.fluorophore
+        ),
+        x: Axis::new("z", Unit::Length),
+        y: Axis {
+            label: "excitations per depth".into(),
+            unit: Unit::RatePerLength,
+            scale: Scale::Logarithmic,
+        },
+        plot: Plot::Series(series),
+        equal_aspect: false,
+        markers: Vec::new(),
+        notes,
+    })
+}
+
+fn excitation_notes(e: &crate::excitation::Excitation) -> Vec<String> {
+    let mut notes = vec![format!(
+        "peak {:.4e} W/mm² (ballistic transmission {:.4})",
+        e.peak_irradiance, e.transmission
+    )];
+    if let Some(two) = &e.two_photon {
+        notes.push(format!(
+            "two-photon peak rate {:.4e} /s per molecule",
+            two.peak_rate
+        ));
+        if let Some(total) = two.total {
+            notes.push(format!(
+                "two-photon excitations {total:.4e} /s in the focus"
+            ));
+        }
+    }
+    if let Some(one) = &e.one_photon {
+        notes.push(format!(
+            "one-photon peak rate {:.4e} /s per molecule",
+            one.peak_rate
+        ));
+    }
+    notes
+}
+
+/// The excitation rate per molecule on an x–z section through the focus (M11b): the
+/// two-photon rate if the fluorophore has σ₂ at the wavelength, else the one-photon rate.
+pub fn excitation_map(excitation: &crate::excitation::Excitation) -> Option<Graph> {
+    let section = excitation.psf.section.as_ref()?;
+    let wavelength = excitation.wavelength;
+    let (label, values): (&str, Vec<f64>) = match (&excitation.two_photon, &excitation.one_photon) {
+        (Some(two), _) => (
+            "two-photon rate",
+            section
+                .values
+                .iter()
+                .map(|&i| {
+                    crate::excitation::two_photon_rate(
+                        two.cross_section,
+                        i,
+                        wavelength,
+                        excitation.timing,
+                    )
+                })
+                .collect(),
+        ),
+        (None, Some(one)) => (
+            "one-photon rate",
+            section
+                .values
+                .iter()
+                .map(|&i| crate::excitation::one_photon_rate(one.cross_section, i, wavelength))
+                .collect(),
+        ),
+        (None, None) => return None,
+    };
+    Some(Graph {
+        title: format!(
+            "{} of `{}` per molecule through the focus (x–z)",
+            if label.starts_with("two") {
+                "Two-photon excitation"
+            } else {
+                "One-photon excitation"
+            },
+            excitation.fluorophore
+        ),
+        x: Axis::new("x", Unit::Length),
+        y: Axis::new("z", Unit::Length),
+        plot: Plot::Map(Map {
+            columns: section.columns,
+            rows: section.rows,
+            x: section.x,
+            y: section.z,
+            values,
+            value: Axis::new(label, Unit::Rate),
+            colours: ColourScale::Sequential,
+        }),
+        equal_aspect: false,
+        markers: Vec::new(),
+        notes: excitation_notes(excitation),
+    })
+}
+
+/// A pulse's width along its chief ray (M11b): after each step, against the distance
+/// travelled, the items marked.
+pub fn pulse_width(path: &crate::excitation::PulsePath) -> Graph {
+    let mut distance = 0.0;
+    let mut points = vec![(0.0, path.start)];
+    let mut markers = Vec::new();
+    for step in &path.steps {
+        distance += step.length;
+        points.push((distance, step.width));
+        if step.dispersion != 0.0 || step.from != step.to {
+            markers.push(Marker {
+                at: distance,
+                label: step.to.clone(),
+            });
+        }
+    }
+    markers.dedup_by(|a, b| a.label == b.label && (a.at - b.at).abs() < 1e-9);
+    let last = path.steps.last();
+    Graph {
+        title: format!("Pulse width of `{}` along its chief ray", path.source),
+        x: Axis::new("distance", Unit::Length),
+        y: Axis::new("pulse width (FWHM)", Unit::Time),
+        plot: Plot::Series(vec![Series {
+            label: "Gaussian pulse".into(),
+            points,
+            mark: Mark::Line,
+            reference: false,
+        }]),
+        equal_aspect: false,
+        markers,
+        notes: vec![
+            format!(
+                "{:.1} fs from the laser, prechirp {:.0} fs²",
+                path.width * 1e15,
+                path.prechirp * 1e30
+            ),
+            format!(
+                "{:.1} fs at the end ({}), group-delay dispersion {:.0} fs²",
+                last.map_or(path.start, |s| s.width) * 1e15,
+                path.end,
+                last.map_or(path.prechirp, |s| s.total) * 1e30
+            ),
+        ],
+    }
+}
+
 /// A Gaussian beam's 1/e² radius along its chief ray, element by element: the free
 /// stretch before each plane drawn from the beam there, w(z) = w₀ √(1 + (z / z_R)²) with
 /// z_R = π n w₀² / (M² λ) (Siegman, Lasers, §17.1 and §17.6), and the planes marked.
@@ -752,6 +1008,170 @@ pub fn gaussian_path(beams: &[crate::BeamAt], wavelength: f64, m_squared: f64) -
             .collect(),
         notes,
     }
+}
+
+/// The fluence rate along a sample's axis (the innermost ring): direct, diffuse and both.
+pub fn fluence_depth(light: &crate::sample::SampleLight) -> Graph {
+    let g = &light.grid;
+    let line = |label: &str, values: &dyn Fn(usize) -> f64| Series {
+        label: label.into(),
+        points: (0..g.slices)
+            .map(|j| (g.z_at(j), values(g.index(0, j))))
+            .collect(),
+        mark: Mark::Line,
+        reference: false,
+    };
+    let mut notes = vec![format!(
+        "scattered {:.4e} W, absorbed from the direct beam {:.4e} W",
+        light.scattered, light.direct_absorbed
+    )];
+    if let Some(d) = &light.diffuse_light {
+        notes.push(format!(
+            "diffuse: absorbed {:.4e} W, out through the top {:.4e}, bottom {:.4e}, side {:.4e} W",
+            d.absorbed, d.top, d.bottom, d.side
+        ));
+    }
+    Graph {
+        title: format!("Fluence rate along the axis of `{}`", light.id),
+        x: Axis::new("depth", Unit::Length),
+        y: Axis::new("fluence rate", Unit::Irradiance),
+        plot: Plot::Series(vec![
+            line("direct", &|c| light.direct[c]),
+            line("diffuse", &|c| light.diffuse[c]),
+            line("total", &|c| light.direct[c] + light.diffuse[c]),
+        ]),
+        equal_aspect: false,
+        markers: Vec::new(),
+        notes,
+    }
+}
+
+/// The absorbed power density in a sample as an x–z map (the rings mirrored about the
+/// axis).
+pub fn absorption_map(light: &crate::sample::SampleLight) -> Graph {
+    let g = &light.grid;
+    let columns = 2 * g.rings;
+    let mut values = Vec::with_capacity(columns * g.slices);
+    // Rows from low y: the deepest slice first.
+    for j in (0..g.slices).rev() {
+        for c in 0..columns {
+            let i = if c < g.rings {
+                g.rings - 1 - c
+            } else {
+                c - g.rings
+            };
+            values.push(light.absorbed[g.index(i, j)]);
+        }
+    }
+    let peak = light.absorbed.iter().copied().fold(0.0, f64::max);
+    Graph {
+        title: format!("Absorbed power density in `{}`", light.id),
+        x: Axis::new("x", Unit::Length),
+        // Depth downwards: y is minus the depth, so the beam comes in at the top.
+        y: Axis::new("−depth", Unit::Length),
+        plot: Plot::Map(Map {
+            columns,
+            rows: g.slices,
+            x: (-g.radius, g.radius),
+            y: (-g.z.1, -g.z.0),
+            values,
+            // Over decades, from the beam's entry to the diffuse glow: a log scale.
+            value: Axis {
+                label: "absorbed".into(),
+                unit: Unit::PowerDensity,
+                scale: Scale::Logarithmic,
+            },
+            colours: ColourScale::Sequential,
+        }),
+        equal_aspect: true,
+        markers: Vec::new(),
+        notes: vec![format!(
+            "peak {peak:.4e} W/mm³ (a log scale of six decades); depth from {} to {} mm",
+            g.z.0, g.z.1
+        )],
+    }
+}
+
+/// The temperature rise in a sample as an x–z map (the rings mirrored about the axis),
+/// sampled on even cells from the graded grid, out to `extent` (radius, depth; mm).
+pub fn temperature_map(heating: &crate::heating::Heating, extent: (f64, f64)) -> Graph {
+    let g = &heating.grid;
+    let (radius, depth) = (
+        extent.0.min(g.r[g.r.len() - 1]),
+        extent.1.min(g.z[g.z.len() - 1]),
+    );
+    let (columns, rows) = (200, 150);
+    let mut values = Vec::with_capacity(columns * rows);
+    for row in 0..rows {
+        // From low y: the deepest first.
+        let z = depth * (1.0 - (row as f64 + 0.5) / rows as f64);
+        for c in 0..columns {
+            let x = -radius + 2.0 * radius * (c as f64 + 0.5) / columns as f64;
+            values.push(
+                g.cell(x.abs(), z)
+                    .map_or(f64::NAN, |(i, j)| heating.rise[g.index(i, j)]),
+            );
+        }
+    }
+    let mut notes = vec![format!(
+        "peak {:.4} K at r {:.4} mm, depth {:.4} mm; {:.4} K on the axis at the focal depth {:.4} mm",
+        heating.peak.0, heating.peak.1, heating.peak.2, heating.at_focus, heating.focal_depth
+    )];
+    if let Some(a) = heating.field_average {
+        notes.push(format!(
+            "{a:.4} K averaged over the field at the focal depth"
+        ));
+    }
+    Graph {
+        title: format!("Temperature rise in `{}`", heating.sample),
+        x: Axis::new("x", Unit::Length),
+        y: Axis::new("−depth", Unit::Length),
+        plot: Plot::Map(Map {
+            columns,
+            rows,
+            x: (-radius, radius),
+            y: (-depth, 0.0),
+            values,
+            value: Axis::new("rise", Unit::Temperature),
+            colours: ColourScale::Sequential,
+        }),
+        equal_aspect: true,
+        markers: Vec::new(),
+        notes,
+    }
+}
+
+/// The temperature rise against time at the probes of a heating's time course.
+pub fn temperature_time(heating: &crate::heating::Heating) -> Option<Graph> {
+    let course = heating.course.as_ref()?;
+    let series = heating
+        .probes
+        .iter()
+        .zip(&course.probes)
+        .map(|(&(r, z), history)| Series {
+            label: format!("r {:.3} mm, depth {:.3} mm", r, z),
+            points: course
+                .times
+                .iter()
+                .copied()
+                .zip(history.iter().copied())
+                .collect(),
+            mark: Mark::Line,
+            reference: false,
+        })
+        .collect();
+    Some(Graph {
+        title: format!("Temperature rise in `{}` against time", heating.sample),
+        x: Axis::new("time", Unit::Time),
+        y: Axis::new("rise", Unit::Temperature),
+        plot: Plot::Series(series),
+        equal_aspect: false,
+        markers: Vec::new(),
+        notes: vec![format!(
+            "absorbed {:.4e} W; at the end stored {:.4e} J",
+            heating.absorbed, course.stored
+        )],
+    })
 }
 
 /// Where rays cross the axis near a detector, against their launch height.
