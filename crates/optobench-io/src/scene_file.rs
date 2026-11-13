@@ -153,7 +153,9 @@
 //! excitation = [[0.45, 0.2], [0.49, 1.0], [0.52, 0.1]]  # by this relative spectrum,
 //!                                   # or a table; or one_photon_cross_section_cm2
 //! two_photon_cross_section_gm = [[0.9, 30.0], [0.94, 25.0]]  # optional, GM
-//!                                   # (10⁻⁵⁰ cm⁴ s), two photons per excitation
+//!                                   # (10⁻⁵⁰ cm⁴ s), two photons per excitation; or
+//!                                   # two_photon_action_cross_section_gm (η σ₂, as most
+//!                                   # spectra are published), divided by quantum_yield
 //! emission = [[0.5, 0.3], [0.52, 1.0], [0.6, 0.1]]      # optional, relative
 //! concentrations = [ { sample = "S", layer = 2, micromolar = 10.0 } ]
 //!
@@ -1775,6 +1777,7 @@ pub(crate) fn fluorophores(
                 "excitation",
                 "one_photon_cross_section_cm2",
                 "two_photon_cross_section_gm",
+                "two_photon_action_cross_section_gm",
                 "emission",
                 "concentrations",
             ],
@@ -1852,8 +1855,31 @@ pub(crate) fn fluorophores(
             (None, None, Some(c)) => Some(scaled(c, 100.0)),
             (None, None, None) => None,
         };
-        // 1 GM = 10⁻⁵⁰ cm⁴ s = 10⁻⁴⁸ mm⁴ s.
-        let two_photon = spectrum(&item, "two_photon_cross_section_gm")?.map(|s| scaled(s, 1e-48));
+        // 1 GM = 10⁻⁵⁰ cm⁴ s per photon (Xu, Zipfel, Shear, Williams and Webb, Proc. Natl.
+        // Acad. Sci. USA 93, 10763 (1996), Fig. 1) = 10⁻⁴⁸ mm⁴ s. Most published spectra are
+        // action cross-sections η σ₂ (ibid., Figs. 1 to 4), so σ₂ is that over η.
+        let two_photon = match (
+            spectrum(&item, "two_photon_cross_section_gm")?,
+            spectrum(&item, "two_photon_action_cross_section_gm")?,
+        ) {
+            (Some(_), Some(_)) => {
+                return Err(error(format!(
+                    "{}: give `two_photon_cross_section_gm` or `two_photon_action_cross_section_gm`, not both",
+                    item.context
+                )));
+            }
+            (Some(absorption), None) => Some(scaled(absorption, 1e-48)),
+            (None, Some(action)) => {
+                if quantum_yield <= 0.0 {
+                    return Err(error(format!(
+                        "{}: an action cross-section (η σ₂) needs a quantum yield above 0",
+                        item.context
+                    )));
+                }
+                Some(scaled(action, 1e-48 / quantum_yield))
+            }
+            (None, None) => None,
+        };
         let emission = spectrum(&item, "emission")?;
         let mut concentrations = Vec::new();
         if let Some(value) = item.table.get("concentrations") {

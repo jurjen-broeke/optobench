@@ -5,7 +5,9 @@
 //!
 //! - σ₁ = 1000 ln 10 ε / N_A cm² for a molar extinction coefficient ε in L mol⁻¹ cm⁻¹
 //!   (Beer–Lambert in base 10; N_A = 6.022 140 76 × 10²³ /mol, exact in the SI).
-//! - 1 GM (Göppert-Mayer) = 10⁻⁵⁰ cm⁴ s per photon.
+//! - 1 GM (Göppert-Mayer) = 10⁻⁵⁰ cm⁴ s per photon (C. Xu, W. Zipfel, J. B. Shear,
+//!   R. M. Williams and W. W. Webb, Proc. Natl. Acad. Sci. USA 93, 10763 (1996), Fig. 1,
+//!   where most spectra are action cross-sections η σ₂: the absorption σ₂ is η σ₂ / η).
 //! - The group-delay dispersion of a path is the sum of GVD × length over its media
 //!   (Diels and Rudolph, Ultrashort Laser Pulse Phenomena, 2nd ed., 2006, ch. 1), each
 //!   GVD from the materials' own dispersion formulas (checked against the formulas
@@ -81,6 +83,16 @@ fn a_fluorophore_and_a_pulsed_laser_are_read() {
     assert_eq!(dye.concentrations[0].layer, 1);
     assert!((dye.concentrations[0].molar - 1e-5).abs() < 1e-17);
     assert!(matches!(dye.emission, Some(Spectrum::Table(_))));
+
+    // An action cross-section η σ₂ = 27 GM with η = 0.9 is σ₂ = 30 GM.
+    let action = DYE.replace(
+        "two_photon_cross_section_gm = [[0.90, 30.0], [0.94, 20.0]]",
+        "two_photon_action_cross_section_gm = [[0.90, 27.0], [0.94, 18.0]]",
+    );
+    let scene = read(&layout(&action)).expect("read");
+    let two = scene.fluorophores[0].two_photon.as_ref().expect("given");
+    assert!((two.at(0.90).expect("in range") - 3e-47).abs() < 1e-58);
+    assert!((two.at(0.94).expect("in range") - 2e-47).abs() < 1e-58);
 }
 
 #[test]
@@ -141,6 +153,18 @@ fn fluorophores_and_pulses_are_checked() {
         "from 0 to 1",
     );
     refused(&with("one_photon_cross_section_cm2 = 2e-16"), "not both");
+    refused(
+        &with("two_photon_action_cross_section_gm = 27.0"),
+        "not both",
+    );
+    refused(
+        &DYE.replace("quantum_yield = 0.9", "quantum_yield = 0.0")
+            .replace(
+                "two_photon_cross_section_gm",
+                "two_photon_action_cross_section_gm",
+            ),
+        "needs a quantum yield above 0",
+    );
     refused(
         &DYE.replace("sample = \"S\"", "sample = \"X\""),
         "no element `X`",

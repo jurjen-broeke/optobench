@@ -85,9 +85,11 @@ the diffusion approximation here; photon transport by Monte Carlo replaces it in
       reported with the excitation volume (M11b2)
 - [x] Two-photon excitation: rate ½ σ₂ ⟨F²⟩, ⟨F²⟩ = g_p ⟨F⟩² / (f τ) for pulses, g_p
       computed from the shapes (√(2 ln 2 / π) = 0.664 Gaussian, 2 ln(1 + √2) / 3 = 0.588
-      sech², as Xu and Webb 1996 quote them; their paper is not in the corpus, so the
+      sech², as Xu and Webb 1996 quote them; that paper is not in the corpus, so the
       convention, two photons per excitation, follows this plan); per-pulse probability
-      rate / f reported with the volume (M11b2)
+      rate / f reported with the volume (M11b2). Two-photon spectra may be given as
+      action cross-sections η σ₂ (`two_photon_action_cross_section_gm`, divided by the
+      quantum yield), the form most are published in (Xu et al. 1996, PNAS, below)
 - [x] Pulse broadening: the group-velocity dispersion of each material from its own
       formula (`optobench_materials::dispersion`: five-point differences at h and h/2,
       Richardson extrapolated; a tabulated index is refused), summed along the chief ray
@@ -116,8 +118,9 @@ the diffusion approximation here; photon transport by Monte Carlo replaces it in
       total of a Gaussian–Lorentzian focus against its closed form, ∫ I² dV = π n P² / λ
       for a Gaussian beam focused in a medium of index n (derived from the beam:
       ∫ I² dA = P² / (π w²) per plane, integrated over z with w² = w₀² (1 + z² / z_R²),
-      z_R = π w₀² n / λ); Xu and Webb's own expression compared once their paper is in
-      the corpus
+      z_R = π w₀² n / λ), independent of the NA as Xu et al. (1996, PNAS) state for the
+      thick-sample limit; Xu and Webb's (JOSA B) own expression compared once that paper
+      is in the corpus
 
 ### M11b3 FPbase
 
@@ -259,6 +262,30 @@ Read from the local corpus on 2026-11-13; each value cited where a test uses it.
   which disagrees with Table 12.9 (0.623) and must be a misprint, and ρ = 993 kg/m³,
   c = 4.178 kJ/(kg K). Star's Table 6.2: r₂₁ for n = 1.4 is 0.49 (step) or 0.53 (Fresnel),
   as our A ≈ 3.25 gives (r₂₁ = 0.529)
+
+## Two-photon excitation from the sources
+
+Read from the local corpus on 2026-11-13: C. Xu, W. Zipfel, J. B. Shear, R. M. Williams
+and W. W. Webb, "Multiphoton fluorescence excitation: new spectral windows for biological
+nonlinear microscopy", Proc. Natl. Acad. Sci. USA 93, 10763 (1996). It is the companion
+of Xu and Webb, J. Opt. Soc. Am. B 13, 481 (1996) (its ref. 28), which holds the
+derivations (g_p, the ½ convention, the thick-sample total) and is still to be added.
+
+- 1 GM = 10⁻⁵⁰ cm⁴ s per photon (Fig. 1). Figs. 1, 3 and 4 and Table 1 give action
+  cross-sections η σ₂ (all but Bis-MSB in Fig. 1, rhodamine B and fluorescein in Fig. 2);
+  the two- and three-photon quantum efficiencies are assumed equal (Table 1 note);
+  uncertainties ~30 % for σ₂, a factor ~3 for σ₃
+- Emission spectra are the same after one-, two- and three-photon excitation (text): one
+  emission spectrum per fluorophore serves every excitation mode
+- Saturation: σₙ I_peakⁿ τ ≈ 1 for a square pulse, I in photons/(cm² s) (Eq. 1);
+  P_avg ≈ (0.61)² λ² (f τ) I_peak / NA² for a diffraction-limited focus (Eq. 2). Eq. 3,
+  the saturation power, prints (σₙ τ)^(−1/n) in the denominator; combining Eqs. 1 and 2
+  puts it in the numerator. Its example (NA 1.3, 100 fs, 80 MHz, 1.0 µm; ~30, ~150,
+  ~300 mW for two-, three- and four-photon) does not follow from Eq. 2 with the
+  cross-sections it estimates (σ₂ ~ 10⁻⁴⁹ cm⁴ s gives ~3.5 mW); not used as a reference
+- In the thick-sample limit the two-photon fluorescence of a Gaussian–Lorentzian beam is
+  independent of the NA, the three-photon one is not (∝ σ₃ P³ / ((f τ)² w₀²), Eq. 4);
+  stated, not derived (refs. 28, 43)
 
 ## Open questions
 
