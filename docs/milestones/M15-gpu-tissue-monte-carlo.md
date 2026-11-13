@@ -18,27 +18,31 @@ and L. Wang, ch. 5 of A. J. Welch and M. J. C. van Gemert, Optical-Thermal Respo
 Laser-Irradiated Tissue, 2nd ed., 2011, in the local corpus), written from those
 descriptions; no code is adapted.
 
-- [ ] Photon packets from the traced rays where they enter a sample (position, direction,
-      power), so a focused or scanned beam is launched as it arrives; also a pencil beam
-      and a uniform disk for benchmarks
-- [ ] Steps s = −ln ξ / µt; at each interaction the weight times µa / µt deposited (on
-      the sample's r–z grid) and the rest scattered by Henyey–Greenstein (cos θ sampled
-      in closed form; ch. 5 Eq. (5.45)); layers with their own µa, µs, g and n, Fresnel
-      reflection at every index step (the packet reflected or transmitted by chance,
-      unpolarised), total internal reflection; Russian roulette below a weight threshold
-      (survival 1/m, weight × m; Eq. (5.49)); escape through the top, the bottom and the
-      side recorded
-- [ ] Results as for M11a2: absorbed power density per cell, fluence rate µa⁻¹ × that
-      (and from the track lengths where µa = 0), reflectance and transmittance (diffuse
-      and specular), per layer absorption; the balance closes
-- [ ] The seeded generator moved to `optobench-math` (L0; xoshiro256** from M14),
-      independent streams per batch, so results do not depend on threads
-- [ ] Checks against exact results: an absorbing slab between index steps (no
-      scattering) against the multiple-reflection formula; a semi-infinite isotropic
-      scatterer under a matched boundary against its total reflectance from
-      Chandrasekhar's H-function (S. Chandrasekhar, Radiative Transfer, 1950; the
-      H-equation solved in the test); the Henyey–Greenstein sampler's mean cosine and
-      distribution; the balance; diffusion's µ_eff far from the source
+- [x] `optobench_analysis::photon`: packets from the traced rays where they cross a
+      sample's first face going in (`sample_launches`: position, direction just inside,
+      power after that face's Fresnel loss), or a beam from above (`entering`, the
+      specular part split off); the stack from the sample's layers at the rays'
+      wavelength (`sample_tissue`)
+- [x] The walk (`walk`): steps −ln ξ / µt with the optical depth carried across layer
+      boundaries; w µa / µt left at each interaction; Henyey–Greenstein in closed form
+      (ch. 5, Eq. (5.45)); Fresnel (unpolarised) at every index step, the packet
+      reflected or refracted by chance, total internal reflection included; Russian
+      roulette (one in 10 survives with ten times its weight below 10⁻⁴ of the launch
+      weight), its net effect kept so the balance closes exactly
+- [x] Results (`Transport`): absorbed per cell of the r–z grid and outside it, per layer,
+      weighted track length per cell (the fluence rate, also where µa = 0), reflected and
+      transmitted; batches add up (`absorb`)
+- [x] The generator moved to `optobench_math::random` (`tolerance::draw` keeps the
+      distributions), independent streams per batch
+- [x] Checks: the Henyey–Greenstein sampler's mean cosine (g = 0, 0.5, 0.9, −0.3) and its
+      cumulative distribution against the phase function integrated; turning keeps unit
+      vectors at the drawn angle; an absorbing slab of n = 1.5 in air against the
+      multiple-reflection formulas (specular exact, R and T within 4σ); a semi-infinite
+      isotropic scatterer of albedo 0.9 against Chandrasekhar's plane albedo
+      1 − H(1) √(1 − ω), the H-function solved in the test (its zeroth moment
+      (ω/2) ∫ H = 1 − √(1 − ω) to 10⁻⁹), within 4σ; packets launched from a traced layout
+      carry (1 − r) of the beam into a slab and cross it as the formula says; the
+      balance closes to rounding (10⁻¹⁰)
 - [ ] Published slab benchmarks (exit criterion): van de Hulst's tables as MCML compares
       with them, once those sources are in the corpus
 

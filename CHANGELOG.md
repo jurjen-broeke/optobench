@@ -5,6 +5,12 @@ with the release that introduced them.
 
 ## Unreleased
 
+- M15a tissue Monte Carlo: `optobench_analysis::photon` walks weighted photon packets
+  through a sample's layers (Henyey–Greenstein scattering, Fresnel at index steps, Russian
+  roulette), launched from the traced rays where they enter the sample, recording
+  absorbed power and fluence on the r–z grid, reflectance and transmittance. Checked
+  against an absorbing slab's multiple reflections and Chandrasekhar's semi-infinite
+  reflectance. The seeded generator moved to `optobench_math::random`.
 - Mounts: `[[mount]]` tables describe a mount's adjusters once (kind, axis, `range` or
   `travel`, `source`); `mount = "<id>"` on an element, source or detector gives it those
   DOFs before the solve. DOFs take `travel` (the part placed in its middle) and
