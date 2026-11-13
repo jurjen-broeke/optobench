@@ -21,6 +21,7 @@ mod emission;
 mod excitation;
 mod field;
 mod fluence;
+mod fluorophores;
 mod graph;
 mod materials;
 mod moves;
@@ -185,6 +186,14 @@ const STANDARD: &[Command] = &[
         effect: Effect::Read,
         summary: "every placed body of a STEP file: path, product, name, fingerprint",
         handler: trace::bodies,
+    },
+    Command {
+        id: "import-fluorophore",
+        label: "Import Fluorophore",
+        icon: "import-fluorophore",
+        effect: Effect::Write,
+        summary: "import a fluorescent protein from FPbase JSON the user downloaded, terms shown first, as a design's fluorophore",
+        handler: fluorophores::import_fluorophore,
     },
     Command {
         id: "import-material",

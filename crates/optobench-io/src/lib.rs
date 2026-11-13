@@ -9,6 +9,7 @@
 pub mod coatings;
 pub mod curves;
 pub mod edit;
+pub mod fpbase;
 pub mod graph;
 pub mod library;
 pub mod merit;

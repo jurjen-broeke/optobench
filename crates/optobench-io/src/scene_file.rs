@@ -155,7 +155,8 @@
 //! two_photon_cross_section_gm = [[0.9, 30.0], [0.94, 25.0]]  # optional, GM
 //!                                   # (10⁻⁵⁰ cm⁴ s), two photons per excitation; or
 //!                                   # two_photon_action_cross_section_gm (η σ₂, as most
-//!                                   # spectra are published), divided by quantum_yield
+//!                                   # spectra are published), divided by quantum_yield;
+//!                                   # a number with two_photon_spectrum (relative) is its peak
 //! emission = [[0.5, 0.3], [0.52, 1.0], [0.6, 0.1]]      # optional, relative
 //! concentrations = [ { sample = "S", layer = 2, micromolar = 10.0 } ]
 //!
@@ -1778,6 +1779,7 @@ pub(crate) fn fluorophores(
                 "one_photon_cross_section_cm2",
                 "two_photon_cross_section_gm",
                 "two_photon_action_cross_section_gm",
+                "two_photon_spectrum",
                 "emission",
                 "concentrations",
             ],
@@ -1879,6 +1881,33 @@ pub(crate) fn fluorophores(
                 Some(scaled(action, 1e-48 / quantum_yield))
             }
             (None, None) => None,
+        };
+        // A relative two-photon spectrum (as FPbase gives it) shaped by a peak value.
+        let two_photon = match (two_photon, spectrum(&item, "two_photon_spectrum")?) {
+            (any, None) => any,
+            (Some(Spectrum::Constant(peak)), Some(Spectrum::Table(rows))) => {
+                let top = rows.iter().map(|r| r.1).fold(0.0, f64::max);
+                if top <= 0.0 {
+                    return Err(error(format!(
+                        "{}: `two_photon_spectrum` is zero everywhere",
+                        item.context
+                    )));
+                }
+                Some(scaled(Spectrum::Table(rows), peak / top))
+            }
+            (None, Some(_)) => {
+                return Err(error(format!(
+                    "{}: `two_photon_spectrum` is relative: give its peak as a number in \
+                     `two_photon_cross_section_gm` (or `two_photon_action_cross_section_gm`)",
+                    item.context
+                )));
+            }
+            (Some(_), Some(_)) => {
+                return Err(error(format!(
+                    "{}: with `two_photon_spectrum`, the cross-section is one number (at the peak)",
+                    item.context
+                )));
+            }
         };
         let emission = spectrum(&item, "emission")?;
         let mut concentrations = Vec::new();

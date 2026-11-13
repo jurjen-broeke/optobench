@@ -138,14 +138,32 @@ the diffusion approximation here; photon transport by Monte Carlo replaces it in
 
 ### M11b3 FPbase
 
-- [ ] Import from FPbase (fpbase.org; T. J. Lambert, Nat. Methods 16, 277 (2019)) through
-      its documented REST API: spectra, extinction coefficient, quantum yield, two-photon
-      cross-section where given. Imported by the user like refractiveindex.info data,
-      never bundled: FPbase states CC BY-SA 4.0 for the site and also that its data are
-      "free of all copyright restrictions", and asks that each protein's original authors
-      be credited, so the import shows that notice and stores the protein's references
-      with the data (licence review entry first). FPbase's source code is GPL-3.0 and is
-      not read; only the API documentation is
+- [x] Licence review entry (docs/licence-review.md, FPbase, recommendation 5): FPbase's
+      terms quoted from its own pages; data "free of all copyright restrictions" with
+      attribution of the original authors asked; the site under CC BY-SA 4.0, its reach
+      to the data not stated (an open decision there); some data may carry patents or
+      other rights. FPbase's source code (GPL-3.0) was not opened; the reader follows the
+      API documentation and the API's own output
+- [x] Import from FPbase's REST API output (`optobench_io::fpbase`, command
+      `import-fluorophore`): the user downloads `/api/proteins/spectra/?name__iexact=…`
+      (spectra, extinction coefficient, quantum yield) and optionally `/api/proteins/…`
+      (lifetime, the primary reference's DOI); a state is chosen (`default`), every field
+      checked (the API is "subject to change"). Nothing is stored before the user accepts
+      the terms shown; then the files are kept unchanged with a `provenance.json` in
+      `<data>/optobench/sources/fpbase/<version>/`, and a `[[fluorophore]]` entry is
+      returned or appended to a design (before its `[resolved]` section), its `source`
+      carrying FPbase's citation, the protein, its state and its DOI, so the attribution
+      travels with the values. Never bundled
+- [x] Two-photon: the API gives no cross-section, only (per its schema) a relative `2p`
+      spectrum; it is written commented out with a note to give a published peak.
+      Designs take `two_photon_spectrum` (relative) shaped by a peak
+      `two_photon_cross_section_gm` or `two_photon_action_cross_section_gm`
+- [x] Checks (commands `tests/fluorophores.rs`, with made-up files shaped like the API's):
+      terms shown and nothing written before acceptance; stored files and provenance;
+      the appended design reads back with σ₁ from ε shaped by the excitation spectrum,
+      quantum yield, lifetime and the attribution; a second import under the same id, an
+      ambiguous file, an unknown state and broken JSON refused; a relative two-photon
+      spectrum shaped by an absorption or an action peak
 
 ## M11c Emission and the photon budget
 

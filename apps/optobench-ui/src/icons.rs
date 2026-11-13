@@ -582,6 +582,28 @@ pub fn draw(painter: &Painter, rect: Rect, id: &str, enabled: bool) {
             }
             c.line(&[pos2(32.0, 2.0), pos2(32.0, 30.0)], ACTION, r.beam);
         }
+        "import-fluorophore" => {
+            // A molecule (a ring) glowing, and an arrow into the design.
+            let centre = pos2(24.0, 26.0);
+            let ring = c.arc(centre, 10.0, 0.0, 360.0);
+            c.line(&ring, ACTION, r.beam);
+            for (dx, dy) in [(0.0, -16.0), (14.0, -8.0), (-14.0, -8.0)] {
+                c.line(
+                    &[
+                        pos2(24.0 + dx * 0.8, 26.0 + dy * 0.8),
+                        pos2(24.0 + dx, 26.0 + dy),
+                    ],
+                    1.8,
+                    r.beam,
+                );
+            }
+            c.line(&[pos2(40.0, 46.0), pos2(56.0, 46.0)], ACTION, r.a3);
+            c.line(
+                &[pos2(50.0, 40.0), pos2(56.0, 46.0), pos2(50.0, 52.0)],
+                ACTION,
+                r.a3,
+            );
+        }
         "excitation" => {
             // A cone converging into a sample, a bright spot at its tip.
             c.line(&[pos2(6.0, 28.0), pos2(58.0, 28.0)], 1.8, r.a3);
@@ -863,6 +885,7 @@ pub const ALL: &[&str] = &[
     "import-glass",
     "curve",
     "import-curve",
+    "import-fluorophore",
     "part",
     "import-part",
     "embed",
