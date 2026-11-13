@@ -9,8 +9,11 @@ with the release that introduced them.
   JSON the user downloaded from FPbase's API (spectra, extinction coefficient, quantum
   yield, lifetime, primary reference), shows FPbase's terms first, stores the files with
   their provenance and gives (or appends to a design) a `[[fluorophore]]` entry carrying
-  FPbase's citation and the protein's DOI. Fluorophores take `two_photon_spectrum`
-  (relative) shaped by a peak cross-section. Licence review entry for FPbase.
+  FPbase's citation and the protein's DOI. The API has no two-photon data: a two-photon
+  excitation spectrum exported from FPbase's website is imported from its own file
+  (`two_photon`, relative with a cited peak, or in GM). Fluorophores take
+  `two_photon_spectrum` (relative) shaped by a peak cross-section. Licence review entry
+  for FPbase.
 - M11b2 the excitation volume: new command `excitation` gives a fluorophore's one- and
   two-photon excitation at a laser's focus (rates per molecule at the peak, saturation
   and per-pulse checks, two-photon excitations in the focus and photons emitted,

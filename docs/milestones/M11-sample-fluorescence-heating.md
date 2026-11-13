@@ -154,16 +154,25 @@ the diffusion approximation here; photon transport by Monte Carlo replaces it in
       returned or appended to a design (before its `[resolved]` section), its `source`
       carrying FPbase's citation, the protein, its state and its DOI, so the attribution
       travels with the values. Never bundled
-- [x] Two-photon: the API gives no cross-section, only (per its schema) a relative `2p`
-      spectrum; it is written commented out with a note to give a published peak.
-      Designs take `two_photon_spectrum` (relative) shaped by a peak
+- [x] Two-photon: the API has no two-photon data (its responses for EGFP and tdTomato hold
+      only the one-photon spectra and no two-photon field; checked 2026-11-13), while
+      FPbase's website has two-photon excitation spectra for some proteins (avGFP, EGFP,
+      tdTomato). The user exports one as a table and passes it as `two_photon` (the column
+      named like `2P`, or `two_photon_column`); its values are relative, or in GM
+      (`two_photon_values = "gm"` or `"action-gm"`), and a relative spectrum needs
+      `two_photon_peak_gm` with `two_photon_peak_source` before the entry uses it (else it
+      is written commented out). It is the excitation only: emission after two-photon
+      excitation follows the one-photon emission spectrum (Xu et al. 1996, PNAS). Designs
+      take `two_photon_spectrum` (relative) shaped by a peak
       `two_photon_cross_section_gm` or `two_photon_action_cross_section_gm`
 - [x] Checks (commands `tests/fluorophores.rs`, with made-up files shaped like the API's):
       terms shown and nothing written before acceptance; stored files and provenance;
       the appended design reads back with σ₁ from ε shaped by the excitation spectrum,
       quantum yield, lifetime and the attribution; a second import under the same id, an
       ambiguous file, an unknown state and broken JSON refused; a relative two-photon
-      spectrum shaped by an absorption or an action peak
+      spectrum shaped by an absorption or an action peak; a two-photon table in GM used
+      as it is, a relative one with a cited action peak, one without a peak left
+      commented out, a peak without its source refused
 
 ## M11c Emission and the photon budget
 

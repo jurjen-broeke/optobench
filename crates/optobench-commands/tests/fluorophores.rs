@@ -15,8 +15,7 @@ use serde_json::{Value, json};
 
 const SPECTRA: &str = r#"[{"name": "TestFP", "slug": "testfp", "spectra": [
     {"state": "default_ex", "ec": 50000, "max": 480, "data": [[460, 0.5], [480, 1.0], [500, 0.25]]},
-    {"state": "default_em", "qy": 0.7, "max": 510, "data": [[490, 0.2], [510, 1.0], [540, 0.3]]},
-    {"state": "default_2p", "data": [[900, 0.6], [920, 1.0], [960, 0.4]]}
+    {"state": "default_em", "qy": 0.7, "max": 510, "data": [[490, 0.2], [510, 1.0], [540, 0.3]]}
 ]}]"#;
 const PROTEINS: &str = r#"[{"name": "TestFP", "slug": "testfp", "doi": "10.0000/test.1",
     "states": [{"slug": "testfp_default", "name": "default", "ext_coeff": 50000, "qy": 0.7, "lifetime": 3.1}]}]"#;
@@ -108,9 +107,8 @@ fn a_protein_is_imported_into_a_design_with_its_attribution() {
     assert!((one.at(0.48).expect("in range") - peak).abs() < 1e-12 * peak);
     assert!((one.at(0.5).expect("in range") - 0.25 * peak).abs() < 1e-12 * peak);
     assert!(dye.emission.is_some());
-    // No cross-section from FPbase: the relative two-photon spectrum stays commented out.
+    // No two-photon file given: no two-photon excitation.
     assert!(dye.two_photon.is_none());
-    assert!(text.contains("# two_photon_spectrum = ["));
 
     // A second import under the same id is refused.
     let again = run(accepted).expect_err("taken");
@@ -118,6 +116,92 @@ fn a_protein_is_imported_into_a_design_with_its_attribution() {
         again.contains("already has a fluorophore `testfp`"),
         "{again}"
     );
+}
+
+/// A two-photon excitation table as a user might export it (made-up values): several
+/// columns, the two-photon one named `2P`, values in GM.
+const TWO_PHOTON: &str =
+    "wavelength,TestFP EX,TestFP 2P\n880,,12\n900,0.1,30\n920,0.05,40\n960,,16\n";
+
+#[test]
+fn a_two_photon_spectrum_comes_from_its_own_file() {
+    let scratch = Scratch::new("two-photon");
+    let spectra = scratch.file("spectra.json", SPECTRA);
+    let two = scratch.file("two-photon.csv", TWO_PHOTON);
+    let data = scratch.0.join("data").to_string_lossy().into_owned();
+    let import = |extra: Value, design: &str| {
+        let mut parameters = json!({
+            "spectra": spectra, "two_photon": two, "append_to": design,
+            "accept_licence": true, "data_directory": data,
+        });
+        for (k, v) in extra.as_object().expect("object") {
+            parameters[k] = v.clone();
+        }
+        run(parameters)
+    };
+    let read = |design: &str| {
+        let text = std::fs::read_to_string(design).expect("design");
+        parse(&text, &|n: &str| material(None, n)).expect("reads")
+    };
+
+    // Values in GM: the peak is the file's, active at once.
+    let design = scratch.file("gm.optobench", DESIGN);
+    let result = import(json!({ "two_photon_values": "gm" }), &design).expect("imported");
+    assert_eq!(
+        result["fluorophore"]["two_photon_spectrum"]["peak_gm"],
+        40.0
+    );
+    let scene = read(&design);
+    let sigma = scene.fluorophores[0].two_photon.as_ref().expect("σ₂");
+    assert!((sigma.at(0.92).expect("in range") - 40e-48).abs() < 1e-60);
+    assert!((sigma.at(0.9).expect("in range") - 30e-48).abs() < 1e-60);
+    assert!(
+        scene.fluorophores[0]
+            .source
+            .contains("two-photon excitation spectrum from two-photon.csv, column TestFP 2P")
+    );
+    // Emission stays the one-photon spectrum.
+    assert!(scene.fluorophores[0].emission.is_some());
+
+    // Relative with a published action peak: σ₂ = η σ₂ / η at the peak.
+    let design = scratch.file("action.optobench", DESIGN);
+    import(
+        json!({ "two_photon_peak_gm": 21.0, "two_photon_peak_action": true,
+                "two_photon_peak_source": "a test paper" }),
+        &design,
+    )
+    .expect("imported");
+    let scene = read(&design);
+    let sigma = scene.fluorophores[0].two_photon.as_ref().expect("σ₂");
+    assert!((sigma.at(0.92).expect("in range") - 30e-48).abs() < 1e-60);
+    assert!(
+        scene.fluorophores[0]
+            .source
+            .contains("peak action cross-section 21 GM from a test paper")
+    );
+
+    // Relative without a peak: written commented out, so not used.
+    let design = scratch.file("relative.optobench", DESIGN);
+    import(json!({}), &design).expect("imported");
+    assert!(read(&design).fluorophores[0].two_photon.is_none());
+    assert!(
+        std::fs::read_to_string(&design)
+            .expect("design")
+            .contains("# two_photon_spectrum = [")
+    );
+
+    // A peak without its source, a peak for GM values, and options without the file.
+    let design = scratch.file("refused.optobench", DESIGN);
+    let error = import(json!({ "two_photon_peak_gm": 21.0 }), &design).expect_err("no source");
+    assert!(error.contains("two_photon_peak_source"), "{error}");
+    let error = import(
+        json!({ "two_photon_values": "gm", "two_photon_peak_gm": 21.0, "two_photon_peak_source": "x" }),
+        &design,
+    )
+    .expect_err("twice");
+    assert!(error.contains("in GM already"), "{error}");
+    let error = run(json!({ "spectra": spectra, "two_photon_values": "gm" })).expect_err("no file");
+    assert!(error.contains("need the `two_photon` file"), "{error}");
 }
 
 #[test]

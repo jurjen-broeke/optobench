@@ -109,8 +109,11 @@ API's own JSON output.
 - **What the API gives** (checked on its JSON output, 2026-11-13): per protein its name,
   slug, a `doi` (the primary reference) and states with `ex_max`, `em_max` (nm),
   `ext_coeff` (M⁻¹ cm⁻¹), `qy`, `lifetime` (ns); per state spectra as `[wavelength nm,
-  value]` normalised to a peak of 1 (observed, not documented). No two-photon
-  cross-section field; the schema lists a `2p` spectrum subtype. The API "is still a work
+  value]` normalised to a peak of 1 (observed, not documented). No two-photon data: the
+  schema lists a `2p` spectrum subtype, but the responses for EGFP and tdTomato hold only
+  the one-photon excitation and emission spectra and no two-photon field. FPbase's
+  website shows two-photon excitation spectra for some proteins (avGFP, EGFP, tdTomato);
+  exported by the user, they fall under the same terms. The API "is still a work
   in development and is subject to change", so the reader checks every field it uses.
 
 Recommendation 5. **Import by the user, never bundle**, as decided 2026-11-12

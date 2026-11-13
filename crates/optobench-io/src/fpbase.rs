@@ -17,12 +17,20 @@
 //!                   "lifetime": 2.6, … } ] } ]
 //! ```
 //!
-//! Spectra are `[wavelength nm, value]`, normalised to a peak of 1; a state's spectra are
-//! named `<state>_ex`, `<state>_em` and, where FPbase has one, `<state>_2p` (the schema's
-//! `2p` subtype; its naming here follows the other two and has not been seen in a
-//! response). The API has no two-photon cross-section: a two-photon spectrum comes out
-//! relative, to be scaled by a published peak value. The API "is still a work in
+//! Spectra are `[wavelength nm, value]`, normalised to a peak of 1 (observed); a state's
+//! spectra are named `<state>_ex` and `<state>_em`. The API "is still a work in
 //! development and is subject to change", so every field used is checked.
+//!
+//! **Two-photon excitation** is not in the API: for EGFP and tdTomato its responses hold
+//! only the one-photon spectra and no two-photon field (checked 2026-11-13), while FPbase
+//! has two-photon excitation spectra for some proteins (avGFP, EGFP, tdTomato) on its
+//! website. Such a spectrum, exported by the user as a table, is read separately
+//! ([`read_two_photon`]): delimited text with a header (the column named like `2P`, or
+//! given) or JSON `[[nm, value], …]`. It is the excitation only; emission after two-photon
+//! excitation follows the one-photon emission spectrum (as C. Xu, W. Zipfel, J. B. Shear,
+//! R. M. Williams and W. W. Webb, Proc. Natl. Acad. Sci. USA 93, 10763 (1996), found). Its
+//! values are relative unless the user says they are in GM; a relative spectrum needs a
+//! peak cross-section with its source before the entry uses it.
 //!
 //! The import ([`import`]) stores the files unchanged with their provenance, like imported
 //! materials, and gives a `[[fluorophore]]` entry for a design ([`Protein::entry`]) whose
@@ -62,8 +70,8 @@ pub struct Protein {
     pub excitation: Option<Vec<(f64, f64)>>,
     /// Emission spectrum, (µm, relative).
     pub emission: Option<Vec<(f64, f64)>>,
-    /// Two-photon spectrum, (µm, relative).
-    pub two_photon: Option<Vec<(f64, f64)>>,
+    /// Two-photon excitation, from a separate file.
+    pub two_photon: Option<TwoPhoton>,
     /// Extinction coefficient at the excitation peak (L mol⁻¹ cm⁻¹).
     pub extinction: Option<f64>,
     /// Quantum yield.
@@ -183,8 +191,8 @@ pub fn read(
         .filter_map(|s| s["state"].as_str())
         .filter_map(|s| s.rsplit_once('_').map(|p| p.0))
         .collect();
-    let (ex, em, two) = (named("ex"), named("em"), named("2p"));
-    if ex.is_none() && em.is_none() && two.is_none() {
+    let (ex, em) = (named("ex"), named("em"));
+    if ex.is_none() && em.is_none() {
         let mut known = states.clone();
         known.sort_unstable();
         known.dedup();
@@ -203,9 +211,7 @@ pub fn read(
         emission: em
             .map(|s| spectrum(s, &format!("{state}_em")))
             .transpose()?,
-        two_photon: two
-            .map(|s| spectrum(s, &format!("{state}_2p")))
-            .transpose()?,
+        two_photon: None,
         extinction: ex.and_then(|s| number(&s["ec"])),
         quantum_yield: em.and_then(|s| number(&s["qy"])),
         lifetime: None,
@@ -252,6 +258,191 @@ pub fn read(
     Ok(read)
 }
 
+/// A two-photon excitation spectrum, from its own file.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TwoPhoton {
+    /// (µm, relative), peak 1.
+    pub spectrum: Vec<(f64, f64)>,
+    /// The peak cross-section (GM); `None` until given.
+    pub peak: Option<f64>,
+    /// Whether `peak` is an action cross-section η σ₂.
+    pub action: bool,
+    /// Where `peak` comes from.
+    pub peak_source: Option<String>,
+    /// The file's name.
+    pub file: String,
+    /// Its SHA-256.
+    pub sha256: String,
+}
+
+/// What a two-photon file's values are.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TwoPhotonValues {
+    /// Relative (any scale): a peak must be given.
+    Relative,
+    /// Absorption cross-sections σ₂ in GM.
+    Absorption,
+    /// Action cross-sections η σ₂ in GM.
+    Action,
+}
+
+/// A table of a two-photon spectrum: delimited text (comma, tab, semicolon or spaces)
+/// with a header row, the column named `column` or else the one whose name holds `2p`
+/// (any case), or the only value column; or JSON, a list of `[wavelength, value]` or an
+/// object with such a `data` list. Wavelengths above 100 are taken as nm. Rows without a
+/// value in the column are skipped; small negative values (noise) are set to 0. Returns
+/// (µm, value) rows and the column's name.
+pub fn read_two_photon(
+    bytes: &[u8],
+    column: Option<&str>,
+) -> Result<(Vec<(f64, f64)>, String), String> {
+    let text = String::from_utf8_lossy(bytes);
+    let trimmed = text.trim_start();
+    let mut rows: Vec<(f64, f64)> = Vec::new();
+    let label;
+    if trimmed.starts_with('[') || trimmed.starts_with('{') {
+        let value: Value =
+            serde_json::from_str(trimmed).map_err(|e| format!("not valid JSON: {e}"))?;
+        let data = if value.is_object() {
+            &value["data"]
+        } else {
+            &value
+        };
+        for row in data
+            .as_array()
+            .ok_or("the JSON holds no list of [wavelength, value]")?
+        {
+            let pair = row
+                .as_array()
+                .filter(|r| r.len() == 2)
+                .and_then(|r| Some((number(&r[0])?, number(&r[1])?)))
+                .ok_or("each JSON row is [wavelength, value]")?;
+            rows.push(pair);
+        }
+        label = "data".to_owned();
+    } else {
+        let split = |line: &str| -> Vec<String> {
+            let separator = [',', '\t', ';'].into_iter().find(|c| line.contains(*c));
+            match separator {
+                Some(c) => line
+                    .split(c)
+                    .map(|f| f.trim().trim_matches('"').to_owned())
+                    .collect(),
+                None => line.split_whitespace().map(str::to_owned).collect(),
+            }
+        };
+        let mut lines = text
+            .lines()
+            .map(str::trim)
+            .filter(|l| !l.is_empty() && !l.starts_with('#'));
+        let header = lines.next().ok_or("the file is empty")?;
+        let names = split(header);
+        if names.iter().all(|n| n.parse::<f64>().is_ok()) {
+            return Err("the table needs a header row naming its columns".into());
+        }
+        let index = match column {
+            Some(wanted) => names
+                .iter()
+                .position(|n| n.eq_ignore_ascii_case(wanted))
+                .or_else(|| {
+                    names
+                        .iter()
+                        .position(|n| n.to_lowercase().contains(&wanted.to_lowercase()))
+                }),
+            None => names
+                .iter()
+                .skip(1)
+                .position(|n| n.to_lowercase().contains("2p"))
+                .map(|i| i + 1)
+                .or((names.len() == 2).then_some(1)),
+        }
+        .filter(|&i| i > 0)
+        .ok_or_else(|| {
+            format!(
+                "which column is the two-photon spectrum? The columns: {}",
+                names.join(", ")
+            )
+        })?;
+        label = names[index].clone();
+        for line in lines {
+            let fields = split(line);
+            let (Some(w), Some(v)) = (fields.first(), fields.get(index)) else {
+                continue;
+            };
+            let (Ok(w), Ok(v)) = (w.parse::<f64>(), v.parse::<f64>()) else {
+                continue;
+            };
+            if w.is_finite() && v.is_finite() {
+                rows.push((w, v));
+            }
+        }
+    }
+    let top = rows.iter().map(|r| r.1).fold(0.0, f64::max);
+    if rows.len() < 2 || top <= 0.0 {
+        return Err(format!(
+            "column `{label}` holds fewer than two positive rows"
+        ));
+    }
+    let mut out = Vec::with_capacity(rows.len());
+    for (w, v) in rows {
+        if v < -0.05 * top {
+            return Err(format!("column `{label}`: {v} at {w} is well below 0"));
+        }
+        let w = if w > 100.0 { w / 1000.0 } else { w };
+        if out.last().is_some_and(|l: &(f64, f64)| w <= l.0) {
+            return Err(format!(
+                "column `{label}`: wavelengths not increasing at {w} µm"
+            ));
+        }
+        out.push((w, v.max(0.0)));
+    }
+    Ok((out, label))
+}
+
+impl TwoPhoton {
+    /// From a table read by [`read_two_photon`]: normalised to a peak of 1, the peak taken
+    /// from the values when they are in GM, else from `peak` (GM, with where it comes from).
+    pub fn new(
+        rows: Vec<(f64, f64)>,
+        values: TwoPhotonValues,
+        peak: Option<(f64, String, bool)>,
+        file: &str,
+        sha256: &str,
+    ) -> Result<Self, String> {
+        let top = rows.iter().map(|r| r.1).fold(0.0, f64::max);
+        let spectrum = rows.into_iter().map(|(w, v)| (w, v / top)).collect();
+        let (peak, action, peak_source) = match (values, peak) {
+            (TwoPhotonValues::Relative, None) => (None, false, None),
+            (TwoPhotonValues::Relative, Some((value, from, action))) => {
+                if !(value > 0.0 && value.is_finite()) {
+                    return Err("the peak cross-section must be positive".into());
+                }
+                if from.trim().is_empty() {
+                    return Err("say where the peak cross-section comes from".into());
+                }
+                (Some(value), action, Some(from))
+            }
+            (_, Some(_)) => {
+                return Err("the file's values are in GM already; give no separate peak".into());
+            }
+            (TwoPhotonValues::Absorption, None) => {
+                (Some(top), false, Some(format!("the file ({file})")))
+            }
+            (TwoPhotonValues::Action, None) => {
+                (Some(top), true, Some(format!("the file ({file})")))
+            }
+        };
+        Ok(Self {
+            spectrum,
+            peak,
+            action,
+            peak_source,
+            file: file.to_owned(),
+            sha256: sha256.to_owned(),
+        })
+    }
+}
+
 fn table(rows: &[(f64, f64)]) -> String {
     let cells: Vec<String> = rows.iter().map(|(w, v)| format!("[{w}, {v}]")).collect();
     let mut out = String::from("[\n");
@@ -271,13 +462,25 @@ impl Protein {
             Some(doi) => format!("original data: doi:{doi}"),
             None => "original data: see its FPbase page".to_owned(),
         };
-        format!(
+        let mut text = format!(
             "{CITATION}, protein {} (https://www.fpbase.org/protein/{}/), state {}; {reference}; imported file sha256 {}",
             self.name,
             self.slug,
             self.state,
             &sha256[..16.min(sha256.len())]
-        )
+        );
+        if let Some(two) = &self.two_photon {
+            text.push_str(&format!(
+                "; two-photon excitation spectrum from {} (sha256 {})",
+                two.file,
+                &two.sha256[..16.min(two.sha256.len())]
+            ));
+            if let (Some(peak), Some(from)) = (two.peak, &two.peak_source) {
+                let kind = if two.action { "action " } else { "" };
+                text.push_str(&format!(", peak {kind}cross-section {peak} GM from {from}"));
+            }
+        }
+        text
     }
 
     /// A `[[fluorophore]]` entry for a design (layout or sidecar) with id `id`. Without a
@@ -314,14 +517,28 @@ impl Protein {
             out.push_str(&format!("emission = {}\n", table(em)));
         }
         if let Some(two) = &self.two_photon {
-            out.push_str(
-                "# FPbase gives the two-photon spectrum relative only: give its peak cross-section\n\
-                 # from a publication (absorption, or an action cross-section η σ₂ as\n\
-                 # two_photon_action_cross_section_gm) and remove the comment marks.\n\
-                 # two_photon_cross_section_gm = …\n",
-            );
-            for line in format!("two_photon_spectrum = {}", table(two)).lines() {
-                out.push_str(&format!("# {line}\n"));
+            let key = if two.action {
+                "two_photon_action_cross_section_gm"
+            } else {
+                "two_photon_cross_section_gm"
+            };
+            match two.peak {
+                Some(peak) => {
+                    out.push_str(&format!("{key} = {peak}\n"));
+                    out.push_str(&format!("two_photon_spectrum = {}\n", table(&two.spectrum)));
+                }
+                None => {
+                    out.push_str(
+                        "# The two-photon spectrum is relative: give its peak cross-section from a\n\
+                         # publication (absorption, or an action cross-section η σ₂ as\n\
+                         # two_photon_action_cross_section_gm), add it to `source`, and remove\n\
+                         # the comment marks.\n\
+                         # two_photon_cross_section_gm = …\n",
+                    );
+                    for line in format!("two_photon_spectrum = {}", table(&two.spectrum)).lines() {
+                        out.push_str(&format!("# {line}\n"));
+                    }
+                }
             }
         }
         out.push_str(
@@ -344,6 +561,7 @@ pub fn import(
     protein: &Protein,
     spectra: (&Path, &[u8]),
     proteins: Option<(&Path, &[u8])>,
+    two_photon: Option<(&Path, &[u8])>,
 ) -> Result<Value, String> {
     let sha256 = sha256_hex(spectra.1);
     let directory = fpbase_directory(root).join(&sha256[..16]);
@@ -359,6 +577,15 @@ pub fn import(
     if let Some((_, bytes)) = proteins {
         write(&format!("{}-protein.json", protein.slug_or_name()), bytes)?;
     }
+    if let Some((path, bytes)) = two_photon {
+        let extension = path
+            .extension()
+            .map_or("txt".to_owned(), |e| e.to_string_lossy().to_lowercase());
+        write(
+            &format!("{}-two-photon.{extension}", protein.slug_or_name()),
+            bytes,
+        )?;
+    }
     let record = json!({
         "source": "fpbase",
         "protein": protein.name,
@@ -371,6 +598,10 @@ pub fn import(
         "spectra_sha256": sha256,
         "protein_file": proteins.map(|p| p.0.to_string_lossy().into_owned()),
         "protein_sha256": proteins.map(|p| sha256_hex(p.1)),
+        "two_photon_file": two_photon.map(|p| p.0.to_string_lossy().into_owned()),
+        "two_photon_sha256": two_photon.map(|p| sha256_hex(p.1)),
+        "two_photon_peak_gm": protein.two_photon.as_ref().and_then(|t| t.peak),
+        "two_photon_peak_source": protein.two_photon.as_ref().and_then(|t| t.peak_source.clone()),
         "directory": directory.to_string_lossy(),
     });
     let pretty = serde_json::to_string_pretty(&record).map_err(|e| e.to_string())?;
@@ -405,7 +636,6 @@ mod tests {
     const SPECTRA: &str = r#"[{"name": "TestFP", "slug": "testfp", "spectra": [
         {"state": "default_ex", "ec": 50000, "max": 480, "data": [[460, 0.5], [480, 1.0], [500, 0.25]]},
         {"state": "default_em", "qy": 0.7, "max": 510, "data": [[490, 0.2], [510, 1.0], [540, 0.3]]},
-        {"state": "default_2p", "data": [[900, 0.6], [920, 1.0], [960, 0.4]]},
         {"state": "off_ex", "ec": 1000, "data": [[400, 1.0], [420, 0.5]]}
     ]}]"#;
     const PROTEINS: &str = r#"[{"name": "TestFP", "slug": "testfp", "doi": "10.0000/test.1",
@@ -423,7 +653,7 @@ mod tests {
         assert_eq!(p.name, "TestFP");
         assert_eq!(p.excitation.as_ref().expect("ex")[1], (0.48, 1.0));
         assert_eq!(p.emission.as_ref().expect("em").len(), 3);
-        assert_eq!(p.two_photon.as_ref().expect("2p")[0], (0.9, 0.6));
+        assert!(p.two_photon.is_none());
         assert_eq!(p.extinction, Some(50000.0));
         assert_eq!(p.quantum_yield, Some(0.7));
         assert_eq!(p.lifetime, Some(3.1));
@@ -443,6 +673,68 @@ mod tests {
             read(backwards.as_bytes(), None, None, "default")
                 .expect_err("not increasing")
                 .contains("not increasing")
+        );
+    }
+
+    #[test]
+    fn a_two_photon_table_is_read_and_scaled() {
+        // Several spectra in one table; the two-photon column found by its name.
+        let csv = "wavelength,TestFP EX,TestFP 2P\n700,,10\n800,0.1,40\n900,0.2,20\n";
+        let (rows, label) = read_two_photon(csv.as_bytes(), None).expect("read");
+        assert_eq!(label, "TestFP 2P");
+        assert_eq!(rows, vec![(0.7, 10.0), (0.8, 40.0), (0.9, 20.0)]);
+        // Given a column; tabs; µm stays µm; JSON pairs.
+        let (rows, _) = read_two_photon(
+            "nm\tex\tfoo\n0.8\t1\t3\n0.9\t1\t6\n".as_bytes(),
+            Some("foo"),
+        )
+        .expect("read");
+        assert_eq!(rows[1], (0.9, 6.0));
+        let (rows, _) = read_two_photon(b"[[800, 0.5], [900, 1.0]]", None).expect("json");
+        assert_eq!(rows[0], (0.8, 0.5));
+        assert!(
+            read_two_photon("w,a,b\n800,1,2\n".as_bytes(), None)
+                .expect_err("which")
+                .contains("which column")
+        );
+        // In GM: the peak is the file's; relative: given with its source, or left open.
+        let gm = TwoPhoton::new(
+            vec![(0.7, 10.0), (0.8, 40.0)],
+            TwoPhotonValues::Absorption,
+            None,
+            "f.csv",
+            "00",
+        )
+        .expect("gm");
+        assert_eq!((gm.peak, gm.spectrum[0].1), (Some(40.0), 0.25));
+        let relative = TwoPhoton::new(
+            vec![(0.7, 0.5), (0.8, 1.0)],
+            TwoPhotonValues::Relative,
+            None,
+            "f",
+            "00",
+        )
+        .expect("relative");
+        assert!(relative.peak.is_none());
+        assert!(
+            TwoPhoton::new(
+                vec![(0.7, 0.5), (0.8, 1.0)],
+                TwoPhotonValues::Relative,
+                Some((30.0, " ".into(), false)),
+                "f",
+                "00"
+            )
+            .is_err()
+        );
+        assert!(
+            TwoPhoton::new(
+                vec![(0.7, 0.5), (0.8, 1.0)],
+                TwoPhotonValues::Action,
+                Some((30.0, "paper".into(), true)),
+                "f",
+                "00"
+            )
+            .is_err()
         );
     }
 }
