@@ -69,7 +69,7 @@ The engine (L0–L4) has no file system or network access and builds for wasm32.
 
 Both phases share one pose model owned by optobench. The optimizer and reports only ever work on the **DOF vector**. Translating DOF changes into SolidCraft actions is the job of a single adapter, so when SolidCraft's move or joint commands change, only the adapter changes.
 
-**The DOF model.** Each optical element has a *mount frame* and a list of declared degrees of freedom, for example `slide z [-20, +40] mm` on cage rods, or `tip x [-4°, +4°]` and `tilt y [-4°, +4°]` on a kinematic mount. A DOF can also be *coupled* (two mirrors sharing a periscope height) or *locked*. Poses are stored as the nominal pose from STEP plus DOF offsets, never as free 6-DOF transforms.
+**The DOF model.** Each optical element has a *mount frame* and a list of declared degrees of freedom, for example `slide z [-20, +40] mm` on cage rods, or `tip x [-4°, +4°]` and `tilt y [-4°, +4°]` on a kinematic mount. A DOF can also be *coupled* (two mirrors sharing a periscope height) or *locked*. Poses are stored as the nominal pose from STEP plus DOF offsets, never as free 6-DOF transforms. A DOF's range is the travel of its adjuster (a kinematic mount's ±4°, an XY mount's ±1 mm); a mount's adjusters can be written once and given to every part it holds (M14d), alignment prefers adjusters near the middle of their ranges, and short ranges are warned about before the solve.
 
 ### Standalone scenes, no CAD (from M3)
 

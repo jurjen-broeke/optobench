@@ -65,6 +65,7 @@ fn empty() -> Scene {
         dofs: Vec::new(),
         fluorophores: Vec::new(),
         thermal: Vec::new(),
+        tolerances: Vec::new(),
     }
 }
 
@@ -420,6 +421,7 @@ fn poses_follow_dof_values_however_they_are_reached() {
         locked: false,
         follows: None,
         value,
+        source: None,
     };
     let tilt = Motion::Tilt {
         axis: Vec3::X,

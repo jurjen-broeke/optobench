@@ -5,6 +5,34 @@ with the release that introduced them.
 
 ## Unreleased
 
+- Mounts: `[[mount]]` tables describe a mount's adjusters once (kind, axis, `range` or
+  `travel`, `source`); `mount = "<id>"` on an element, source or detector gives it those
+  DOFs before the solve. DOFs take `travel` (the part placed in its middle) and
+  `source`. `trace`, `optimize` and `tolerance` warn about slides that adjust 1 mm or
+  less either way (`small_range_mm`).
+- M14d adjustment range: merit term `headroom` keeps adjusters near the middle of their
+  ranges where the optics leave a choice; `optimize` and the move report give each
+  ranged DOF's adjustment room (travel used and left, the range after adjusting, a
+  status, re-placement advice, warnings; `headroom_warning`); in tolerancing a
+  compensator that runs out of range fails the trial, and the Monte Carlo reports each
+  compensator's travel with advice.
+- M14c tolerance report and graphs: `tolerance` writes `<design>.tolerance.json` and
+  `.tolerance.md` with `report`; graph kinds `tolerance-histogram`,
+  `tolerance-sensitivity` and `tolerance-yield`. Monte Carlo shares are now taken over
+  each criterion's residual components, which keeps the ranking stable; sidecar
+  tolerances can name a CAD element by its id. Exit check met on the golden periscope;
+  runtimes recorded in the milestone.
+- M14b Monte Carlo: new command `tolerance` (sensitivity, or `mode = "monte-carlo"` with
+  `trials`, `seed`, `threads`): trials in parallel, each from its own random stream (the
+  same results for any number of threads), per-criterion statistics, the yield and its
+  error, and each tolerance's first-order share of each criterion's variance with the
+  ranking.
+- M14a tolerances: layouts and sidecars take `[[tolerance]]` (placement slides and tilts,
+  DOF errors, lens radius, thickness and index, ideal-lens focal length; uniform, normal
+  or end-point) and `[tolerancing]` (criteria with pass limits, compensators). New
+  `optobench_optimize::tolerance`: a seeded generator (xoshiro256**), applying errors,
+  evaluation with compensators re-optimised, and one-at-a-time sensitivities with RSS and
+  ranking.
 - M11 heating benchmark against Podgorski and Ranganathan (2016): the depth and
   field-size dependences agree; the absolute rise per 100 mW is about 4× lower than
   measured (0.47 against 1.86 ± 0.25 °C), reported in the milestone with where the gap

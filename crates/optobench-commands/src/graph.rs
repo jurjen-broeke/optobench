@@ -41,6 +41,9 @@ const KINDS: &[&str] = &[
     "pulse-width",
     "temperature-map",
     "temperature-time",
+    "tolerance-histogram",
+    "tolerance-sensitivity",
+    "tolerance-yield",
 ];
 
 /// The parameters of `of = "sweep"` and `of = "optimize"`, passed on to those commands.
@@ -408,6 +411,37 @@ fn of_design(parameters: &Parameters, kind: &str) -> Result<Graph, CommandError>
         };
         return Ok(graphs::temperature_map(&h, extent));
     }
+    if kind.starts_with("tolerance-") {
+        let mut inner = parameters.clone();
+        inner.remove("of");
+        inner.remove("criterion");
+        for key in [
+            "saved",
+            "compare",
+            "difference",
+            "reference",
+            "name",
+            "svg",
+            "csv",
+            "json",
+            "section",
+        ] {
+            inner.remove(key);
+        }
+        if kind != "tolerance-sensitivity" && !inner.contains_key("mode") {
+            inner.insert("mode".into(), json!("monte-carlo"));
+        }
+        let design = crate::tolerance::design(&inner)?;
+        let result = crate::tolerance::command(&inner)?;
+        let criterion = match parameters.get("criterion") {
+            None => 0,
+            Some(v) => v
+                .as_u64()
+                .ok_or_else(|| invalid("`criterion` is a criterion's number, from 0"))?
+                as usize,
+        };
+        return crate::tolerance::graph(&design, &result, kind, criterion);
+    }
     if kind == "pulse-width" {
         let (scene, path) = moved_scene(parameters)?;
         let source = match text(parameters, "source")? {
@@ -548,6 +582,8 @@ pub(crate) fn graph(parameters: &Parameters) -> Result<Value, CommandError> {
     keys.extend_from_slice(crate::excitation::EXCITATION_KEYS);
     keys.extend_from_slice(crate::heating::HEATING_KEYS);
     keys.push("extent_mm");
+    keys.extend_from_slice(crate::tolerance::TOLERANCE_KEYS);
+    keys.push("criterion");
     keys.sort_unstable();
     keys.dedup();
     check_keys(parameters, &keys)?;

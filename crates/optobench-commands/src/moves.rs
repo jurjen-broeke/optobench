@@ -131,7 +131,7 @@ pub(crate) fn report(
         "next": if scene.solids.is_empty() {
             "Set each DOF's `value` in the layout to the suggested one."
         } else {
-            "Make each move in CAD (the matrix is in the assembly frame, applied to the pose in the STEP file), export the assembly again, set every DOF's `value` back to 0 and run `check-moves` with this report."
+            "Make each move in CAD (the matrix is in the assembly frame, applied to the pose in the STEP file), export the assembly again, set every DOF's `value` back to 0 and run `check-moves` with this report. A move made with a part's adjuster uses its travel: give that DOF its `range_after_adjusting` (in `dofs`); a part re-placed in the design keeps its range."
         },
     });
     // Markdown, for people.
@@ -154,6 +154,40 @@ pub(crate) fn report(
                 "no"
             }
         ));
+    }
+    if dofs.iter().any(|d| d["room"].is_object()) {
+        md.push_str("\n## Adjustment room\n\nHow much of each adjuster's travel towards one end the suggested value uses (0 % in the middle of its range, 100 % at an end), the travel left each way, and the range to give the DOF if the move is made with the adjuster and the design exported again.\n\n| DOF | Range | Suggested | Used | Left (−, +) | Range after adjusting | Status |\n| --- | --- | ---: | ---: | --- | --- | --- |\n");
+        let pair = |v: &Value| {
+            format!(
+                "{} to {}",
+                f(v[0].as_f64().unwrap_or(f64::NAN)),
+                f(v[1].as_f64().unwrap_or(f64::NAN))
+            )
+        };
+        for d in dofs.iter().filter(|d| d["room"].is_object()) {
+            let r = &d["room"];
+            md.push_str(&format!(
+                "| {} | {} | {} | {:.0} % | {} | {} | {} |\n",
+                d["name"].as_str().unwrap_or("?"),
+                pair(&r["range"]),
+                f(d["suggested"].as_f64().unwrap_or(f64::NAN)),
+                100.0 * r["used"].as_f64().unwrap_or(f64::NAN).abs(),
+                pair(&r["left"]),
+                pair(&r["range_after_adjusting"]),
+                r["status"].as_str().unwrap_or("?")
+            ));
+        }
+        for d in dofs
+            .iter()
+            .filter(|d| d["room"].is_object() && d["room"]["status"] != "ok")
+        {
+            md.push_str(&format!(
+                "\n- `{}`: {}.",
+                d["name"].as_str().unwrap_or("?"),
+                d["room"]["advice"].as_str().unwrap_or("")
+            ));
+        }
+        md.push('\n');
     }
     md.push_str("\n## Moves\n\n| Item | Translate (mm) | Rotate about | By (deg) |\n| --- | --- | --- | ---: |\n");
     for m in &moves {
@@ -219,6 +253,7 @@ pub(crate) fn report(
 pub(crate) fn report_paths(
     design: &Path,
     parameter: &Value,
+    suffix: &str,
 ) -> Result<Option<(PathBuf, PathBuf)>, CommandError> {
     let stem = match parameter {
         Value::Bool(false) | Value::Null => return Ok(None),
@@ -236,8 +271,8 @@ pub(crate) fn report_paths(
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_default();
     Ok(Some((
-        stem.with_file_name(format!("{name}.moves.json")),
-        stem.with_file_name(format!("{name}.moves.md")),
+        stem.with_file_name(format!("{name}.{suffix}.json")),
+        stem.with_file_name(format!("{name}.{suffix}.md")),
     )))
 }
 

@@ -98,6 +98,8 @@ pub struct Dof {
     pub follows: Option<(String, f64)>,
     /// The current value (mm or radians), relative to the nominal pose.
     pub value: f64,
+    /// Where its range comes from (a mount's specification), if said.
+    pub source: Option<String>,
 }
 
 fn invalid(message: String) -> SceneError {

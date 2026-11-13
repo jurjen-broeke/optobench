@@ -2179,6 +2179,7 @@ name = "optobench-optimize"
 version = "0.0.1"
 dependencies = [
  "optobench-analysis",
+ "optobench-materials",
  "optobench-math",
  "optobench-scene",
  "optobench-trace",

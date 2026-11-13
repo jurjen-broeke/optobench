@@ -69,6 +69,46 @@ pub(crate) fn dof_values(
 }
 
 /// The scene's DOFs and their values (mm or degrees).
+/// The default for `small_range_mm`: slides that adjust this little or less either way
+/// from the middle of their range are warned about.
+pub(crate) const SMALL_RANGE_MM: f64 = 1.0;
+
+/// `small_range_mm` from the parameters (default [`SMALL_RANGE_MM`]).
+pub(crate) fn small_range(parameters: &Parameters) -> Result<f64, CommandError> {
+    match parameters.get("small_range_mm") {
+        None => Ok(SMALL_RANGE_MM),
+        Some(v) => v.as_f64().filter(|x| *x >= 0.0).ok_or_else(|| {
+            CommandError::new(
+                ErrorCode::InvalidParameters,
+                "`small_range_mm` is a travel in mm, not negative",
+            )
+        }),
+    }
+}
+
+/// Warnings for the scene's slides (free, not coupled) that can adjust only `small` mm or
+/// less either way from the middle of their range: little room to correct the part, so
+/// it must be placed with care.
+pub(crate) fn range_warnings(scene: &optobench_scene::Scene, small: f64) -> Vec<String> {
+    scene
+        .dofs
+        .iter()
+        .filter(|d| !d.motion.is_angle() && d.follows.is_none() && !d.locked)
+        .filter_map(|d| {
+            let (low, high) = d.range?;
+            let half = 0.5 * (high - low);
+            (half <= small + 1e-12).then(|| {
+                format!(
+                    "`{}` adjusts only ±{:.3} mm{}: little room to correct this part; place it with care",
+                    d.name,
+                    half,
+                    d.source.as_ref().map_or(String::new(), |s| format!(" ({s})"))
+                )
+            })
+        })
+        .collect()
+}
+
 pub(crate) fn dofs_json(scene: &optobench_scene::Scene) -> Value {
     json!(
         scene
@@ -86,6 +126,9 @@ pub(crate) fn dofs_json(scene: &optobench_scene::Scene) -> Value {
                 });
                 if let Some((low, high)) = d.range {
                     v["range"] = json!([unit(low), unit(high)]);
+                }
+                if let Some(source) = &d.source {
+                    v["source"] = json!(source);
                 }
                 if let Some((leader, ratio)) = &d.follows {
                     v["follows"] = json!(leader);
@@ -175,8 +218,10 @@ pub(crate) fn trace(parameters: &Parameters) -> Result<Value, CommandError> {
             "rays_drawn",
             "ray_paths",
             "dofs",
+            "small_range_mm",
         ],
     )?;
+    let small = small_range(parameters)?;
     let path = text(parameters, "path")?.ok_or_else(|| {
         CommandError::new(ErrorCode::InvalidParameters, "missing parameter `path`")
     })?;
@@ -270,6 +315,7 @@ pub(crate) fn trace(parameters: &Parameters) -> Result<Value, CommandError> {
         "clipping": clipping,
         "parts": crate::parts::matches_json(&parts),
         "dofs": dofs_json(&scene),
+        "warnings": range_warnings(&scene, small),
         "embedded": crate::embed::compare(&source, data.as_deref())?,
         "layers": traced.layers.iter().map(|l| json!({
             "sample": l.sample,

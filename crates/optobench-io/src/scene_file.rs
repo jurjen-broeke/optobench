@@ -117,6 +117,11 @@
 //!         { name = "L3_tip", kind = "tilt", axis = "x", pivot = [0, 0, 0], range = [-2, 2] },
 //!         { name = "L3_x", kind = "slide", axis = "x", locked = true, value = 0.1 } ]
 //! # a coupled DOF: { name = "D_z", kind = "slide", axis = "z", follows = "L3_z", ratio = 1 }
+//! # a DOF's travel: `range = [low, high]`, or `travel = 12.7` (the whole travel, the
+//! # part placed in its middle); `source = "…"` says where it comes from. A mount's
+//! # adjusters are written once in a [[mount]] and given by `mount = "<id>"` (see
+//! # `mounts`); `trace`, `optimize` and `tolerance` warn about slides that adjust 1 mm or
+//! # less either way (`small_range_mm`)
 //!
 //! [[element]]
 //! id = "M1"
@@ -823,8 +828,8 @@ pub(crate) fn dofs(
             check_keys(
                 table,
                 &[
-                    "name", "kind", "axis", "frame", "pivot", "range", "value", "locked",
-                    "follows", "ratio",
+                    "name", "kind", "axis", "frame", "pivot", "range", "travel", "value",
+                    "locked", "follows", "ratio", "source",
                 ],
                 &context,
             )?;
@@ -908,9 +913,19 @@ pub(crate) fn dofs(
                 };
                 Motion::Tilt { axis, pivot }
             };
-            let range = match table.get("range") {
-                None => None,
-                Some(_) => {
+            let range = match (table.get("range"), table.get("travel")) {
+                (Some(_), Some(_)) => {
+                    return Err(error(format!(
+                        "{context}: give `range` or `travel`, not both"
+                    )));
+                }
+                (None, None) => None,
+                // The whole travel, the part placed in its middle.
+                (None, Some(_)) => {
+                    let travel = dof.positive("travel")?;
+                    Some((-0.5 * travel * scale, 0.5 * travel * scale))
+                }
+                (Some(_), None) => {
                     let (low, high) = dof.pair("range")?;
                     if low > high {
                         return Err(error(format!("{context}: `range` runs from low to high")));
@@ -948,6 +963,15 @@ pub(crate) fn dofs(
                 locked,
                 follows,
                 value: dof.optional_number("value", 0.0)? * scale,
+                source: match table.get("source") {
+                    None => None,
+                    Some(Value::String(text)) if !text.trim().is_empty() => Some(text.clone()),
+                    Some(_) => {
+                        return Err(error(format!(
+                            "{context}: `source` says where the range comes from (text)"
+                        )));
+                    }
+                },
             })
         })
         .collect()
@@ -1403,9 +1427,10 @@ pub struct Lookups<'a> {
 /// A layout file, with materials, curves and library parts from `lookups`.
 pub fn parse_with(text: &str, lookups: &Lookups) -> Result<Scene, FileError> {
     check_header(text)?;
-    let root: Table = text
+    let mut root: Table = text
         .parse()
         .map_err(|e: toml::de::Error| error(format!("not valid TOML: {e}")))?;
+    crate::mounts::expand(&mut root)?;
     // Embedded values (`[resolved]`) first, then the user's own data.
     let embedded = crate::resolved::read(&root)?;
     let merged_library = embedded.library(lookups.library)?;
@@ -1464,6 +1489,8 @@ pub fn parse_with(text: &str, lookups: &Lookups) -> Result<Scene, FileError> {
             "resolved",
             "merit",
             "fluorophore",
+            "tolerance",
+            "tolerancing",
         ],
         "top level",
     )?;
@@ -1541,6 +1568,7 @@ pub fn parse_with(text: &str, lookups: &Lookups) -> Result<Scene, FileError> {
         dofs: Vec::new(),
         fluorophores: Vec::new(),
         thermal: Vec::new(),
+        tolerances: Vec::new(),
     };
 
     for item in items(&root, "source")? {
@@ -1906,6 +1934,7 @@ pub fn parse_with(text: &str, lookups: &Lookups) -> Result<Scene, FileError> {
     }
     scene.fluorophores = fluorophores(&root, &scene)?;
     check_dofs(&scene)?;
+    scene.tolerances = crate::tolerance::tolerances(&root, &scene, &[])?;
     scene.placed().map_err(|e| error(e.to_string()))
 }
 

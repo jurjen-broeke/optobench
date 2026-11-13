@@ -14,6 +14,7 @@
 
 pub mod dof;
 pub mod layout;
+pub mod tolerance;
 
 use std::sync::Arc;
 
@@ -457,6 +458,8 @@ pub struct Scene {
     pub fluorophores: Vec<Fluorophore>,
     /// The samples' thermal descriptions (M11d).
     pub thermal: Vec<SampleThermal>,
+    /// Tolerances (M14).
+    pub tolerances: Vec<tolerance::Tolerance>,
 }
 
 /// Default splitting cutoff, as a fraction of the total source power.
