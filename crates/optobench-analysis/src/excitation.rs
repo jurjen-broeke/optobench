@@ -7,19 +7,22 @@
 //!   time it spends excited stays small while the rate times its lifetime, k τ_f, is well
 //!   below 1 (saturation sets in near 1).
 //! - **Two photons.** The rate is ½ σ₂ ⟨F²⟩, F = I / (h ν) the photon flux and σ₂ the
-//!   two-photon absorption cross-section, which counts two photons per excitation (C. Xu
-//!   and W. W. Webb, J. Opt. Soc. Am. B 13, 481 (1996); that paper is not in the corpus
-//!   yet, so this follows the milestone's statement of it). Its companion, C. Xu,
-//!   W. Zipfel, J. B. Shear, R. M. Williams and W. W. Webb, Proc. Natl. Acad. Sci. USA 93,
-//!   10763 (1996), gives σ₂ in GM (10⁻⁵⁰ cm⁴ s per photon), publishes most spectra as
-//!   action cross-sections η σ₂, finds the same emission spectrum after one-, two- and
-//!   three-photon excitation, and puts saturation at σₙ I_peakⁿ τ ≈ 1 per pulse (its
-//!   Eq. 1, I in photons per area and time); its Eq. 3 for the saturation power prints
-//!   (σₙ τ)^(−1/n) in the denominator where combining its Eqs. 1 and 2 puts it in the
-//!   numerator, so it is not used. For pulses of width τ (FWHM)
+//!   two-photon absorption cross-section δ, which counts two photons per excitation
+//!   (C. Xu and W. W. Webb, J. Opt. Soc. Am. B 13, 481 (1996), Eqs. (1) to (5): F =
+//!   ½ φ η₂ N_abs, "the factor 1/2 simply reflects the fact that two photons are needed
+//!   for each excitation event"). Its companion, C. Xu, W. Zipfel, J. B. Shear,
+//!   R. M. Williams and W. W. Webb, Proc. Natl. Acad. Sci. USA 93, 10763 (1996), gives σ₂
+//!   in GM (10⁻⁵⁰ cm⁴ s per photon), publishes most spectra as action cross-sections
+//!   η σ₂, finds the same emission spectrum after one-, two- and three-photon excitation,
+//!   and puts saturation at σₙ I_peakⁿ τ ≈ 1 per pulse (its Eq. 1, I in photons per area
+//!   and time); its Eq. 3 for the saturation power prints (σₙ τ)^(−1/n) in the
+//!   denominator where combining its Eqs. 1 and 2 puts it in the numerator, so it is not
+//!   used. For pulses of width τ (FWHM)
 //!   at repetition rate f, ⟨F²⟩ = g_p ⟨F⟩² / (f τ), with g_p = τ ∫ I² dt / (∫ I dt)² of one
-//!   pulse: √(2 ln 2 / π) = 0.664 for a Gaussian, 2 ln(1 + √2) / 3 = 0.588 for sech²,
-//!   computed here from the shapes. Light that does not vary in time has g_p / (f τ) = 1.
+//!   pulse (Xu and Webb, Eqs. (13), (14)): √(2 ln 2 / π) = 0.664 for a Gaussian,
+//!   2 ln(1 + √2) / 3 = 0.588 for sech² (their values), computed here from the shapes.
+//!   Xu and Webb measured 0.41 ± 0.09 for their own laser (Sect. 4): a real pulse need
+//!   not have its nominal shape. Light that does not vary in time has g_p / (f τ) = 1.
 //!   The chance of excitation per pulse, the rate over f, must stay well below 1.
 //! - **Dispersion.** A transform-limited Gaussian pulse of width τ that picks up a
 //!   group-delay dispersion D leaves with width τ √(1 + (4 ln 2 · D / τ²)²) (J.-C. Diels
@@ -244,7 +247,7 @@ mod tests {
         let s = pulse_factor(PulseShape::SechSquared);
         assert!((factor(&gaussian) - g).abs() < 1e-10);
         assert!((factor(&sech) - s).abs() < 1e-10);
-        // As quoted from Xu and Webb (1996) in the milestone, to their three figures.
+        // Xu and Webb (1996), J. Opt. Soc. Am. B 13, 481, after Eq. (14): 0.664 and 0.588.
         assert!((g - 0.664).abs() < 5e-4 && (s - 0.588).abs() < 5e-4);
     }
 

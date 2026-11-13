@@ -85,8 +85,8 @@ the diffusion approximation here; photon transport by Monte Carlo replaces it in
       reported with the excitation volume (M11b2)
 - [x] Two-photon excitation: rate ½ σ₂ ⟨F²⟩, ⟨F²⟩ = g_p ⟨F⟩² / (f τ) for pulses, g_p
       computed from the shapes (√(2 ln 2 / π) = 0.664 Gaussian, 2 ln(1 + √2) / 3 = 0.588
-      sech², as Xu and Webb 1996 quote them; that paper is not in the corpus, so the
-      convention, two photons per excitation, follows this plan); per-pulse probability
+      sech², Xu and Webb 1996, Eqs. (13), (14); the ½ for two photons per excitation is
+      their Eq. (3)); per-pulse probability
       rate / f reported with the volume (M11b2). Two-photon spectra may be given as
       action cross-sections η σ₂ (`two_photon_action_cross_section_gm`, divided by the
       quantum yield), the form most are published in (Xu et al. 1996, PNAS, below)
@@ -118,9 +118,11 @@ the diffusion approximation here; photon transport by Monte Carlo replaces it in
       total of a Gaussian–Lorentzian focus against its closed form, ∫ I² dV = π n P² / λ
       for a Gaussian beam focused in a medium of index n (derived from the beam:
       ∫ I² dA = P² / (π w²) per plane, integrated over z with w² = w₀² (1 + z² / z_R²),
-      z_R = π w₀² n / λ), independent of the NA as Xu et al. (1996, PNAS) state for the
-      thick-sample limit; Xu and Webb's (JOSA B) own expression compared once that paper
-      is in the corpus
+      z_R = π w₀² n / λ), which is Xu and Webb's note 15 (½ g φ η₂ C δ (n π / λ) ⟨P⟩²);
+      and a uniformly filled pupil (paraxial Airy focus) against their relation (10),
+      ∫ S² dV ≈ 8 n λ³ / (π³ NA⁴) with I₀ = π NA² P / λ² (Eq. (9)), that is
+      ∫ I² dV ≈ 8 n P² / (π λ), within its stated 3 % (a numerical result, their
+      note 14; paraxial, so at NA ≲ 0.7 in their words). Both independent of the NA
 
 ### M11b3 FPbase
 
@@ -265,11 +267,28 @@ Read from the local corpus on 2026-11-13; each value cited where a test uses it.
 
 ## Two-photon excitation from the sources
 
-Read from the local corpus on 2026-11-13: C. Xu, W. Zipfel, J. B. Shear, R. M. Williams
-and W. W. Webb, "Multiphoton fluorescence excitation: new spectral windows for biological
-nonlinear microscopy", Proc. Natl. Acad. Sci. USA 93, 10763 (1996). It is the companion
-of Xu and Webb, J. Opt. Soc. Am. B 13, 481 (1996) (its ref. 28), which holds the
-derivations (g_p, the ½ convention, the thick-sample total) and is still to be added.
+Read from the local corpus on 2026-11-13.
+
+**C. Xu and W. W. Webb, "Measurement of two-photon excitation cross sections of
+molecular fluorophores with data from 690 to 1050 nm", J. Opt. Soc. Am. B 13, 481 (1996)**
+
+- N_abs = ∫ δ C I² dV photons absorbed per second (Eq. (1), I in photons/(area s));
+  fluorescence F = ½ φ η₂ N_abs, the ½ for two photons per excitation (Eq. (3)); with
+  g = ⟨I₀²⟩ / ⟨I₀⟩², ⟨F⟩ = ½ g φ η₂ C δ ⟨I₀⟩² ∫ S² dV (Eq. (5))
+- Uniformly filled pupil, paraxial (adequate for sin θ < 0.7): I₀ = π NA² P / λ²
+  (Eq. (9)); thick sample ∫ S² dV ≈ 8 n λ³ / (π³ NA⁴) (relation (10), numerical, 3 %,
+  note 14); so ⟨F⟩ ≈ ½ g φ η₂ C δ 8 n ⟨P⟩² / (π λ) (relation (11)), independent of NA
+- Gaussian beam, thick sample: ⟨F⟩ = ½ g φ η₂ C δ (n π / λ) ⟨P⟩², independent of the
+  waist (note 15)
+- g = g_p / (f τ) (Eq. (13)), g_p = τ ∫ I₀² dt / (∫ I₀ dt)² over one period (Eq. (14));
+  0.664 Gaussian, 0.588 sech²; g ≈ 10⁵ at ~100 MHz and ~100 fs; g = 1 for single-mode
+  cw. Their own laser measured g_p = 0.41 ± 0.09 against 0.588 expected for sech² (Sect.
+  4): the nominal shape can overstate ⟨I²⟩ by ~40 %, worth stating in reports
+- 1 mW average at NA 0.3 gives a pulse intensity of ~10²⁸ photons/(cm² s) (Sect. 3A)
+
+**C. Xu, W. Zipfel, J. B. Shear, R. M. Williams and W. W. Webb, "Multiphoton
+fluorescence excitation: new spectral windows for biological nonlinear microscopy",
+Proc. Natl. Acad. Sci. USA 93, 10763 (1996)**
 
 - 1 GM = 10⁻⁵⁰ cm⁴ s per photon (Fig. 1). Figs. 1, 3 and 4 and Table 1 give action
   cross-sections η σ₂ (all but Bis-MSB in Fig. 1, rhodamine B and fluorescein in Fig. 2);
@@ -285,7 +304,7 @@ derivations (g_p, the ½ convention, the thick-sample total) and is still to be 
   cross-sections it estimates (σ₂ ~ 10⁻⁴⁹ cm⁴ s gives ~3.5 mW); not used as a reference
 - In the thick-sample limit the two-photon fluorescence of a Gaussian–Lorentzian beam is
   independent of the NA, the three-photon one is not (∝ σ₃ P³ / ((f τ)² w₀²), Eq. 4);
-  stated, not derived (refs. 28, 43)
+  stated here, derived in the JOSA B paper above
 
 ## Open questions
 
