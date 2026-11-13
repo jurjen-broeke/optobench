@@ -255,6 +255,9 @@ pub struct Outcome {
     pub residuals: Vec<Option<Vec<f64>>>,
     /// The compensators' values after compensation (mm or radians).
     pub compensators: Vec<(String, f64)>,
+    /// Compensators that ended at a limit of their range: the adjustment ran out, so the
+    /// outcome fails whatever the criteria say.
+    pub limited: Vec<String>,
     /// Whether every criterion is within its limit.
     pub passed: bool,
     /// Why it could not be evaluated, if so.
@@ -293,11 +296,13 @@ pub fn evaluate(
         values: vec![None; tolerancing.criteria.len()],
         residuals: vec![None; tolerancing.criteria.len()],
         compensators: Vec::new(),
+        limited: Vec::new(),
         passed: false,
         failure: Some(why),
     };
     let mut current = scene.clone();
     let mut compensators = Vec::new();
+    let mut limited = Vec::new();
     if !tolerancing.compensators.is_empty() {
         let mut held = scene.clone();
         for d in &mut held.dofs {
@@ -317,6 +322,13 @@ pub fn evaluate(
             .iter()
             .map(|(n, _, v)| (n.clone(), *v))
             .collect();
+        limited = result
+            .values
+            .iter()
+            .zip(&result.outcome.at_bound)
+            .filter(|(_, at)| **at)
+            .map(|((n, _, _), _)| n.clone())
+            .collect();
     }
     let traced = match current.trace() {
         Ok(t) => t,
@@ -327,14 +339,16 @@ pub fn evaluate(
         .iter()
         .map(|r| r.as_deref().map(magnitude))
         .collect();
-    let passed = values
-        .iter()
-        .zip(&tolerancing.criteria)
-        .all(|(v, c)| v.is_some_and(|v| v <= c.limit));
+    let passed = limited.is_empty()
+        && values
+            .iter()
+            .zip(&tolerancing.criteria)
+            .all(|(v, c)| v.is_some_and(|v| v <= c.limit));
     Outcome {
         values,
         residuals,
         compensators,
+        limited,
         passed,
         failure: None,
     }
@@ -404,6 +418,7 @@ pub fn sensitivity(
                     values: vec![None; tolerancing.criteria.len()],
                     residuals: vec![None; tolerancing.criteria.len()],
                     compensators: Vec::new(),
+                    limited: Vec::new(),
                     passed: false,
                     failure: Some(e),
                 },
@@ -476,6 +491,7 @@ pub fn trial(
             values: vec![None; tolerancing.criteria.len()],
             residuals: vec![None; tolerancing.criteria.len()],
             compensators: Vec::new(),
+            limited: Vec::new(),
             passed: false,
             failure: Some(e),
         },
@@ -524,6 +540,26 @@ pub struct MonteCarlo {
     pub ranking: Vec<Vec<usize>>,
     /// Trials that could not be evaluated, with why (index, reason).
     pub failures: Vec<(u64, String)>,
+    /// How the trials used each compensator's travel.
+    pub compensators: Vec<CompensatorUse>,
+}
+
+/// How the trials used one compensator's travel (mm or radians).
+#[derive(Debug, Clone, PartialEq)]
+pub struct CompensatorUse {
+    /// The DOF's name.
+    pub name: String,
+    /// Its range, if it has one.
+    pub range: Option<(f64, f64)>,
+    /// The mean value it was set to: re-placing the part's nominal by this (less the
+    /// range's middle) centres the travel the trials need.
+    pub mean: f64,
+    /// Standard deviation.
+    pub deviation: f64,
+    /// The 1st and 99th percentiles.
+    pub spread: (f64, f64),
+    /// The share of trials in which it ended at a limit of its range.
+    pub limited: f64,
 }
 
 /// The first-order share of `y`'s variance due to `x`, Var(E[y | x]) / Var(y) (Pearson's
@@ -657,6 +693,61 @@ pub fn summarise(scene: &Scene, tolerancing: &Tolerancing, mut trials: Vec<Trial
         .iter()
         .filter_map(|t| t.outcome.failure.clone().map(|f| (t.index, f)))
         .collect();
+    let compensators = tolerancing
+        .compensators
+        .iter()
+        .map(|name| {
+            let mut values: Vec<f64> = trials
+                .iter()
+                .filter_map(|t| {
+                    t.outcome
+                        .compensators
+                        .iter()
+                        .find(|(n, _)| n == name)
+                        .map(|p| p.1)
+                })
+                .collect();
+            let m = values.len();
+            let mean = if m > 0 {
+                values.iter().sum::<f64>() / m as f64
+            } else {
+                f64::NAN
+            };
+            let deviation = if m > 1 {
+                (values.iter().map(|v| (v - mean).powi(2)).sum::<f64>() / (m - 1) as f64).sqrt()
+            } else {
+                0.0
+            };
+            values.sort_by(f64::total_cmp);
+            let rank = |q: f64| {
+                if m == 0 {
+                    f64::NAN
+                } else {
+                    values[((q * m as f64).ceil() as usize).clamp(1, m) - 1]
+                }
+            };
+            CompensatorUse {
+                name: name.clone(),
+                range: scene
+                    .dofs
+                    .iter()
+                    .find(|d| &d.name == name)
+                    .and_then(|d| d.range),
+                mean,
+                deviation,
+                spread: (rank(0.01), rank(0.99)),
+                limited: if n > 0 {
+                    trials
+                        .iter()
+                        .filter(|t| t.outcome.limited.contains(name))
+                        .count() as f64
+                        / n as f64
+                } else {
+                    0.0
+                },
+            }
+        })
+        .collect();
     MonteCarlo {
         yield_fraction: p,
         yield_error: if n > 0 {
@@ -668,6 +759,7 @@ pub fn summarise(scene: &Scene, tolerancing: &Tolerancing, mut trials: Vec<Trial
         shares,
         ranking,
         failures,
+        compensators,
         trials,
     }
 }

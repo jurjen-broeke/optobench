@@ -38,6 +38,12 @@ pub enum Term {
     /// As much of the launched power as possible arriving directly (residual: the
     /// fraction that does not).
     Power,
+    /// Every free DOF with a range near the middle of it, leaving room to adjust both
+    /// ways: one residual per such DOF, (value − middle) / half the range (0 in the
+    /// middle, ±1 at the ends). Measured on the DOFs, not at a detector. With a small
+    /// weight it decides only where the optics leave a choice (two mirrors steering one
+    /// beam, a lens and its detector refocusing alike).
+    Headroom,
 }
 
 impl Term {
@@ -49,6 +55,7 @@ impl Term {
             Term::Pointing { .. } => "pointing",
             Term::Collimation => "collimation",
             Term::Power => "power",
+            Term::Headroom => "headroom",
         }
     }
 }
@@ -64,12 +71,34 @@ pub struct Merit {
     pub weight: f64,
 }
 
+/// The headroom residuals of `scene`'s free DOFs (neither locked nor coupled) that have a
+/// range, at `values` (by name; a DOF not in it at its own value), in scene order.
+pub fn headroom(scene: &Scene, values: &BTreeMap<String, f64>) -> Vec<f64> {
+    scene
+        .dofs
+        .iter()
+        .filter(|d| !d.locked && d.follows.is_none())
+        .filter_map(|d| {
+            let (low, high) = d.range?;
+            let half = 0.5 * (high - low);
+            (half > 0.0).then(|| {
+                let v = values.get(&d.name).copied().unwrap_or(d.value);
+                (v - 0.5 * (low + high)) / half
+            })
+        })
+        .collect()
+}
+
 /// The residuals of `merit` for a traced scene, term by term (unweighted). A detector the
-/// direct light misses is an error: there is nothing to align.
+/// direct light misses is an error: there is nothing to align. Headroom terms are
+/// measured on the DOFs ([`headroom`]) and come out empty here.
 pub fn residuals(merit: &[Merit], traced: &SceneTrace) -> Result<Vec<Vec<f64>>, String> {
     merit
         .iter()
         .map(|m| {
+            if m.term == Term::Headroom {
+                return Ok(Vec::new());
+            }
             let d = traced
                 .detectors
                 .iter()
@@ -89,6 +118,7 @@ pub fn residuals(merit: &[Merit], traced: &SceneTrace) -> Result<Vec<Vec<f64>>, 
                     1e3 * (d.direct_mean_slope.1 - target.1),
                 ],
                 Term::Collimation => vec![1e3 * d.direct_rms_slope],
+                Term::Headroom => Vec::new(),
                 Term::Power => {
                     let launched = traced.ledger.launched;
                     vec![if launched > 0.0 {
@@ -134,7 +164,7 @@ pub fn optimise(
     merit: &[Merit],
     options: &lm::Options,
 ) -> Result<Optimised, String> {
-    if merit.is_empty() {
+    if merit.iter().all(|m| m.term == Term::Headroom) {
         return Err("no merit terms: say what alignment should achieve".into());
     }
     let free: Vec<&optobench_scene::dof::Dof> = scene
@@ -165,7 +195,13 @@ pub fn optimise(
             .collect();
         let moved = scene.moved(&values).map_err(|e| e.to_string())?;
         let traced = moved.trace().map_err(|e| e.to_string())?;
-        residuals(merit, &traced)
+        let mut terms = residuals(merit, &traced)?;
+        for (term, m) in terms.iter_mut().zip(merit) {
+            if m.term == Term::Headroom {
+                *term = headroom(scene, &values);
+            }
+        }
+        Ok(terms)
     };
     let weighted = |x: &[f64]| -> Result<Vec<f64>, String> {
         Ok(evaluate(x)?

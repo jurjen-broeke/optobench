@@ -34,6 +34,7 @@ fn term_json(merit: &Merit, start: &[f64], end: &[f64]) -> Value {
         Term::Focus | Term::Centring { .. } => "mm",
         Term::Pointing { .. } | Term::Collimation => "mrad",
         Term::Power => "fraction",
+        Term::Headroom => "half range",
     };
     json!({
         "kind": merit.term.name(),
@@ -45,12 +46,60 @@ fn term_json(merit: &Merit, start: &[f64], end: &[f64]) -> Value {
     })
 }
 
+/// The adjustment room of a DOF at `value` within [low, high] (mm or radians; `shown`
+/// converts to the file's units): how much of its travel towards one end it uses (−1 to
+/// 1 of half the range), the travel left each way, the range to give the DOF if the move
+/// is made with its adjuster and the design exported again (the travel left, around the
+/// new zero), its status (`ok`, `off-centre` beyond `warning`, `at limit`) and advice.
+pub(crate) fn room(
+    value: f64,
+    low: f64,
+    high: f64,
+    warning: f64,
+    shown: &dyn Fn(f64) -> f64,
+) -> Value {
+    let half = 0.5 * (high - low);
+    let middle = 0.5 * (low + high);
+    let used = if half > 0.0 {
+        (value - middle) / half
+    } else {
+        0.0
+    };
+    let slack = 1e-9 * half.max(1e-12);
+    let status = if value <= low + slack || value >= high - slack {
+        "at limit"
+    } else if used.abs() > warning {
+        "off-centre"
+    } else {
+        "ok"
+    };
+    let advice = if status == "ok" {
+        "room enough both ways".to_owned()
+    } else {
+        format!(
+            "re-place the part's mounting by {:.4} along or about this DOF's axis in the design, and keep the adjuster in the middle of its range rather than using {:.0} % of its travel",
+            shown(value - middle),
+            100.0 * used.abs()
+        )
+    };
+    json!({
+        "range": [shown(low), shown(high)],
+        "used": used,
+        "left": [shown(value - low), shown(high - value)],
+        "range_after_adjusting": [shown(low - value), shown(high - value)],
+        "status": status,
+        "advice": advice,
+    })
+}
+
 /// `optimize`: parameters `path` (a layout or sidecar with DOFs); optionally `merit`
 /// (in place of the file's `[[merit]]`), `dofs` (start values, mm or degrees),
 /// `max_iterations` (default 100), `report` (true: write the move report next to the
-/// design as `<design>.moves.json` and `.moves.md`; or a path stem) and `data_directory`.
-/// Returns each free DOF's start and suggested value and every merit term before and
-/// after.
+/// design as `<design>.moves.json` and `.moves.md`; or a path stem), `headroom_warning`
+/// (the share of its travel towards one end beyond which an adjuster is off-centre,
+/// default 0.5) and `data_directory`. Returns each free DOF's start and suggested value,
+/// its adjustment room where it has a range, warnings for adjusters off-centre or at a
+/// limit, and every merit term before and after.
 pub(crate) fn optimize(parameters: &Parameters) -> Result<Value, CommandError> {
     check_keys(
         parameters,
@@ -60,9 +109,22 @@ pub(crate) fn optimize(parameters: &Parameters) -> Result<Value, CommandError> {
             "dofs",
             "max_iterations",
             "report",
+            "headroom_warning",
             "data_directory",
         ],
     )?;
+    let warning = match parameters.get("headroom_warning") {
+        None => 0.5,
+        Some(v) => v
+            .as_f64()
+            .filter(|w| (0.0..=1.0).contains(w))
+            .ok_or_else(|| {
+                CommandError::new(
+                    ErrorCode::InvalidParameters,
+                    "`headroom_warning` is a fraction of half a range, from 0 to 1",
+                )
+            })?,
+    };
     let path = parameters
         .get("path")
         .and_then(Value::as_str)
@@ -100,14 +162,18 @@ pub(crate) fn optimize(parameters: &Parameters) -> Result<Value, CommandError> {
                 .expect("a free DOF");
             let angle = dof.motion.is_angle();
             let unit = |x: f64| if angle { x.to_degrees() } else { x };
-            json!({
+            let mut entry = json!({
                 "name": name,
                 "unit": if angle { "deg" } else { "mm" },
                 "start": unit(*start),
                 "suggested": unit(*end),
                 "change": unit(end - start),
                 "at_range_limit": at_bound,
-            })
+            });
+            if let Some((low, high)) = dof.range {
+                entry["room"] = room(*end, low, high, warning, &unit);
+            }
+            entry
         })
         .collect();
     let terms: Vec<Value> = merit
@@ -130,8 +196,21 @@ pub(crate) fn optimize(parameters: &Parameters) -> Result<Value, CommandError> {
             written = json!({ "json": json_path.to_string_lossy(), "markdown": md_path.to_string_lossy() });
         }
     }
+    let warnings: Vec<String> = dofs
+        .iter()
+        .filter(|d| d["room"].is_object() && d["room"]["status"] != "ok")
+        .map(|d| {
+            format!(
+                "`{}` uses {:.0} % of its travel towards one end: {}",
+                d["name"].as_str().unwrap_or("?"),
+                100.0 * d["room"]["used"].as_f64().unwrap_or(0.0).abs(),
+                d["room"]["advice"].as_str().unwrap_or("")
+            )
+        })
+        .collect();
     Ok(json!({
         "dofs": dofs,
+        "warnings": warnings,
         "merit": terms,
         "report": written,
         "cost": { "start": result.outcome.start_cost, "end": result.outcome.cost },

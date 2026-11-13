@@ -7,6 +7,12 @@
 //! detector = "screen"
 //! target = [0, 0]                   # centring: mm in the detector's frame; pointing: mrad
 //! weight = 1.0                      # optional; residuals are mm, mrad or a fraction
+//!
+//! [[merit]]
+//! kind = "headroom"                 # adjusters near the middle of their ranges (no detector):
+//! weight = 0.01                     # (value − middle) / half range per free DOF with a
+//!                                   # range; default weight 0.01, so it decides only where
+//!                                   # the optics leave a choice
 //! ```
 
 use optobench_optimize::{Merit, Term};
@@ -17,6 +23,21 @@ use crate::scene_file::{FileError, Item, check_keys, error, items};
 /// One merit term from a table (a file's `[[merit]]` or a command's parameter).
 pub(crate) fn term(item: &Item) -> Result<Merit, FileError> {
     let kind = item.text("kind")?;
+    if kind == "headroom" {
+        check_keys(item.table, &["kind", "weight"], &item.context)?;
+        let weight = item.optional_number("weight", 0.01)?;
+        if !(weight > 0.0 && weight.is_finite()) {
+            return Err(error(format!(
+                "{}: `weight` must be positive",
+                item.context
+            )));
+        }
+        return Ok(Merit {
+            term: Term::Headroom,
+            detector: String::new(),
+            weight,
+        });
+    }
     let targeted = matches!(kind, "centring" | "pointing");
     let mut keys = vec!["kind", "detector", "weight"];
     if targeted {
@@ -38,7 +59,7 @@ pub(crate) fn term(item: &Item) -> Result<Merit, FileError> {
         "power" => Term::Power,
         other => {
             return Err(error(format!(
-                "{}: merit kind `{other}` is not known; use \"focus\", \"centring\", \"pointing\", \"collimation\" or \"power\"",
+                "{}: merit kind `{other}` is not known; use \"focus\", \"centring\", \"pointing\", \"collimation\", \"power\" or \"headroom\"",
                 item.context
             )));
         }

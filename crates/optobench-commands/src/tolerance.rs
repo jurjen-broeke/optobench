@@ -165,6 +165,7 @@ pub(crate) fn criterion_unit(merit: &Merit) -> &'static str {
         Term::Focus | Term::Centring { .. } => "mm",
         Term::Pointing { .. } | Term::Collimation => "mrad",
         Term::Power => "fraction",
+        Term::Headroom => "half range",
     }
 }
 
@@ -172,6 +173,7 @@ fn outcome_json(o: &Outcome) -> Value {
     json!({
         "values": o.values,
         "passed": o.passed,
+        "limited": o.limited,
         "compensators": o.compensators.iter().map(|(n, v)| json!({ "name": n, "value": v })).collect::<Vec<_>>(),
         "failure": o.failure,
     })
@@ -249,6 +251,58 @@ pub(crate) fn monte_carlo_json(design: &Design, m: &MonteCarlo, seed: u64) -> Va
             .map(|c| m.trials.iter().map(|t| t.outcome.values[c]).collect::<Vec<_>>())
             .collect::<Vec<_>>(),
         "passed": m.trials.iter().map(|t| t.outcome.passed).collect::<Vec<_>>(),
+        "compensators": m.compensators.iter().map(|c| compensator_json(design, c)).collect::<Vec<_>>(),
+    })
+}
+
+/// How the trials used a compensator's travel, in the file's units, with advice.
+fn compensator_json(design: &Design, c: &optobench_optimize::tolerance::CompensatorUse) -> Value {
+    let angle = design
+        .scene
+        .dofs
+        .iter()
+        .find(|d| d.name == c.name)
+        .is_some_and(|d| d.motion.is_angle());
+    let shown = |v: f64| if angle { v.to_degrees() } else { v };
+    let advice = match c.range {
+        Some((low, high)) => {
+            let half = 0.5 * (high - low);
+            let need = 0.5 * (c.spread.1 - c.spread.0);
+            // Values stop at the range's ends, so running out shows in the share of
+            // trials at a limit, not in the spread.
+            if c.limited > 0.0 {
+                format!(
+                    "it ran out of travel in {:.1} % of the trials (its range ±{:.4}): tighten the tolerances or use a longer adjuster",
+                    100.0 * c.limited,
+                    shown(half)
+                )
+            } else if need > half {
+                format!(
+                    "98 % of the trials need ±{:.4} of travel, more than its range's ±{:.4}: tighten the tolerances or use a longer adjuster",
+                    shown(need),
+                    shown(half)
+                )
+            } else {
+                format!(
+                    "re-place the part's nominal by {:.4} to centre the travel the trials need (±{:.4} of its ±{:.4} for 98 % of them)",
+                    shown(c.mean - 0.5 * (low + high)),
+                    shown(need),
+                    shown(half)
+                )
+            }
+        }
+        None => "no range given: the travel it needs is not checked".to_owned(),
+    };
+    json!({
+        "name": c.name,
+        "unit": if angle { "deg" } else { "mm" },
+        "range": c.range.map(|(a, b)| [shown(a), shown(b)]),
+        "mean": shown(c.mean),
+        "deviation": shown(c.deviation),
+        "p1": shown(c.spread.0),
+        "p99": shown(c.spread.1),
+        "limited": c.limited,
+        "advice": advice,
     })
 }
 
@@ -373,6 +427,30 @@ pub(crate) fn markdown(design: &Design, result: &Value) -> String {
                     rank + 1,
                     name.as_str().unwrap_or("?"),
                     m["shares"][c][k].as_f64().unwrap_or(f64::NAN)
+                ));
+            }
+        }
+        let compensators: Vec<&Value> =
+            m["compensators"].as_array().into_iter().flatten().collect();
+        if !compensators.is_empty() {
+            out.push_str("\n### Compensators' travel\n\n| Compensator | Range | Mean | 1 % to 99 % | At a limit | Advice |\n| --- | --- | --- | --- | --- | --- |\n");
+            for c in compensators {
+                let f = |v: &Value| v.as_f64().map_or("–".to_owned(), |x| format!("{x:.4}"));
+                let range = if c["range"].is_array() {
+                    format!("{} to {}", f(&c["range"][0]), f(&c["range"][1]))
+                } else {
+                    "none".to_owned()
+                };
+                out.push_str(&format!(
+                    "| {} ({}) | {} | {} | {} to {} | {:.1} % | {} |\n",
+                    c["name"].as_str().unwrap_or("?"),
+                    c["unit"].as_str().unwrap_or(""),
+                    range,
+                    f(&c["mean"]),
+                    f(&c["p1"]),
+                    f(&c["p99"]),
+                    100.0 * c["limited"].as_f64().unwrap_or(0.0),
+                    c["advice"].as_str().unwrap_or("")
                 ));
             }
         }

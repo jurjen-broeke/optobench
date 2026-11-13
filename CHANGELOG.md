@@ -5,6 +5,12 @@ with the release that introduced them.
 
 ## Unreleased
 
+- M14d adjustment range: merit term `headroom` keeps adjusters near the middle of their
+  ranges where the optics leave a choice; `optimize` and the move report give each
+  ranged DOF's adjustment room (travel used and left, the range after adjusting, a
+  status, re-placement advice, warnings; `headroom_warning`); in tolerancing a
+  compensator that runs out of range fails the trial, and the Monte Carlo reports each
+  compensator's travel with advice.
 - M14c tolerance report and graphs: `tolerance` writes `<design>.tolerance.json` and
   `.tolerance.md` with `report`; graph kinds `tolerance-histogram`,
   `tolerance-sensitivity` and `tolerance-yield`. Monte Carlo shares are now taken over

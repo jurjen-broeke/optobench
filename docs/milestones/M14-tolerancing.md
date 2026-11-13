@@ -106,6 +106,39 @@ until then every number in a test is from theory (closed forms of the linear cas
       (about 0.75 s of trace per trial). A trial with compensators costs one trace per
       optimiser evaluation (about 10–20 per trial)
 
+## M14d Adjustment range
+
+Asked for 2026-11-13: many Thorlabs parts adjust over a limited range (kinematic mounts,
+XY and Z translators), and parts should be placed so their adjusters sit near the middle,
+with room both ways. A DOF's `range` is that travel; in a sidecar its 0 is the pose in
+the STEP file, the adjuster at its neutral position. Ranges stay the user's (from each
+part's specification), not bundled.
+
+- [x] Merit term `headroom` (`[[merit]] kind = "headroom"`, default weight 0.01): per
+      free DOF with a range, (value − middle) / half the range; where the optics leave a
+      choice (two mirrors steering one beam, a lens and its detector), the optimiser
+      takes the one with the adjusters nearest the middle. Not a criterion (refused in
+      `[tolerancing]`)
+- [x] Adjustment room in `optimize` and the move report: per DOF with a range, the share
+      of its travel towards one end it uses, the travel left each way, the range to give
+      it if the move is made with its adjuster and the design exported again
+      (`range_after_adjusting`: the travel left, around the new zero), a status (`ok`,
+      `off-centre` beyond `headroom_warning`, default 0.5, `at limit`) and the advice to
+      re-place the part's mounting in the design instead; warnings listed
+- [x] Tolerancing: a compensator that ends at a limit of its range fails the trial (the
+      adjustment ran out; `limited` in each outcome); per compensator over the Monte
+      Carlo its mean, spread (1 % to 99 %), the share of trials at a limit, and advice:
+      re-place the part's nominal by the mean to centre the travel, or the range is too
+      short
+- [x] Checks (commands `tests/tolerance.rs`): a lens and its detector sliding sideways
+      (only their difference matters) settle at 0.5 mm each with headroom, the middle of
+      ranges centred at 1 and 0 (10⁻³); an adjuster needing 0.8 of ±1 mm is `off-centre`
+      with 80 % used and a range after adjusting of −1.8 to 0.2, in the report and the
+      warnings; a ±0.1 mm compensator against a ±0.3 mm uniform despace runs out in 2/3
+      of the trials (within 4 binomial errors) and the yield is the rest; with ±1 mm none
+      does. On the local Thorlabs periscope the misaligned design aligns with every
+      adjuster within 33 % of its travel (L2_z), headroom moving them slightly
+
 ## Open questions
 
 - Part tolerances on STEP solids (a lens body from CAD): its prescription is not

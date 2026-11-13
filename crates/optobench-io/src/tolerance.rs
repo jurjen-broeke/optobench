@@ -373,6 +373,11 @@ pub fn tolerancing(root: &Table, scene: &Scene) -> Result<Tolerancing, FileError
                 table: &criterion,
                 context: context.clone(),
             })?;
+            if merit.term == optobench_optimize::Term::Headroom {
+                return Err(error(format!(
+                    "{context}: a criterion is measured at a detector; headroom belongs in [[merit]]"
+                )));
+            }
             if !scene.detectors.iter().any(|d| d.id == merit.detector) {
                 return Err(error(format!(
                     "{context}: no detector `{}`",

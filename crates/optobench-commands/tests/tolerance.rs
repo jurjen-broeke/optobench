@@ -471,3 +471,194 @@ fn the_report_and_the_graphs() {
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+// M14d: adjustment range.
+
+fn run_command(
+    command: &str,
+    text: &str,
+    label: &str,
+    parameters: serde_json::Value,
+) -> serde_json::Value {
+    let path = std::env::temp_dir().join(format!(
+        "optobench-room-{label}-{}.optobench",
+        std::process::id()
+    ));
+    std::fs::write(&path, text).expect("written");
+    let mut p = parameters;
+    p["path"] = serde_json::json!(path.to_string_lossy());
+    let result = optobench_commands::Registry::standard()
+        .run(command, &p)
+        .unwrap_or_else(|e| panic!("{}", e.message));
+    let _ = std::fs::remove_file(&path);
+    result
+}
+
+/// A lens and its detector that can both slide sideways (an ideal lens images a
+/// collimated beam onto its own axis, so only their difference matters), the lens
+/// starting 2.5 mm off; `extra` merit added.
+fn sliding_pair(extra: &str) -> String {
+    format!(
+        "{HEADER}[[element]]\nid = \"L\"\nkind = \"ideal_lens\"\nat = 50\nfocal_length = 100\n\
+         dof = [ {{ name = \"L_x\", kind = \"slide\", axis = \"x\", range = [-1, 3], value = 2.5 }} ]\n\n\
+         [[detector]]\nid = \"D\"\nat = 150\nsize = [10, 10]\npixels = [10, 10]\n\
+         dof = [ {{ name = \"D_x\", kind = \"slide\", axis = \"x\", range = [-2, 2] }} ]\n\n\
+         [[merit]]\nkind = \"centring\"\ndetector = \"D\"\n\n{extra}"
+    )
+}
+
+#[test]
+fn headroom_centres_the_adjusters_where_the_optics_leave_a_choice() {
+    // Only L_x − D_x matters; with headroom the pair settles where both are as central as
+    // they can be together: L_x = D_x minimising ((L − 1)/2)² + (D/2)², L = D = 0.5.
+    let r = run_command(
+        "optimize",
+        &sliding_pair("[[merit]]\nkind = \"headroom\"\n"),
+        "pair",
+        serde_json::json!({}),
+    );
+    let value = |name: &str| {
+        r["dofs"]
+            .as_array()
+            .expect("dofs")
+            .iter()
+            .find(|d| d["name"] == name)
+            .expect("dof")["suggested"]
+            .as_f64()
+            .expect("value")
+    };
+    assert!((value("L_x") - 0.5).abs() < 1e-3, "{r}");
+    assert!((value("D_x") - 0.5).abs() < 1e-3, "{r}");
+    // The adjustment room: L_x at 0.5 of [−1, 3] uses 25 % of its travel towards the low
+    // end, with 1.5 and 2.5 mm left.
+    let l = r["dofs"]
+        .as_array()
+        .expect("dofs")
+        .iter()
+        .find(|d| d["name"] == "L_x")
+        .expect("L_x");
+    assert!((l["room"]["used"].as_f64().expect("used") + 0.25).abs() < 1e-3);
+    assert_eq!(l["room"]["status"], "ok");
+    assert!((l["room"]["left"][0].as_f64().expect("left") - 1.5).abs() < 1e-3);
+    // Without headroom the optimiser stops wherever the pair first lines up.
+    let plain = run_command(
+        "optimize",
+        &sliding_pair(""),
+        "plain",
+        serde_json::json!({}),
+    );
+    let difference = |r: &serde_json::Value| {
+        let v: Vec<f64> = ["L_x", "D_x"]
+            .iter()
+            .map(|n| {
+                r["dofs"]
+                    .as_array()
+                    .expect("dofs")
+                    .iter()
+                    .find(|d| d["name"] == *n)
+                    .expect("dof")["suggested"]
+                    .as_f64()
+                    .expect("value")
+            })
+            .collect();
+        v[0] - v[1]
+    };
+    assert!(difference(&plain).abs() < 1e-6);
+}
+
+#[test]
+fn an_adjuster_far_off_centre_is_reported_with_its_range_after_adjusting() {
+    // The lens 0.8 mm off; only it can move, within ±1 mm: 80 % of its travel.
+    let text = format!(
+        "{HEADER}[[element]]\nid = \"L\"\nkind = \"ideal_lens\"\nat = 50\nfocal_length = 100\n\
+         dof = [ {{ name = \"L_x\", kind = \"slide\", axis = \"x\", range = [-1, 1] }} ]\n\n\
+         [[detector]]\nid = \"D\"\nat = 150\nsize = [10, 10]\npixels = [10, 10]\n\n\
+         [[merit]]\nkind = \"centring\"\ndetector = \"D\"\ntarget = [0.8, 0]\n"
+    );
+    let dir = std::env::temp_dir().join(format!("optobench-room-report-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("dir");
+    let r = run_command(
+        "optimize",
+        &text,
+        "off",
+        serde_json::json!({ "report": dir.join("off").to_string_lossy() }),
+    );
+    let l = &r["dofs"][0];
+    assert!((l["suggested"].as_f64().expect("value") - 0.8).abs() < 1e-6);
+    let room = &l["room"];
+    assert_eq!(room["status"], "off-centre");
+    assert!((room["used"].as_f64().expect("used") - 0.8).abs() < 1e-6);
+    let after: Vec<f64> = room["range_after_adjusting"]
+        .as_array()
+        .expect("range")
+        .iter()
+        .map(|v| v.as_f64().expect("v"))
+        .collect();
+    assert!(
+        (after[0] + 1.8).abs() < 1e-6 && (after[1] - 0.2).abs() < 1e-6,
+        "{after:?}"
+    );
+    assert!(
+        r["warnings"][0]
+            .as_str()
+            .expect("warning")
+            .contains("re-place the part's mounting by 0.8")
+    );
+    let markdown = std::fs::read_to_string(dir.join("off.moves.md")).expect("report");
+    assert!(
+        markdown.contains("## Adjustment room") && markdown.contains("off-centre"),
+        "{markdown}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_compensator_that_runs_out_of_range_fails_the_trial() {
+    // A ±0.3 mm despace and a detector compensator of ±0.1 mm: the focus can be found
+    // only when |error| ≤ 0.1, two trials in three fail at the compensator's limit.
+    let text = format!(
+        "{HEADER}[[element]]\nid = \"L\"\nkind = \"ideal_lens\"\nat = 50\nfocal_length = 100\n\n\
+         [[detector]]\nid = \"D\"\nat = 150\nsize = [10, 10]\npixels = [10, 10]\n\
+         dof = [ {{ name = \"D_z\", kind = \"slide\", axis = \"z\", range = [-0.1, 0.1] }} ]\n\n\
+         [[merit]]\nkind = \"focus\"\ndetector = \"D\"\n\n\
+         [[tolerance]]\nname = \"L_z\"\nkind = \"slide\"\ntarget = \"L\"\naxis = \"z\"\nlimit = 0.3\n\n\
+         [tolerancing]\ncompensators = [\"D_z\"]\ncriteria = [ {{ kind = \"focus\", detector = \"D\", max = 0.1 }} ]\n"
+    );
+    let n = 300;
+    let r = run_command(
+        "tolerance",
+        &text,
+        "limited",
+        serde_json::json!({ "mode": "monte-carlo", "trials": n, "seed": 2 }),
+    );
+    let c = &r["monte_carlo"]["compensators"][0];
+    let limited = c["limited"].as_f64().expect("share");
+    let bound = 4.0 * (2.0f64 / 9.0 / n as f64).sqrt();
+    assert!((limited - 2.0 / 3.0).abs() < bound, "{limited}");
+    assert!((r["monte_carlo"]["yield"].as_f64().expect("yield") - (1.0 - limited)).abs() < 1e-12);
+    assert!(
+        c["advice"]
+            .as_str()
+            .expect("advice")
+            .contains("ran out of travel in 66.3 %"),
+        "{c}"
+    );
+    // With room enough, none runs out and the advice says how to centre it.
+    let roomy = text.replace("range = [-0.1, 0.1]", "range = [-1, 1]");
+    let r = run_command(
+        "tolerance",
+        &roomy,
+        "roomy",
+        serde_json::json!({ "mode": "monte-carlo", "trials": 100, "seed": 2 }),
+    );
+    let c = &r["monte_carlo"]["compensators"][0];
+    assert_eq!(c["limited"].as_f64(), Some(0.0));
+    assert!(
+        c["advice"]
+            .as_str()
+            .expect("advice")
+            .contains("re-place the part's nominal by"),
+        "{c}"
+    );
+    assert!((c["mean"].as_f64().expect("mean")).abs() < 0.05);
+}
