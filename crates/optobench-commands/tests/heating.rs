@@ -115,6 +115,7 @@ fn the_radial_average_follows_the_slab_solution() {
             radius: None,
             rings: 10,
             slices: 100,
+            ..Default::default()
         },
         ..Default::default()
     };

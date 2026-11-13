@@ -48,6 +48,14 @@ the diffusion approximation here; photon transport by Monte Carlo replaces it in
       µa (Φ_direct + Φ_diffuse); totals per layer, the diffuse light's balance, the peak.
       The turbid layers must touch (a clear layer between them is refused); their stack's
       faces lose light by their index step to the media beyond
+- [x] The delta-Eddington primary (`LightSettings::primary`, default; `fluence`
+      `primary`): the forward-scattered fraction g of each scattering kept in the
+      primary, which decays at µa + µs (1 − g) and feeds the diffuse light at µs (1 − g)
+      (Star, ch. 6 §6.3.7.1 in Welch and van Gemert 2011; Joseph, Wiscombe and Weinman
+      1976); the ballistic source remains as `primary = "ballistic"`. Checked: the
+      primary's split by Beer–Lambert at µt* (10⁻⁶) and less light out through the top
+      than with the ballistic source. Added in M11d: with g = 0.9 the ballistic source
+      put the diffuse light within 1/µt of the surface and most of it left again
 - [x] Graphs (`graph` kinds `fluence-depth`, `absorption`): direct, diffuse and total
       fluence rate along the axis; the absorbed power density as an x–z map on a
       logarithmic colour scale (maps now share one colour mapping, `Map::level`, between
@@ -286,7 +294,7 @@ emitter is spread through the excited volume, its photons those of the excitatio
 ## Exit check
 
 - [x] Excitation rates match the closed forms above (one- and two-photon): M11b2's checks
-- [ ] The temperature rise matches the analytic Gaussian-source solution
+- [x] The temperature rise matches the analytic Gaussian-source solution (M11d1)
 - [ ] A published multiphoton heating benchmark: K. Podgorski and G. Ranganathan, "Brain
       heating induced by near-infrared lasers during multiphoton microscopy",
       J. Neurophysiol. 116, 1012 (2016) (local corpus). Values from its text only:
@@ -316,6 +324,32 @@ emitter is spread through the excited volume, its photons those of the excitatio
       150 µm, and the field-size dependence; a larger gap is reported, and the light
       transport part of it moves to M15. Their code (available on request, no licence) is
       not used
+
+      **Result (2026-11-13, commands `tests/podgorski.rs`; not met).** Their conditions as
+      above (NA 0.08 by an ideal lens, which they found heats as NA 0.8; brain a
+      cylinder 6 mm by 10 mm as in Stujenske et al.; water and glass thermal values from
+      Welch and van Gemert, glass from Valvano's Table 11.4 after Incropera 1990; µa
+      0.0175 /mm, the middle of the figure reading), the light by M11a2's diffusion
+      approximation with the delta-Eddington primary:
+      - steady rise per 100 mW at 250 µm: **0.47 K** against 1.86 ± 0.25 °C measured,
+        about 4× lower (0.44–0.62 K over µa 0.015–0.02 and depths 150–500 µm; a domain
+        of 20 mm radius changes it by under 10 %)
+      - 500 µm over 150 µm: +29 % against +20 ± 7 % measured (agrees within 2 SD)
+      - a field 4× smaller +36 %, 4× larger −29 %, against their simulated +20.7 % and
+        −23.6 % (same direction, stronger here)
+      - the largest rise ~1 mm below the dura against ~0.5 mm in their simulation; the
+        rise settles within 180 s, where they measured 6 % more at 1000 s
+      Where the gap may lie, in the order to test: (1) µa — Johansson's values are from
+      ex vivo human tissue, while mouse cortex in vivo holds several per cent blood
+      (oxy- and deoxyhaemoglobin absorb at 920 nm) and water absorbs ~0.005 /mm; the
+      rise scales nearly with µa, so ~0.06 /mm would close it; (2) the light transport:
+      with g = 0.9 and the focus 1.85 mm under the surface, about 2/3 of the light
+      leaves through the top in diffusion theory, which is least reliable within a
+      transport length of the surface, as here (Monte Carlo, M15); (3) where their
+      "100 mW" is measured. Before the ballistic-source fix below the model gave 0.25 K.
+      The delta-Eddington primary (M11a2, now the default) was introduced for this:
+      with the diffuse light seeded where the light first scatters, 78 % left through
+      the top and only 7 % was absorbed
 
 ## Brain properties from the sources
 

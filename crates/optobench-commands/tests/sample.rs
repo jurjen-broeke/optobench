@@ -205,7 +205,8 @@ fn the_light_in_a_turbid_slab_is_accounted_for_direct_and_diffuse() {
     let layer = part(&report, "layer 1");
     let light = run(
         "fluence",
-        json!({ "path": path.to_string_lossy(), "radius": 6.0, "rings": 60, "slices": 60 }),
+        json!({ "path": path.to_string_lossy(), "radius": 6.0, "rings": 60, "slices": 60,
+                "primary": "ballistic" }),
     );
     let close = |a: f64, b: f64| (a - b).abs() <= 1e-9 * b.abs().max(1e-12);
     assert!(
@@ -236,6 +237,31 @@ fn the_light_in_a_turbid_slab_is_accounted_for_direct_and_diffuse() {
         number(&parts[0]["direct_absorbed_w"]),
         number(&light["direct_absorbed_w"])
     ));
+    // Delta-Eddington (the default): the primary decays at µa + µs (1 − g) = 1.02 /mm, so
+    // over the 3 mm it gives up 1 − e^{−3.06} of what enters, µs (1 − g) / µt* of that to
+    // the diffuse light and µa / µt* absorbed (Star, in Welch and van Gemert 2011, §6.3.7.1).
+    let delta = run(
+        "fluence",
+        json!({ "path": path.to_string_lossy(), "radius": 6.0, "rings": 60, "slices": 60 }),
+    );
+    // What enters: the ballistic beam is spent in the layer (e^{−30} remains).
+    let entering = number(&light["scattered_w"]) + number(&light["direct_absorbed_w"]);
+    let mu_t = 0.02 + 10.0 * (1.0 - 0.9);
+    let given = entering * (1.0 - (-mu_t * 3.0f64).exp());
+    let scattered = number(&delta["scattered_w"]);
+    let absorbed = number(&delta["direct_absorbed_w"]);
+    assert!(
+        (scattered / (given * 1.0 / mu_t) - 1.0).abs() < 1e-6,
+        "{scattered} {given}"
+    );
+    assert!(
+        (absorbed / (given * 0.02 / mu_t) - 1.0).abs() < 1e-6,
+        "{absorbed} {given}"
+    );
+    // Seeded deeper, less of the diffuse light leaves through the top than with the
+    // ballistic source.
+    let top = |l: &Value| number(&l["diffuse"]["top_w"]) / number(&l["scattered_w"]);
+    assert!(top(&delta) < top(&light), "{} {}", top(&delta), top(&light));
     // And as graphs.
     for of in ["fluence-depth", "absorption"] {
         let graph = run(

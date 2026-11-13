@@ -6,10 +6,20 @@
 //!   estimator), from each ray segment walked in short pieces with Beer–Lambert decay.
 //! - The power scattered out of the direct beam along each piece is the diffuse light's
 //!   source there ([`crate::diffusion`]); the diffuse light then spreads with D =
-//!   1/(3 (µa + µs (1 − g))). Taking the first scattering as isotropic (the source where
-//!   the light left the beam, the anisotropy only in D) is the usual diffusion
-//!   approximation; it is poor within a few transport lengths of the beam's entry and of
-//!   boundaries, where M15's Monte Carlo transport takes over.
+//!   1/(3 (µa + µs (1 − g))). Taken literally (the ballistic beam, [`Primary::Ballistic`]),
+//!   this puts all the scattered light into the diffuse light where it first scatters,
+//!   within 1/µt of the surface, and with g ≈ 0.9 far too much of it leaves again
+//!   through the surface. By default the delta-Eddington approximation is used instead
+//!   ([`Primary::DeltaEddington`]; W. M. Star, ch. 6 §6.3.7.1 in A. J. Welch and M. J. C.
+//!   van Gemert, Optical-Thermal Response of Laser-Irradiated Tissue, 2nd ed., 2011,
+//!   after J. H. Joseph, W. J. Wiscombe and J. A. Weinman, J. Atmos. Sci. 33, 2452
+//!   (1976)): the forward-scattered fraction f = g of each scattering is kept in the
+//!   primary beam, which then decays at µa + µs (1 − g) and feeds the diffuse light at
+//!   µs (1 − g); D and µ_eff are unchanged. The primary is then a mathematical part of
+//!   the light, not the measurable ballistic beam (which the traced rays still carry for
+//!   the PSF). The rays' powers come from the trace (Fresnel losses and all); in turbid
+//!   layers the forward-scattered part is added back to them as they go. Rays split off at
+//!   faces start from their own traced power.
 //! - The absorbed power density is µa (Φ_direct + Φ_diffuse) (W/mm³): the heat source of
 //!   M11d.
 //!
@@ -22,6 +32,15 @@ use optobench_scene::{ElementKind, Scene, SceneTrace};
 
 use crate::diffusion::{Boundary, DiffuseLight, Diffusion, RzGrid};
 
+/// What the primary (direct) light is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Primary {
+    /// The ballistic beam, decaying at µa + µs; all scattered light diffuse.
+    Ballistic,
+    /// The delta-Eddington primary with f = g, decaying at µa + µs (1 − g).
+    DeltaEddington,
+}
+
 /// How finely to grid a sample.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct LightSettings {
@@ -31,6 +50,8 @@ pub struct LightSettings {
     pub rings: usize,
     /// Slices through the turbid layers.
     pub slices: usize,
+    /// What the primary light is (see the module notes).
+    pub primary: Primary,
 }
 
 impl Default for LightSettings {
@@ -39,6 +60,7 @@ impl Default for LightSettings {
             radius: None,
             rings: 100,
             slices: 200,
+            primary: Primary::DeltaEddington,
         }
     }
 }
@@ -185,6 +207,8 @@ pub fn sample_light(
     let mut direct_absorbed = 0.0;
     let piece = 0.5 * grid.dr().min(grid.dz());
     for record in &trace.records {
+        // The forward-scattered power kept in the primary so far (delta-Eddington).
+        let mut kept = 1.0;
         for k in 0..record.points.len().saturating_sub(1) {
             let (a, b) = (
                 frame.to_local_point(record.points[k]),
@@ -197,10 +221,17 @@ pub fn sample_light(
             let Some(layer) = layer_at(0.5 * (a.z + b.z)) else {
                 continue;
             };
-            let (_, _, mu_a, mu_s, _) = coefficients[layer];
+            let (_, _, mu_a, mu_s_true, g) = coefficients[layer];
+            // The trace's (ballistic) attenuation, and the primary's.
+            let traced = mu_a + mu_s_true;
+            let mu_s = match settings.primary {
+                Primary::Ballistic => mu_s_true,
+                Primary::DeltaEddington => mu_s_true * (1.0 - g),
+            };
             let mu_t = mu_a + mu_s;
             let arrival = record.powers.get(k).copied().unwrap_or(record.ray.power);
-            let start = arrival * (mu_t * length).exp();
+            let start = arrival * (traced * length).exp() * kept;
+            kept *= ((traced - mu_t) * length).exp();
             // The part of the segment inside the grid's z range.
             let (dz_seg, z_a) = (b.z - a.z, a.z);
             let (mut t0, mut t1) = (0.0, 1.0);

@@ -13,7 +13,7 @@ fn invalid(message: impl Into<String>) -> CommandError {
 }
 
 /// The parameters of the light in a sample, besides `path`, `dofs` and `data_directory`.
-pub(crate) const LIGHT_KEYS: &[&str] = &["sample", "radius", "rings", "slices"];
+pub(crate) const LIGHT_KEYS: &[&str] = &["sample", "radius", "rings", "slices", "primary"];
 
 /// The light in the sample the parameters name (`sample`; default the first).
 pub(crate) fn light(parameters: &Parameters) -> Result<SampleLight, CommandError> {
@@ -51,13 +51,23 @@ pub(crate) fn light(parameters: &Parameters) -> Result<SampleLight, CommandError
                 as usize;
         }
     }
+    settings.primary = match text(parameters, "primary")? {
+        None | Some("delta-eddington") => optobench_analysis::sample::Primary::DeltaEddington,
+        Some("ballistic") => optobench_analysis::sample::Primary::Ballistic,
+        Some(other) => {
+            return Err(invalid(format!(
+                "`primary` `{other}` is not known; use \"delta-eddington\" (default) or \"ballistic\""
+            )));
+        }
+    };
     let trace = scene.trace().map_err(|e| failed(e.to_string()))?;
     sample_light(&scene, &trace, sample, &settings).map_err(failed)
 }
 
 /// `fluence`: parameters `path`, and optionally `sample` (an element id; default the
 /// first sample), `radius` (the grid's radius, mm; default half the sample's diameter),
-/// `rings` (default 100), `slices` (default 200), `dofs` and `data_directory`. Returns the
+/// `rings` (default 100), `slices` (default 200), `primary` (`delta-eddington`, default,
+/// or `ballistic`: see `optobench_analysis::sample`), `dofs` and `data_directory`. Returns the
 /// power scattered and absorbed on the grid, the diffuse light's balance and the
 /// absorption per layer and at its peak.
 pub(crate) fn fluence(parameters: &Parameters) -> Result<Value, CommandError> {

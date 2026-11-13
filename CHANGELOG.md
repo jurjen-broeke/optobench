@@ -5,6 +5,13 @@ with the release that introduced them.
 
 ## Unreleased
 
+- M11 heating benchmark against Podgorski and Ranganathan (2016): the depth and
+  field-size dependences agree; the absolute rise per 100 mW is about 4× lower than
+  measured (0.47 against 1.86 ± 0.25 °C), reported in the milestone with where the gap
+  may lie. The light in a sample now uses the delta-Eddington primary by default (the
+  forward-scattered part kept in the primary beam), which the benchmark showed is needed
+  for strongly forward-scattering tissue; `fluence` takes `primary = "ballistic"` for the
+  former behaviour.
 - M11d2 heating of a sample: sample layers take `thermal` properties (with their source)
   and samples `thermal_boundaries`; new command `heating` gives the temperature rise from
   the light the sample absorbs, steady or in time, parked or over a scanned field, with
