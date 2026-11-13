@@ -107,22 +107,34 @@ the diffusion approximation here; photon transport by Monte Carlo replaces it in
 
 ### M11b2 The excitation volume
 
-- [ ] The excitation volume from the M9c2 vectorial PSF at the actual depth (index
-      mismatch and its aberration included), attenuated by the ballistic loss on the way
-      (per ray from its `media`); total excitation per second ∫ rate × concentration dV,
-      the volume's sizes, and the saturation checks (one-photon k τ_f, two-photon per
-      pulse)
-- [ ] Command `excitation`; graphs: excitation rate against depth, excitation maps (x–z),
-      pulse width along the path
-- [ ] Checks: the one-photon rate against σ₁ I / (h ν) for a uniform beam; the two-photon
-      total of a Gaussian–Lorentzian focus against its closed form, ∫ I² dV = π n P² / λ
-      for a Gaussian beam focused in a medium of index n (derived from the beam:
-      ∫ I² dA = P² / (π w²) per plane, integrated over z with w² = w₀² (1 + z² / z_R²),
-      z_R = π w₀² n / λ), which is Xu and Webb's note 15 (½ g φ η₂ C δ (n π / λ) ⟨P⟩²);
-      and a uniformly filled pupil (paraxial Airy focus) against their relation (10),
-      ∫ S² dV ≈ 8 n λ³ / (π³ NA⁴) with I₀ = π NA² P / λ² (Eq. (9)), that is
-      ∫ I² dV ≈ 8 n P² / (π λ), within its stated 3 % (a numerical result, their
-      note 14; paraxial, so at NA ≲ 0.7 in their words). Both independent of the NA
+- [x] The excitation volume from the M9c2 vectorial PSF at the actual depth (index
+      mismatch and its aberration included), each plane wave attenuated by its own ray's
+      ballistic loss exp(−Σ (µa + µs) L) from the front plane (`PsfSettings::attenuated`,
+      from the rays' `media`; `Psf::transmission` reports it always)
+- [x] Volume integrals (`PsfSettings::volume`, `Psf::volume`): ∫ I dA and ∫ I² dA on
+      planes across the focus line, spaced z = z_peak + a tan t (a the half axial FWHM),
+      each sampled on a grid that widens with the cone, out to where the discrete
+      plane-wave sum starts to repeat (λ₀ / Δp; too few rays are refused); the tails
+      beyond by K / (z² + b²) through the two outermost planes on each side, exact for
+      a Gaussian focus. Widths of I² (`fwhm_squared`, I at 1/√2 of its peak)
+- [x] `optobench_analysis::excitation::excitation`: where the focus is (sample layer,
+      from the chief ray) and the fluorophore's concentration there; one-photon peak rate,
+      saturation k τ_f and excitations per depth σ₁ C P / (h ν) at the focal plane (it
+      is not confined; the diffuse light's share is not counted); two-photon peak rate,
+      per-pulse probability and excitations in the focus ½ σ₂ C g ∫ F² dV (thick-sample
+      limit: the layer taken as much thicker than the focus); photons emitted (× η), the
+      emitter power M11c's isotropic source takes; the pulse width at the focus after the
+      path's dispersion
+- [x] Command `excitation`; graphs `excitation-depth` (excitations per depth per plane,
+      one- and two-photon, against z), `excitation-map` (rate per molecule, x–z),
+      `pulse-width` (along the chief ray); units `time`, `rate`, `rate-per-length`
+- [x] Checks (commands `tests/excitation.rs`): a Gaussian focus (1/e² n sin θ ≈ 0.17)
+      against Xu and Webb's note 15, ∫ I² dV = π n P² / λ (0.998 found; to 1 %); a filled
+      NA 0.5 pupil against their relations (9), (10), 8 n P² / (π λ) (0.993; to their
+      3 %); ∫ I dA = P on every plane (1 %); the pulsed total against ½ σ₂ C g π n P² /
+      (λ (h ν)²) (1 %); the one-photon rate σ₁ I / (h ν) and per depth σ₁ C P / (h ν);
+      a turbid layer's ballistic transmission between exp(−µt d) and exp(−µt d / cos θ_max)
+      and the peak falling by it (1 %); too few rays refused; the command and its graphs
 
 ### M11b3 FPbase
 
@@ -138,7 +150,8 @@ the diffusion approximation here; photon transport by Monte Carlo replaces it in
 ## M11c Emission and the photon budget
 
 Built ahead of M11b: the emitter's power (its emission over all directions) is given
-by the user for now; M11b will give it from the excitation rate and the quantum yield.
+by the user; M11b2's `excitation` now reports the photons emitted per second at a focus
+(times the photon energy, that power).
 
 - [x] An isotropic point emitter (source kind `isotropic`: equal solid angles, the disk
       samples mapped onto the cap by cos θ = 1 − ρ² (1 − cos θ_max); `power_w` the total
@@ -195,7 +208,7 @@ by the user for now; M11b will give it from the excitation rate and the quantum 
 
 ## Exit check
 
-- [ ] Excitation rates match the closed forms above (one- and two-photon)
+- [x] Excitation rates match the closed forms above (one- and two-photon): M11b2's checks
 - [ ] The temperature rise matches the analytic Gaussian-source solution
 - [ ] A published multiphoton heating benchmark: K. Podgorski and G. Ranganathan, "Brain
       heating induced by near-infrared lasers during multiphoton microscopy",

@@ -8,17 +8,33 @@
 //! - 1 GM (Göppert-Mayer) = 10⁻⁵⁰ cm⁴ s per photon (C. Xu, W. Zipfel, J. B. Shear,
 //!   R. M. Williams and W. W. Webb, Proc. Natl. Acad. Sci. USA 93, 10763 (1996), Fig. 1,
 //!   where most spectra are action cross-sections η σ₂: the absorption σ₂ is η σ₂ / η).
+//! - Two-photon excitation in a thick sample (C. Xu and W. W. Webb, J. Opt. Soc. Am. B 13,
+//!   481 (1996)): ⟨F⟩ = ½ g φ η₂ C δ ⟨I₀⟩² ∫ S² dV (Eq. (5)). For a Gaussian beam
+//!   ∫ I² dV = π n P² / λ, independent of the waist (their note 15, and from the
+//!   Gaussian–Lorentzian beam: ∫ I² dA = P² / (π w²), w² = w₀² (1 + z² / z_R²),
+//!   z_R = π w₀² n / λ). For a uniformly filled pupil (paraxial Airy focus)
+//!   ∫ S² dV ≈ 8 n λ³ / (π³ NA⁴) with I₀ = π NA² P / λ² (relation (10), a numerical
+//!   result to 3 %, their note 14; Eq. (9)), so ∫ I² dV ≈ 8 n P² / (π λ).
+//!   g = g_p / (f τ) for pulses (Eq. (13)).
+//! - Through any plane across the focus ∫ I dA is the power there (energy conservation),
+//!   so one-photon excitation per depth is σ₁ C P / (h ν).
 //! - The group-delay dispersion of a path is the sum of GVD × length over its media
 //!   (Diels and Rudolph, Ultrashort Laser Pulse Phenomena, 2nd ed., 2006, ch. 1), each
 //!   GVD from the materials' own dispersion formulas (checked against the formulas
 //!   differentiated by hand in `optobench_materials::dispersion`).
 
-use optobench_analysis::excitation::{broadened_width, pulse_path};
+use optobench_analysis::excitation::{
+    ExcitationSettings, Timing, broadened_width, excitation, photon_energy, pulse_factor,
+    pulse_path,
+};
+use optobench_analysis::{PsfSettings, psf};
+use optobench_commands::Registry;
 use optobench_io::scene_file::parse;
 use optobench_io::store::material;
 use optobench_materials::Spectrum;
 use optobench_materials::dispersion::group_velocity_dispersion;
 use optobench_scene::{PulseShape, Scene};
+use serde_json::{Value, json};
 
 const AVOGADRO: f64 = 6.022_140_76e23;
 
@@ -196,4 +212,247 @@ fn fluorophores_and_pulses_are_checked() {
             .expect_err("continuous")
             .contains("not pulsed")
     );
+}
+
+/// A source at 0.8 µm into an ideal objective (f 9 mm, NA `na`, immersion n = 1.33)
+/// focused 1 mm deep into a matched layer, the detector at the focus.
+fn focus_layout(source: &str, na: f64, fluorophore: &str) -> String {
+    format!(
+        "format = \"optobench/1\"\nkind = \"layout\"\nlayout = \"planar\"\n\n\
+         [[source]]\nid = \"laser\"\nat = -10\nwavelength_um = 0.8\npower_w = 1.0\n{source}\n\n\
+         [[element]]\nid = \"OBJ\"\nkind = \"objective\"\nat = 0\nfocal_length = 9.0\nna = {na}\n\
+         pupil_distance = 45.0\nworking_distance = 2.0\nimmersion = 1.33\n\n\
+         [[element]]\nid = \"S\"\nkind = \"sample\"\nat = 46\nabove = 1.33\n\
+         layers = [ {{ thickness = 5.0, material = 1.33 }} ]\n\n\
+         [[detector]]\nid = \"focus\"\nat = 47\nsize = [1, 1]\npixels = [10, 10]\n\n{fluorophore}"
+    )
+}
+
+const LAMBDA_MM: f64 = 0.8e-3;
+const INDEX: f64 = 1.33;
+
+/// The Gaussian beam's focus: 1/e² diameter 3 mm in a 9 mm objective (n sin θ ≈ 0.17 at
+/// 1/e²), paraxial; 84 rays across reach far enough for the volume integral.
+const GAUSSIAN: &str = "kind = \"gaussian\"\nwaist_diameter = 3.0";
+/// A uniform beam slightly overfilling an NA 0.5 pupil (9 mm across).
+const UNIFORM: &str = "kind = \"collimated\"\ndiameter = 9.4";
+
+fn volume(
+    source: &str,
+    na: f64,
+    samples: usize,
+    planes: usize,
+    across: usize,
+) -> optobench_analysis::Psf {
+    let scene = read(&focus_layout(source, na, "")).expect("read");
+    psf(
+        &scene,
+        0,
+        0,
+        &PsfSettings {
+            samples,
+            volume: Some((planes, across)),
+            ..Default::default()
+        },
+    )
+    .expect("a focus")
+}
+
+#[test]
+fn the_squared_focus_of_a_gaussian_beam_is_xu_and_webbs() {
+    let psf = volume(GAUSSIAN, 0.8, 84, 16, 24);
+    let v = psf.volume.as_ref().expect("volume");
+    let p = psf.power;
+    // Note 15: π n P² / λ, independent of the waist.
+    let expected = core::f64::consts::PI * INDEX * p * p / LAMBDA_MM;
+    assert!(
+        (v.squared / expected - 1.0).abs() < 0.01,
+        "{} {expected}",
+        v.squared
+    );
+    // The tails beyond the planes are a fair part, found in closed form.
+    assert!(v.tails > 0.05 * v.squared && v.tails < 0.4 * v.squared);
+    // Every plane carries the power (no loss in the matched layer).
+    for plane in &v.planes {
+        assert!((plane.1 / p - 1.0).abs() < 0.01, "{plane:?}");
+    }
+    // I² is narrower than I.
+    let (wx, wz) = (psf.fwhm.0.expect("x"), psf.fwhm.2.expect("z"));
+    let (sx, sz) = (
+        psf.fwhm_squared.0.expect("x"),
+        psf.fwhm_squared.2.expect("z"),
+    );
+    assert!(sx < wx && sz < wz);
+}
+
+#[test]
+fn the_squared_focus_of_a_filled_pupil_is_xu_and_webbs() {
+    let focus = volume(UNIFORM, 0.5, 64, 24, 28);
+    let v = focus.volume.as_ref().expect("volume");
+    let p = focus.power;
+    // Relations (9) and (10): 8 n P² / (π λ), to their stated 3 %; NA 0.5 in n = 1.33
+    // (sin θ = 0.38) is within their paraxial range.
+    let expected = 8.0 * INDEX * p * p / (core::f64::consts::PI * LAMBDA_MM);
+    assert!(
+        (v.squared / expected - 1.0).abs() < 0.03,
+        "{} {expected}",
+        v.squared
+    );
+    let middle = v.planes[v.planes.len() / 2];
+    assert!((middle.1 / p - 1.0).abs() < 0.01, "{middle:?}");
+    // Too few rays for the depth are refused, not integrated wrongly.
+    let scene = read(&focus_layout(GAUSSIAN, 0.8, "")).expect("read");
+    let error = psf(
+        &scene,
+        0,
+        0,
+        &PsfSettings {
+            samples: 40,
+            volume: Some((8, 8)),
+            ..Default::default()
+        },
+    )
+    .expect_err("too few rays");
+    assert!(error.contains("raise `samples`"), "{error}");
+}
+
+/// A dye with σ₁ and σ₂ at 0.8 µm, in the focus layer.
+const FOCUS_DYE: &str = "[[fluorophore]]\nid = \"dye\"\nsource = \"test values\"\n\
+    quantum_yield = 0.8\nlifetime_ns = 4.0\none_photon_cross_section_cm2 = 1e-17\n\
+    two_photon_cross_section_gm = 40.0\n\
+    concentrations = [ { sample = \"S\", layer = 1, micromolar = 10.0 } ]\n";
+
+#[test]
+fn excitation_at_a_pulsed_gaussian_focus_follows_the_closed_forms() {
+    let pulse = "pulse = { repetition_rate_mhz = 80, width_fs = 100, shape = \"sech2\" }";
+    let scene = read(&focus_layout(
+        &format!("{GAUSSIAN}\n{pulse}"),
+        0.8,
+        FOCUS_DYE,
+    ))
+    .expect("read");
+    let settings = ExcitationSettings {
+        samples: 84,
+        volume: (16, 24),
+        ..Default::default()
+    };
+    let e = excitation(&scene, 0, 0, 0, &settings).expect("excitation");
+    assert_eq!(e.place, Some(("S".into(), "layer 1".into())));
+    assert!((e.molar.expect("there") - 1e-5).abs() < 1e-18);
+    assert!((e.transmission - 1.0).abs() < 1e-12);
+    // Constant indices: no dispersion, the pulse arrives as it left.
+    let Timing::Pulsed { width, .. } = e.timing else {
+        panic!("pulsed")
+    };
+    assert!((width - 100e-15).abs() < 1e-27);
+    let energy = photon_energy(0.8);
+    let molecules = 1e-5 * 6.022_140_76e23 * 1e-6; // per mm³
+    let g = pulse_factor(optobench_scene::PulseShape::SechSquared) / (80e6 * 100e-15);
+    // One photon: σ₁ I / (h ν) at the peak; per depth σ₁ C P / (h ν).
+    let one = e.one_photon.as_ref().expect("σ₁");
+    let sigma1 = 1e-17 * 100.0; // mm²
+    assert!((one.peak_rate - sigma1 * e.peak_irradiance / energy).abs() < 1e-12 * one.peak_rate);
+    assert!(
+        (one.saturation.expect("lifetime") - one.peak_rate * 4e-9).abs() < 1e-12 * one.peak_rate
+    );
+    let per_depth = one.per_depth.expect("concentration");
+    assert!((per_depth - sigma1 * molecules * e.pupil_power / energy).abs() < 1e-9 * per_depth);
+    // Two photons: the total against Xu and Webb's Gaussian closed form with g.
+    let two = e.two_photon.as_ref().expect("σ₂");
+    let sigma2 = 40.0 * 1e-48;
+    let p = e.pupil_power;
+    let closed = 0.5 * sigma2 * molecules * g * core::f64::consts::PI * INDEX * p * p
+        / (LAMBDA_MM * energy * energy);
+    let total = two.total.expect("concentration");
+    assert!((total / closed - 1.0).abs() < 0.01, "{total} {closed}");
+    assert!((two.per_pulse.expect("pulsed") - two.peak_rate / 80e6).abs() < 1e-12 * two.peak_rate);
+    assert!((e.emitted.expect("emitted") - 0.8 * total).abs() < 1e-9 * total);
+}
+
+#[test]
+fn a_turbid_layer_attenuates_the_focus_ballistically() {
+    let turbid = focus_layout(GAUSSIAN, 0.8, "").replace(
+        "layers = [ { thickness = 5.0, material = 1.33 } ]",
+        "layers = [ { thickness = 5.0, material = 1.33, absorption = 0.1, scattering = 2.0, \
+         anisotropy = 0.9, source = \"test values\" } ]",
+    );
+    let clear = read(&focus_layout(GAUSSIAN, 0.8, "")).expect("read");
+    let turbid = read(&turbid).expect("read");
+    let settings = PsfSettings {
+        samples: 48,
+        attenuated: true,
+        ..Default::default()
+    };
+    let a = psf(&clear, 0, 0, &settings).expect("clear");
+    let b = psf(&turbid, 0, 0, &settings).expect("turbid");
+    // 1 mm of µa + µs = 2.1 /mm, each ray along its own slant: between exp(−2.1) on the
+    // axis and exp(−2.1 / cos θ_max) at the edge.
+    let cos_max = (1.0 - (b.na / INDEX).powi(2)).sqrt();
+    assert!(b.transmission < (-2.1f64).exp() && b.transmission > (-2.1 / cos_max).exp());
+    // The peak falls by about the transmission (the weights barely vary at this NA).
+    let ratio = b.peak_intensity / a.peak_intensity;
+    assert!(
+        (ratio / b.transmission - 1.0).abs() < 0.01,
+        "{ratio} {}",
+        b.transmission
+    );
+    // Not attenuated, the focus is the clear one; the transmission is reported anyway.
+    let plain = psf(
+        &turbid,
+        0,
+        0,
+        &PsfSettings {
+            samples: 48,
+            ..Default::default()
+        },
+    )
+    .expect("plain");
+    assert!((plain.peak_intensity / a.peak_intensity - 1.0).abs() < 1e-9);
+    assert!((plain.transmission - b.transmission).abs() < 1e-12);
+}
+
+#[test]
+fn the_excitation_command_and_its_graphs() {
+    let directory =
+        std::env::temp_dir().join(format!("optobench-excitation-{}", std::process::id()));
+    std::fs::create_dir_all(&directory).expect("scratch");
+    let path = directory.join("focus.optobench");
+    let pulse = "pulse = { repetition_rate_mhz = 80, width_fs = 120, shape = \"sech2\", prechirp_fs2 = 500 }";
+    std::fs::write(
+        &path,
+        focus_layout(&format!("{UNIFORM}\n{pulse}"), 0.5, FOCUS_DYE),
+    )
+    .expect("written");
+    let path = path.to_string_lossy().into_owned();
+    let run = |command: &str, parameters: Value| {
+        Registry::standard()
+            .run(command, &parameters)
+            .map_err(|e| e.message)
+    };
+    let small = json!({ "path": path, "samples": 64, "planes": 16, "across": 20 });
+    let report = run("excitation", small.clone()).expect("excitation");
+    assert_eq!(report["fluorophore"], "dye");
+    assert_eq!(report["part"], "layer 1");
+    assert!(report["two_photon"]["total_per_s"].as_f64().expect("total") > 0.0);
+    // The prechirp alone widens the pulse (no glass on the way).
+    let width = report["timing"]["width_at_focus_fs"]
+        .as_f64()
+        .expect("width");
+    assert!((width - broadened_width(120e-15, 500e-30) * 1e15).abs() < 1e-9);
+    let emitted = report["emitted_photons_per_s"].as_f64().expect("emitted");
+    assert!(
+        (emitted - 0.8 * report["two_photon"]["total_per_s"].as_f64().expect("total")).abs()
+            < 1e-6 * emitted
+    );
+
+    for kind in ["excitation-depth", "excitation-map", "pulse-width"] {
+        let mut parameters = small.clone();
+        parameters["of"] = json!(kind);
+        let graph = run("graph", parameters).unwrap_or_else(|e| panic!("{kind}: {e}"));
+        assert!(graph["graph"].is_object() || graph.is_object(), "{kind}");
+    }
+    let refused = run("excitation", json!({ "path": path, "fluorophore": "none" }))
+        .expect_err("no such fluorophore");
+    assert!(refused.contains("no fluorophore `none`"), "{refused}");
+    let _ = std::fs::remove_dir_all(&directory);
 }

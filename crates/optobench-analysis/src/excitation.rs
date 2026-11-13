@@ -32,13 +32,24 @@
 //!   group-velocity dispersion of every medium crossed times its length
 //!   (`optobench_materials::dispersion`, from the same models the trace uses), and what
 //!   the maker states for an ideal objective, which has no glass of its own.
+//! - **The focus** ([`excitation`]): the vectorial PSF (M9c2) at the actual depth, each
+//!   plane wave attenuated by its ray's ballistic loss, gives the mean irradiance; the
+//!   rates follow at its peak. Two-photon excitation in the whole focus is
+//!   ½ σ₂ C g ∫ F² dV, the integral over the whole depth (`PsfSettings::volume`), so the
+//!   layer is taken as much thicker than the focus (Xu and Webb's thick-sample limit).
+//!   One-photon excitation spreads through the whole cone and is given per depth at the
+//!   focal plane; the diffuse light (M11a2) excites too, which is not counted here.
 
 use optobench_materials::dispersion::group_velocity_dispersion;
-use optobench_scene::{ElementKind, Owner, PulseShape, Scene};
+use optobench_scene::{ElementKind, Owner, PulseShape, Scene, SourceKind};
 use optobench_trace::Ray;
 use optobench_trace::nonsequential::{End, NO_MEDIUM};
 
 use crate::emission::{LIGHT_SPEED, PLANCK, owner_id};
+use crate::{Polarization, Psf, PsfSettings, psf};
+
+/// Avogadro's constant (1/mol), exact in the SI since 2019.
+const AVOGADRO: f64 = 6.022_140_76e23;
 
 /// The energy of one photon at vacuum wavelength `wavelength` (µm), in J.
 pub fn photon_energy(wavelength: f64) -> f64 {
@@ -218,6 +229,254 @@ pub fn pulse_path(scene: &Scene, source: usize) -> Result<PulsePath, String> {
         start: broadened_width(pulse.width, pulse.prechirp),
         steps,
         end,
+    })
+}
+
+/// How to compute the excitation of a focus.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ExcitationSettings {
+    /// Rays across the laser's beam (the PSF's samples).
+    pub samples: usize,
+    /// The pupil field's polarization.
+    pub polarization: Polarization,
+    /// Planes across the focus for the volume integral, and points across each.
+    pub volume: (usize, usize),
+    /// An x–z section of the excitation through the peak, (columns, rows).
+    pub section: Option<(usize, usize)>,
+}
+
+impl Default for ExcitationSettings {
+    fn default() -> Self {
+        Self {
+            samples: 96,
+            polarization: Polarization::X,
+            volume: (32, 32),
+            section: None,
+        }
+    }
+}
+
+/// One-photon excitation at a focus.
+#[derive(Debug, Clone, PartialEq)]
+pub struct OnePhoton {
+    /// σ₁ at the laser's wavelength (mm²).
+    pub cross_section: f64,
+    /// Excitations per second of one molecule at the peak.
+    pub peak_rate: f64,
+    /// The peak rate times the lifetime: well below 1 unsaturated; `None` without a
+    /// lifetime.
+    pub saturation: Option<f64>,
+    /// Excitations per second per mm of depth at the focal plane, σ₁ C P / (h ν) (P the
+    /// ballistic power there): one-photon excitation is not confined to the focus, so it
+    /// is given per depth.
+    pub per_depth: Option<f64>,
+}
+
+/// Two-photon excitation at a focus.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TwoPhoton {
+    /// σ₂ at the laser's wavelength (mm⁴ s).
+    pub cross_section: f64,
+    /// Excitations per second of one molecule at the peak.
+    pub peak_rate: f64,
+    /// The chance of excitation per pulse at the peak, the rate over the repetition rate;
+    /// `None` for continuous light.
+    pub per_pulse: Option<f64>,
+    /// Excitations per second in the whole focus, ½ σ₂ C g ∫ F² dV, the layer taken as
+    /// much thicker than the focus; `None` without a concentration.
+    pub total: Option<f64>,
+}
+
+/// The excitation of a fluorophore at a laser's focus (M11b).
+#[derive(Debug, Clone, PartialEq)]
+pub struct Excitation {
+    /// The laser's id.
+    pub source: String,
+    /// The detector at the focus.
+    pub detector: String,
+    /// The fluorophore's id.
+    pub fluorophore: String,
+    /// The laser's vacuum wavelength (µm).
+    pub wavelength: f64,
+    /// Where the focus is: (sample id, `layer k`), if in a sample.
+    pub place: Option<(String, String)>,
+    /// The fluorophore's concentration there (mol/L); `None` if it is not there.
+    pub molar: Option<f64>,
+    /// How the light varies in time at the focus (the pulse width after the path's
+    /// dispersion).
+    pub timing: Timing,
+    /// The pulse along the chief ray, for a pulsed laser.
+    pub pulse: Option<PulsePath>,
+    /// Mean power at the objective's pupil (W).
+    pub pupil_power: f64,
+    /// The ballistic transmission from the objective to the focus.
+    pub transmission: f64,
+    /// Mean irradiance at the peak (W/mm²), ballistic.
+    pub peak_irradiance: f64,
+    /// One-photon excitation; `None` without σ₁ at this wavelength.
+    pub one_photon: Option<OnePhoton>,
+    /// Two-photon excitation; `None` without σ₂ at this wavelength.
+    pub two_photon: Option<TwoPhoton>,
+    /// Photons emitted per second (excitations times the quantum yield): two-photon
+    /// excitations in the focus, else none.
+    pub emitted: Option<f64>,
+    /// What was left out and why.
+    pub notes: Vec<String>,
+    /// The focus (ballistic), with its volume integrals.
+    pub psf: Psf,
+}
+
+/// The fluorophore `fluorophore` (index into the scene's fluorophores) excited by laser
+/// `source` at its focus near detector `detector`: the vectorial PSF at the actual depth
+/// with every plane wave attenuated by its own ballistic loss, the pulse widened by the
+/// path's dispersion, and the rates, totals and saturation checks.
+pub fn excitation(
+    scene: &Scene,
+    source: usize,
+    detector: usize,
+    fluorophore: usize,
+    settings: &ExcitationSettings,
+) -> Result<Excitation, String> {
+    let src = scene.sources.get(source).ok_or("no such source")?;
+    let dye = scene
+        .fluorophores
+        .get(fluorophore)
+        .ok_or("no such fluorophore")?;
+    let det = scene.detectors.get(detector).ok_or("no such detector")?;
+    if !matches!(
+        src.kind,
+        SourceKind::Collimated { .. } | SourceKind::Gaussian { .. }
+    ) {
+        return Err(format!(
+            "source `{}`: excitation needs a laser beam, a collimated or Gaussian source",
+            src.id
+        ));
+    }
+    let psf = psf(
+        scene,
+        source,
+        detector,
+        &PsfSettings {
+            samples: settings.samples,
+            polarization: settings.polarization,
+            section: settings.section,
+            attenuated: true,
+            volume: Some(settings.volume),
+            ..Default::default()
+        },
+    )?;
+    let mut notes = Vec::new();
+
+    // Where the focus is: the medium the chief ray reaches the detector in.
+    let built = scene.build().map_err(|e| e.to_string())?;
+    let [_, _, axis] = src.frame.axes();
+    let chief = built.system.trace(
+        Ray::new(src.frame.origin(), axis, src.wavelength, src.power)
+            .ok_or("a source axis of zero length")?,
+    );
+    let place = chief.media.last().and_then(|&m| {
+        built
+            .sample_media
+            .iter()
+            .find(|(_, _, medium)| *medium == m)
+            .map(|(element, part, _)| (scene.elements[*element].id.clone(), part.clone()))
+    });
+    let molar = place.as_ref().and_then(|(sample, part)| {
+        dye.concentrations
+            .iter()
+            .find(|c| &c.sample == sample && *part == format!("layer {}", c.layer))
+            .map(|c| c.molar)
+    });
+    match (&place, molar) {
+        (None, _) => notes.push(format!(
+            "the focus at `{}` is not in a sample layer: rates per molecule only",
+            det.id
+        )),
+        (Some((sample, part)), None) => notes.push(format!(
+            "`{}` is not in `{sample}` {part}, where the focus is: rates per molecule only",
+            dye.id
+        )),
+        _ => {}
+    }
+    let molecules = molar.map(|m| m * AVOGADRO * 1e-6); // per mm³
+
+    let pulse = match src.pulse {
+        Some(_) => Some(pulse_path(scene, source)?),
+        None => None,
+    };
+    let timing = match (src.pulse, &pulse) {
+        (Some(p), Some(path)) => Timing::Pulsed {
+            repetition_rate: p.repetition_rate,
+            width: path.steps.last().map_or(path.start, |s| s.width),
+            shape: p.shape,
+        },
+        _ => Timing::Continuous,
+    };
+    let wavelength = src.wavelength;
+    let energy = photon_energy(wavelength);
+    let peak_irradiance = psf.peak_intensity;
+    let focal_power = psf.power * psf.transmission;
+
+    let at =
+        |spectrum: &Option<optobench_materials::Spectrum>, what: &str, notes: &mut Vec<String>| {
+            match spectrum {
+                None => None,
+                Some(s) => match s.at(wavelength) {
+                    Ok(v) => Some(v),
+                    Err(e) => {
+                        notes.push(format!("no {what} cross-section at {wavelength} µm: {e}"));
+                        None
+                    }
+                },
+            }
+        };
+    let one_photon = at(&dye.one_photon, "one-photon", &mut notes).map(|sigma| {
+        let peak_rate = one_photon_rate(sigma, peak_irradiance, wavelength);
+        OnePhoton {
+            cross_section: sigma,
+            peak_rate,
+            saturation: dye.lifetime.map(|t| peak_rate * t),
+            per_depth: molecules.map(|c| sigma * c * focal_power / energy),
+        }
+    });
+    let two_photon = at(&dye.two_photon, "two-photon", &mut notes).map(|sigma| {
+        let peak_rate = two_photon_rate(sigma, peak_irradiance, wavelength, timing);
+        let squared = psf.volume.as_ref().map_or(0.0, |v| v.squared);
+        TwoPhoton {
+            cross_section: sigma,
+            peak_rate,
+            per_pulse: match timing {
+                Timing::Pulsed {
+                    repetition_rate, ..
+                } => Some(peak_rate / repetition_rate),
+                Timing::Continuous => None,
+            },
+            total: molecules.map(|c| {
+                0.5 * sigma * c * timing.squared_mean_ratio() * squared / (energy * energy)
+            }),
+        }
+    });
+    let emitted = two_photon
+        .as_ref()
+        .and_then(|t| t.total)
+        .map(|total| total * dye.quantum_yield);
+    Ok(Excitation {
+        source: src.id.clone(),
+        detector: det.id.clone(),
+        fluorophore: dye.id.clone(),
+        wavelength,
+        place,
+        molar,
+        timing,
+        pulse,
+        pupil_power: psf.power,
+        transmission: psf.transmission,
+        peak_irradiance,
+        one_photon,
+        two_photon,
+        emitted,
+        notes,
+        psf,
     })
 }
 

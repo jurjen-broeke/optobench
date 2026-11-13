@@ -582,6 +582,17 @@ pub fn draw(painter: &Painter, rect: Rect, id: &str, enabled: bool) {
             }
             c.line(&[pos2(32.0, 2.0), pos2(32.0, 30.0)], ACTION, r.beam);
         }
+        "excitation" => {
+            // A cone converging into a sample, a bright spot at its tip.
+            c.line(&[pos2(6.0, 28.0), pos2(58.0, 28.0)], 1.8, r.a3);
+            let tip = pos2(32.0, 44.0);
+            c.line(&[pos2(12.0, 6.0), tip], ACTION, r.beam);
+            c.line(&[pos2(52.0, 6.0), tip], ACTION, r.beam);
+            for radius in [3.0, 7.0] {
+                let arc = c.arc(tip, radius, 0.0, 360.0);
+                c.line(&arc, if radius < 5.0 { ACTION } else { 1.8 }, r.beam);
+            }
+        }
         "emission" => {
             // A point in the sample glowing back up into a cone towards the objective.
             c.line(&[pos2(6.0, 40.0), pos2(58.0, 40.0)], 1.8, r.a3);
@@ -840,6 +851,7 @@ pub const ALL: &[&str] = &[
     "psf",
     "field",
     "fluence",
+    "excitation",
     "emission",
     "graph",
     "sweep",

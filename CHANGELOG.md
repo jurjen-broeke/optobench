@@ -5,6 +5,14 @@ with the release that introduced them.
 
 ## Unreleased
 
+- M11b2 the excitation volume: new command `excitation` gives a fluorophore's one- and
+  two-photon excitation at a laser's focus (rates per molecule at the peak, saturation
+  and per-pulse checks, two-photon excitations in the focus and photons emitted,
+  one-photon excitations per depth, the pulse width at the focus). New graph kinds
+  `excitation-depth`, `excitation-map` and `pulse-width`. The PSF can attenuate each
+  plane wave by its ray's ballistic loss (`attenuated`), reports that transmission and
+  the widths of I², and integrates I and I² over planes and the whole depth (`volume`);
+  checked against Xu and Webb's (1996) thick-sample closed forms.
 - M11b1 fluorophores, lasers and excitation rates: layouts and sidecars take
   `[[fluorophore]]` entries (quantum yield, lifetime, extinction coefficient with a
   relative excitation spectrum or a one-photon cross-section, two-photon cross-section

@@ -36,6 +36,9 @@ const KINDS: &[&str] = &[
     "field-difference",
     "fluence-depth",
     "absorption",
+    "excitation-depth",
+    "excitation-map",
+    "pulse-width",
 ];
 
 /// The parameters of `of = "sweep"` and `of = "optimize"`, passed on to those commands.
@@ -359,6 +362,45 @@ fn of_design(parameters: &Parameters, kind: &str) -> Result<Graph, CommandError>
             graphs::fluence_depth(&light)
         });
     }
+    if matches!(kind, "excitation-depth" | "excitation-map") {
+        let section = (kind == "excitation-map").then_some((121, 161));
+        let e = crate::excitation::compute(parameters, section)?;
+        let graph = if kind == "excitation-map" {
+            graphs::excitation_map(&e)
+        } else {
+            graphs::excitation_depth(&e)
+        };
+        return graph.ok_or_else(|| {
+            failed(format!(
+                "`{}` has no cross-section at {} µm{}",
+                e.fluorophore,
+                e.wavelength,
+                if kind == "excitation-depth" && e.molar.is_none() {
+                    ", or is not where the focus is"
+                } else {
+                    ""
+                }
+            ))
+        });
+    }
+    if kind == "pulse-width" {
+        let (scene, path) = moved_scene(parameters)?;
+        let source = match text(parameters, "source")? {
+            Some(id) => scene
+                .sources
+                .iter()
+                .position(|s| s.id == id)
+                .ok_or_else(|| invalid(format!("no source `{id}`")))?,
+            None => scene
+                .sources
+                .iter()
+                .position(|s| s.pulse.is_some())
+                .ok_or_else(|| invalid(format!("{path}: the design has no pulsed source")))?,
+        };
+        let pulse = optobench_analysis::excitation::pulse_path(&scene, source)
+            .map_err(|e| failed(format!("{path}: {e}")))?;
+        return Ok(graphs::pulse_width(&pulse));
+    }
     if kind == "optimize" {
         let mut keys = base.to_vec();
         keys.extend_from_slice(OPTIMIZE_KEYS);
@@ -478,6 +520,9 @@ pub(crate) fn graph(parameters: &Parameters) -> Result<Value, CommandError> {
     keys.extend_from_slice(OPTIMIZE_KEYS);
     keys.extend_from_slice(crate::field::FIELD_KEYS);
     keys.extend_from_slice(crate::fluence::LIGHT_KEYS);
+    keys.extend_from_slice(crate::excitation::EXCITATION_KEYS);
+    keys.sort_unstable();
+    keys.dedup();
     check_keys(parameters, &keys)?;
     let mut graph = match (text(parameters, "saved")?, text(parameters, "of")?) {
         (Some(from), None) => {

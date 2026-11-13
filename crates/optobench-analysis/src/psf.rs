@@ -31,14 +31,31 @@
 //!   objective sets the path so that design rays meet at the design focus in phase, so a
 //!   mismatch of the layers appears as the traced path difference.
 //!
-//! Bulk absorption after the objective is left out (it is near uniform over the pupil in
-//! thin layers); losses before the pupil are in P.
+//! Losses before the pupil are in P. Bulk losses after the objective (absorption and
+//! scattering out of the direct beam, µa + µs, in turbid layers) are left out unless
+//! [`PsfSettings::attenuated`] is set: then each plane wave carries the ballistic
+//! transmission exp(−Σ (µa + µs) L) of its own ray from the objective's front plane to the
+//! detector, so the focus is the focus of the light that is still unscattered (M11b).
+//! [`Psf::transmission`] gives that transmission averaged over the pupil power either way.
+//!
+//! **Volume integrals** ([`PsfSettings::volume`], M11b): ∫ I dA and ∫ I² dA over planes
+//! across the focus line, and ∫ I² dV over the whole depth, as two-photon excitation in a
+//! sample much thicker than the focus needs (C. Xu and W. W. Webb, J. Opt. Soc. Am. B 13,
+//! 481 (1996), Eq. (5)). The planes are spaced as z = z_peak + a tan t, t evenly spaced,
+//! a the half axial FWHM, so they are dense at the focus and sparse far from it; each is
+//! sampled on a square grid that widens with the cone, |z − z_peak| tan θ_max. The sum of
+//! discrete plane waves repeats across a plane with period λ₀ / Δp (Δp their spacing in
+//! n sin θ), so the planes stop where the cone fills a third of that period, and at least
+//! three half axial widths are needed. Beyond them ∫ I² dA is taken as K / (z² + b²)
+//! (z from the peak) through the two outermost planes on each side, which is exact for a
+//! Gaussian focus and tends to the geometric cone's K / z² far out, and the tails are
+//! added in closed form.
 
 use optobench_math::{Complex, Vec3};
 use optobench_scene::{Scene, SourceKind};
 use optobench_trace::Ray;
 use optobench_trace::fresnel_amplitudes;
-use optobench_trace::nonsequential::{End, RayRecord, Role};
+use optobench_trace::nonsequential::{End, NO_MEDIUM, RayRecord, Role};
 
 /// The polarization of the field at the objective's pupil, in the objective's own frame.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -72,6 +89,10 @@ pub struct PsfSettings {
     /// An x–z section through the peak, (columns, rows): across the lateral half-width
     /// along the detector's x, and over the axial scan along the focus line.
     pub section: Option<(usize, usize)>,
+    /// Each plane wave attenuated by its ray's ballistic transmission after the objective.
+    pub attenuated: bool,
+    /// Volume integrals over (planes, points across each plane); see the module notes.
+    pub volume: Option<(usize, usize)>,
 }
 
 impl Default for PsfSettings {
@@ -83,8 +104,23 @@ impl Default for PsfSettings {
             lateral: None,
             points: None,
             section: None,
+            attenuated: false,
+            volume: None,
         }
     }
+}
+
+/// Integrals of the focus over planes and over the whole depth (detector frame).
+#[derive(Debug, Clone, PartialEq)]
+pub struct Volume {
+    /// Per plane: (z (mm), ∫ I dA (W), ∫ I² dA (W²/mm²)), I = n |E|².
+    pub planes: Vec<(f64, f64, f64)>,
+    /// ∫ I² dV over the whole depth (W²/mm), the tails included.
+    pub squared: f64,
+    /// Of that, the geometric tails beyond the outermost planes.
+    pub tails: f64,
+    /// The planes reach this far from the peak on either side (mm).
+    pub reach: f64,
 }
 
 /// A sampled profile: (position, n |E|²) pairs.
@@ -151,6 +187,11 @@ pub struct Psf {
     /// Full widths at half maximum through the peak: along the detector's x and y, and
     /// along the focus line (mm); `None` where the profile does not fall to half.
     pub fwhm: (Option<f64>, Option<f64>, Option<f64>),
+    /// The same for I², the two-photon excitation: where I falls to 1/√2 of its peak.
+    pub fwhm_squared: (Option<f64>, Option<f64>, Option<f64>),
+    /// The ballistic transmission after the objective, averaged over the pupil power
+    /// (1 where nothing absorbs or scatters).
+    pub transmission: f64,
     /// The focus line: through the rays' power-weighted centre on the detector plane,
     /// along their mean direction (unit, detector frame).
     pub line: (Vec3, Vec3),
@@ -166,6 +207,8 @@ pub struct Psf {
     pub section: Option<Section>,
     /// The wavefront error over the beam, referred to the peak.
     pub wavefront: PupilWavefront,
+    /// Volume integrals, if asked for.
+    pub volume: Option<Volume>,
 }
 
 /// A complex 3-vector.
@@ -502,6 +545,7 @@ pub fn psf(
     let mut cells: Vec<(usize, usize)> = Vec::with_capacity(arrived.len());
     let mut index: Option<f64> = None;
     let mut power = 0.0;
+    let mut transmitted = 0.0;
     for (r, area) in arrived.iter().zip(&areas) {
         let record = &r.record;
         let k = r.pupil_hit;
@@ -536,11 +580,30 @@ pub fn psf(
         if cos1 <= 0.0 {
             continue;
         }
-        let amplitude = (p_pupil / (wavelength * wavelength * n1 * cos1 * d2p)).sqrt();
+        // Ballistic transmission from the front plane to the detector.
+        let last = record.points.len() - 2; // the segment that ends on the detector
+        let mut extinction = 0.0;
+        for m in (k + 2)..=last {
+            let medium = record.media.get(m).copied().unwrap_or(NO_MEDIUM);
+            if medium == NO_MEDIUM {
+                continue;
+            }
+            let material = built.system.media[medium].material();
+            let (Ok(a), Ok(b)) = (
+                material.absorption_coefficient(src.wavelength),
+                material.scattering_coefficient(src.wavelength),
+            ) else {
+                continue;
+            };
+            extinction += (a + b) * (record.points[m + 1] - record.points[m]).length();
+        }
+        let kept = (-extinction).exp();
+        transmitted += p_pupil * kept;
+        let carried = if settings.attenuated { kept } else { 1.0 };
+        let amplitude = (p_pupil * carried / (wavelength * wavelength * n1 * cos1 * d2p)).sqrt();
         let mut e = add(along(meridional, e_radial), along(azimuthal, e_azimuthal));
         e = scale(e, Complex::real(amplitude));
         // Every face after the objective.
-        let last = record.points.len() - 2; // the segment that ends on the detector
         let (mut d, mut n_here) = (d1, n1);
         for m in (k + 3)..=last {
             let Some((d_next, n_next)) = segment(record, m) else {
@@ -651,19 +714,23 @@ pub fn psf(
 
     // Widths through the peak, found on the field itself.
     let lateral_scale = wavelength / na;
-    let width = |direction: Vec3, scale: f64| -> Option<f64> {
+    let width = |direction: Vec3, scale: f64, fraction: f64| -> Option<f64> {
         let f = |t: f64| intensity(&waves, index, peak + direction * t);
-        let level = peak_intensity / 2.0;
+        let level = peak_intensity * fraction;
         let step = scale / 16.0;
         let right = falls_to(&f, level, 0.0, step, 400)?;
         let left = falls_to(&f, level, 0.0, -step, 400)?;
         Some(right - left)
     };
-    let fwhm = (
-        width(Vec3::X, lateral_scale),
-        width(Vec3::Y, lateral_scale),
-        width(mean, fringe).map(|w| w * mean.z.abs()),
-    );
+    let widths = |fraction: f64| {
+        (
+            width(Vec3::X, lateral_scale, fraction),
+            width(Vec3::Y, lateral_scale, fraction),
+            width(mean, fringe, fraction).map(|w| w * mean.z.abs()),
+        )
+    };
+    let fwhm = widths(0.5);
+    let fwhm_squared = widths(core::f64::consts::FRAC_1_SQRT_2);
     let half_width = settings.lateral.unwrap_or(2.5 * lateral_scale);
     let lateral_points = 81;
     let profile = |direction: Vec3| -> Vec<(f64, f64)> {
@@ -721,6 +788,28 @@ pub fn psf(
         peak_to_valley: greatest - least,
     };
 
+    let volume = match settings.volume {
+        None => None,
+        Some((planes, across)) => {
+            let spacing = typical.sqrt() / f; // Δp between neighbouring plane waves
+            let half_axial = fwhm.2.unwrap_or(fringe) / 2.0;
+            Some(volume_integrals(
+                &waves,
+                index,
+                &VolumeGrid {
+                    peak,
+                    line: mean,
+                    half_axial,
+                    near: settings.lateral.unwrap_or(2.5 * lateral_scale),
+                    cone: na / (index * index - na * na).max(1e-12).sqrt(),
+                    period: wavelength / spacing,
+                    planes: planes.max(4),
+                    across: across.max(4),
+                },
+            )?)
+        }
+    };
+
     // The same pupil field in phase.
     let in_phase = waves
         .iter()
@@ -743,11 +832,139 @@ pub fn psf(
         peak_intensity,
         strehl,
         fwhm,
+        fwhm_squared,
+        transmission: if power > 0.0 {
+            transmitted / power
+        } else {
+            1.0
+        },
         line: (centre, mean),
         axial,
         lateral,
         crossings: (low, high),
         section,
         wavefront,
+        volume,
+    })
+}
+
+/// Where and how finely to integrate a focus.
+struct VolumeGrid {
+    peak: Vec3,
+    /// The focus line's direction (unit, detector frame).
+    line: Vec3,
+    /// Half the axial FWHM (mm): the scale of the plane spacing.
+    half_axial: f64,
+    /// The half-width of a plane at the peak (mm).
+    near: f64,
+    /// tan θ_max of the cone.
+    cone: f64,
+    /// The period λ₀ / Δp of the discrete plane-wave sum (mm).
+    period: f64,
+    planes: usize,
+    across: usize,
+}
+
+/// ∫ I dA and ∫ I² dA over planes z = const across the focus line, and ∫ I² dV with the
+/// geometric tails (see the module notes).
+fn volume_integrals(waves: &[Wave], index: f64, grid: &VolumeGrid) -> Result<Volume, String> {
+    let a = grid.half_axial.max(1e-12);
+    // The cone may fill a third of the period at the outermost planes.
+    let reach = (grid.period / 3.0 - grid.near).max(0.0) / (2.0 * grid.cone.max(1e-12));
+    if reach < 3.0 * a {
+        return Err(format!(
+            "too few rays for the volume integral: the plane-wave sum repeats every {:.3} µm, \
+             which limits the depth to ±{:.3} µm, less than 3 half axial widths ({:.3} µm); \
+             raise `samples`",
+            grid.period * 1e3,
+            reach * 1e3,
+            3.0 * a * 1e3
+        ));
+    }
+    let t_max = (reach / a).atan();
+    let dt = 2.0 * t_max / grid.planes as f64;
+    let along = |dz: f64| grid.peak + grid.line * (dz / grid.line.z);
+    let mut planes = Vec::with_capacity(grid.planes);
+    let mut squared = 0.0;
+    let n = grid.across;
+    let mut row = vec![[Complex::ZERO; 3]; n * n];
+    for p in 0..grid.planes {
+        let t = -t_max + (p as f64 + 0.5) * dt;
+        let dz = a * t.tan();
+        let centre = along(dz);
+        let half = grid.near + dz.abs() * grid.cone;
+        let h = 2.0 * half / n as f64;
+        let x0 = centre.x - half + 0.5 * h;
+        let y0 = centre.y - half + 0.5 * h;
+        for e in row.iter_mut() {
+            *e = [Complex::ZERO; 3];
+        }
+        // E(x_i, y_j) = Σ_w A_w exp(i (φ_w + k_z z)) exp(i k_x x_i) exp(i k_y y_j).
+        let mut along_x = vec![Complex::ZERO; n];
+        for w in waves {
+            let (s0, c0) = (w.phase + w.k.x * x0 + w.k.y * y0 + w.k.z * centre.z).sin_cos();
+            let start = Complex::new(c0, s0);
+            let (sx, cx) = (w.k.x * h).sin_cos();
+            let (sy, cy) = (w.k.y * h).sin_cos();
+            let (step_x, step_y) = (Complex::new(cx, sx), Complex::new(cy, sy));
+            let mut f = Complex::ONE;
+            for value in along_x.iter_mut() {
+                *value = f;
+                f = f * step_x;
+            }
+            let mut g = start;
+            for j in 0..n {
+                let base = scale(w.amplitude, g);
+                let cells = &mut row[j * n..(j + 1) * n];
+                for (cell, &fx) in cells.iter_mut().zip(&along_x) {
+                    cell[0] = cell[0] + base[0] * fx;
+                    cell[1] = cell[1] + base[1] * fx;
+                    cell[2] = cell[2] + base[2] * fx;
+                }
+                g = g * step_y;
+            }
+        }
+        let (mut first, mut second) = (0.0, 0.0);
+        for e in &row {
+            let i = index * (e[0].norm_squared() + e[1].norm_squared() + e[2].norm_squared());
+            first += i;
+            second += i * i;
+        }
+        let area = h * h;
+        let (first, second) = (first * area, second * area);
+        // dz = a sec²t dt, measured along the detector's z.
+        squared += second * a / (t.cos() * t.cos()) * dt;
+        planes.push((centre.z, first, second));
+    }
+    // The tails beyond the outermost planes: Q(z) = K / (z² + b²) through the two
+    // outermost planes on each side (exact for a Gaussian focus, and K / z² far out);
+    // ∫_Z^∞ K / (z² + b²) dz = (K / b) (π/2 − atan(Z / b)), or K / Z if b² comes out ≤ 0.
+    let tail = |outer: &(f64, f64, f64), inner: &(f64, f64, f64)| {
+        let (z1, z2) = ((outer.0 - grid.peak.z).abs(), (inner.0 - grid.peak.z).abs());
+        let (q1, q2) = (outer.2, inner.2);
+        let b2 = if q1 > q2 || q1 <= 0.0 || q2 <= 0.0 {
+            -1.0
+        } else {
+            (q1 * z1 * z1 - q2 * z2 * z2) / (q2 - q1)
+        };
+        if b2 > 0.0 {
+            let b = b2.sqrt();
+            let k = q1 * (z1 * z1 + b2);
+            k / b * (core::f64::consts::FRAC_PI_2 - (reach / b).atan())
+        } else {
+            q1 * z1 * z1 / reach
+        }
+    };
+    let count = planes.len();
+    let tails = if count >= 4 {
+        tail(&planes[0], &planes[1]) + tail(&planes[count - 1], &planes[count - 2])
+    } else {
+        0.0
+    };
+    Ok(Volume {
+        planes,
+        squared: squared + tails,
+        tails,
+        reach,
     })
 }

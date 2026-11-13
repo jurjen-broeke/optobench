@@ -18,6 +18,7 @@
 mod edit;
 mod embed;
 mod emission;
+mod excitation;
 mod field;
 mod fluence;
 mod graph;
@@ -280,6 +281,14 @@ const STANDARD: &[Command] = &[
         effect: Effect::Read,
         summary: "the light in a sample: the direct beam and the diffuse light it scatters (diffusion approximation), absorbed power by layer and its density",
         handler: fluence::fluence,
+    },
+    Command {
+        id: "excitation",
+        label: "Excitation",
+        icon: "excitation",
+        effect: Effect::Read,
+        summary: "a fluorophore excited at a laser's focus: one- and two-photon rates, excitations and photons emitted, saturation, the pulse widened along the path",
+        handler: excitation::command,
     },
     Command {
         id: "emission",

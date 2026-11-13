@@ -33,6 +33,12 @@ pub enum Unit {
     PowerDensity,
     /// A plain number (a ratio, a count, a Strehl ratio).
     Number,
+    /// Time (s): pulse widths.
+    Time,
+    /// Events per second (1/s): excitation rates.
+    Rate,
+    /// Events per second per mm of depth (1/(s mm)).
+    RatePerLength,
 }
 
 impl Unit {
@@ -47,6 +53,9 @@ impl Unit {
             Unit::Wave => "wave",
             Unit::PowerDensity => "power-density",
             Unit::Number => "number",
+            Unit::Time => "time",
+            Unit::Rate => "rate",
+            Unit::RatePerLength => "rate-per-length",
         }
     }
 
@@ -61,6 +70,9 @@ impl Unit {
             Unit::Wave,
             Unit::PowerDensity,
             Unit::Number,
+            Unit::Time,
+            Unit::Rate,
+            Unit::RatePerLength,
         ]
         .into_iter()
         .find(|u| u.name() == name)
@@ -76,6 +88,9 @@ impl Unit {
             Unit::Wave => "waves",
             Unit::PowerDensity => "W/mm³",
             Unit::Number => "",
+            Unit::Time => "s",
+            Unit::Rate => "1/s",
+            Unit::RatePerLength => "1/(s mm)",
         }
     }
 }
@@ -195,12 +210,25 @@ impl Axis {
             Unit::Wave => ("waves", 1.0),
             Unit::PowerDensity => ("W/mm³", 1.0),
             Unit::Number => ("", 1.0),
+            Unit::Time => {
+                if size < 1e-12 {
+                    ("fs", 1e15)
+                } else if size < 1e-9 {
+                    ("ps", 1e12)
+                } else if size < 1e-6 {
+                    ("ns", 1e9)
+                } else {
+                    ("s", 1.0)
+                }
+            }
+            Unit::Rate => ("1/s", 1.0),
+            Unit::RatePerLength => ("1/(s mm)", 1.0),
         };
         let shown = size * factor;
         let exponent = if self.scale == Scale::Logarithmic
             || matches!(
                 self.unit,
-                Unit::Length | Unit::Angle | Unit::Phase | Unit::Wave
+                Unit::Length | Unit::Angle | Unit::Phase | Unit::Wave | Unit::Time
             )
             || shown == 0.0
             || !shown.is_finite()
@@ -705,6 +733,188 @@ pub fn psf_wavefront(psf: &Psf) -> Graph {
                 w.rms, w.peak_to_valley
             ),
             format!("Strehl ratio {:.4}", psf.strehl),
+        ],
+    }
+}
+
+/// Excitation against depth through a focus (M11b): per plane across the focus line,
+/// excitations per second per mm of depth, ∫ rate C dA, two-photon and one-photon
+/// (one-photon stays level through the cone; two-photon is confined to the focus).
+pub fn excitation_depth(excitation: &crate::excitation::Excitation) -> Option<Graph> {
+    let volume = excitation.psf.volume.as_ref()?;
+    let molecules = excitation.molar? * 6.022_140_76e23 * 1e-6;
+    let energy = crate::excitation::photon_energy(excitation.wavelength);
+    let mut series = Vec::new();
+    if let Some(two) = &excitation.two_photon {
+        let factor = 0.5 * two.cross_section * molecules * excitation.timing.squared_mean_ratio()
+            / (energy * energy);
+        series.push(Series {
+            label: "two-photon".into(),
+            points: volume.planes.iter().map(|p| (p.0, factor * p.2)).collect(),
+            mark: Mark::Line,
+            reference: false,
+        });
+    }
+    if let Some(one) = &excitation.one_photon {
+        let factor = one.cross_section * molecules / energy;
+        series.push(Series {
+            label: "one-photon".into(),
+            points: volume.planes.iter().map(|p| (p.0, factor * p.1)).collect(),
+            mark: Mark::Line,
+            reference: false,
+        });
+    }
+    if series.is_empty() {
+        return None;
+    }
+    let mut notes = excitation_notes(excitation);
+    notes.push(format!(
+        "planes to ±{:.4} µm from the peak; the two-photon total includes the tails beyond",
+        volume.reach * 1e3
+    ));
+    Some(Graph {
+        title: format!(
+            "Excitation of `{}` against depth through the focus",
+            excitation.fluorophore
+        ),
+        x: Axis::new("z", Unit::Length),
+        y: Axis {
+            label: "excitations per depth".into(),
+            unit: Unit::RatePerLength,
+            scale: Scale::Logarithmic,
+        },
+        plot: Plot::Series(series),
+        equal_aspect: false,
+        markers: Vec::new(),
+        notes,
+    })
+}
+
+fn excitation_notes(e: &crate::excitation::Excitation) -> Vec<String> {
+    let mut notes = vec![format!(
+        "peak {:.4e} W/mm² (ballistic transmission {:.4})",
+        e.peak_irradiance, e.transmission
+    )];
+    if let Some(two) = &e.two_photon {
+        notes.push(format!(
+            "two-photon peak rate {:.4e} /s per molecule",
+            two.peak_rate
+        ));
+        if let Some(total) = two.total {
+            notes.push(format!(
+                "two-photon excitations {total:.4e} /s in the focus"
+            ));
+        }
+    }
+    if let Some(one) = &e.one_photon {
+        notes.push(format!(
+            "one-photon peak rate {:.4e} /s per molecule",
+            one.peak_rate
+        ));
+    }
+    notes
+}
+
+/// The excitation rate per molecule on an x–z section through the focus (M11b): the
+/// two-photon rate if the fluorophore has σ₂ at the wavelength, else the one-photon rate.
+pub fn excitation_map(excitation: &crate::excitation::Excitation) -> Option<Graph> {
+    let section = excitation.psf.section.as_ref()?;
+    let wavelength = excitation.wavelength;
+    let (label, values): (&str, Vec<f64>) = match (&excitation.two_photon, &excitation.one_photon) {
+        (Some(two), _) => (
+            "two-photon rate",
+            section
+                .values
+                .iter()
+                .map(|&i| {
+                    crate::excitation::two_photon_rate(
+                        two.cross_section,
+                        i,
+                        wavelength,
+                        excitation.timing,
+                    )
+                })
+                .collect(),
+        ),
+        (None, Some(one)) => (
+            "one-photon rate",
+            section
+                .values
+                .iter()
+                .map(|&i| crate::excitation::one_photon_rate(one.cross_section, i, wavelength))
+                .collect(),
+        ),
+        (None, None) => return None,
+    };
+    Some(Graph {
+        title: format!(
+            "{} of `{}` per molecule through the focus (x–z)",
+            if label.starts_with("two") {
+                "Two-photon excitation"
+            } else {
+                "One-photon excitation"
+            },
+            excitation.fluorophore
+        ),
+        x: Axis::new("x", Unit::Length),
+        y: Axis::new("z", Unit::Length),
+        plot: Plot::Map(Map {
+            columns: section.columns,
+            rows: section.rows,
+            x: section.x,
+            y: section.z,
+            values,
+            value: Axis::new(label, Unit::Rate),
+            colours: ColourScale::Sequential,
+        }),
+        equal_aspect: false,
+        markers: Vec::new(),
+        notes: excitation_notes(excitation),
+    })
+}
+
+/// A pulse's width along its chief ray (M11b): after each step, against the distance
+/// travelled, the items marked.
+pub fn pulse_width(path: &crate::excitation::PulsePath) -> Graph {
+    let mut distance = 0.0;
+    let mut points = vec![(0.0, path.start)];
+    let mut markers = Vec::new();
+    for step in &path.steps {
+        distance += step.length;
+        points.push((distance, step.width));
+        if step.dispersion != 0.0 || step.from != step.to {
+            markers.push(Marker {
+                at: distance,
+                label: step.to.clone(),
+            });
+        }
+    }
+    markers.dedup_by(|a, b| a.label == b.label && (a.at - b.at).abs() < 1e-9);
+    let last = path.steps.last();
+    Graph {
+        title: format!("Pulse width of `{}` along its chief ray", path.source),
+        x: Axis::new("distance", Unit::Length),
+        y: Axis::new("pulse width (FWHM)", Unit::Time),
+        plot: Plot::Series(vec![Series {
+            label: "Gaussian pulse".into(),
+            points,
+            mark: Mark::Line,
+            reference: false,
+        }]),
+        equal_aspect: false,
+        markers,
+        notes: vec![
+            format!(
+                "{:.1} fs from the laser, prechirp {:.0} fs²",
+                path.width * 1e15,
+                path.prechirp * 1e30
+            ),
+            format!(
+                "{:.1} fs at the end ({}), group-delay dispersion {:.0} fs²",
+                last.map_or(path.start, |s| s.width) * 1e15,
+                path.end,
+                last.map_or(path.prechirp, |s| s.total) * 1e30
+            ),
         ],
     }
 }
