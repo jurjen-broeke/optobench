@@ -29,6 +29,7 @@ mod psf;
 mod pupil;
 pub mod sample;
 mod spot;
+pub mod thermal;
 mod wavefront;
 mod zernike;
 

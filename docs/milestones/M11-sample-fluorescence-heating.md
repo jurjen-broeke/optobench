@@ -232,25 +232,42 @@ emitter is spread through the excited volume, its photons those of the excitatio
 
 ## M11d Heating
 
+### M11d1 The thermal solver
+
+- [x] `optobench_analysis::thermal`: the rise ΔT by finite volumes on a graded grid of
+      rings about an axis (`graded`: fine steps near the source, growing by a fixed ratio
+      outwards, so a focus of µm and a domain of mm fit), k, ρc and Pennes perfusion
+      w = ρ_b c_b w_b per cell (layers of different k joined by half-cell resistances in
+      series); boundaries fixed, insulated or with a heat transfer coefficient (top,
+      bottom and side apart); steady state by conjugate gradients (shared with the
+      diffusion solver), time steps by Crank–Nicolson with a drive (on, off, a duty
+      cycle); heat absorbed, stored, conducted out per boundary and perfused, closing to
+      the solver's tolerance
+- [x] Checks: a spherical Gaussian source in an infinite medium, ΔT(0) =
+      P / ((2π)^{3/2} k σ) (1.5 %; the grid's held edge lowers it 0.6 %) and the profile
+      P erf(r / (√2 σ)) / (4π k r) as differences from the centre (1 %); the rise at the
+      centre in time, P / ((2π)^{3/2} k) (1/σ − 1/√(σ² + 2αt)) (1.5 %); a source under a
+      held surface against its image (2 %); Pennes, P e^{σ²/2L²} e^{−r/L} / (4π k r),
+      L = √(k / w) (2 %); energy conserved steady and in time (10⁻⁹); no steady state
+      refused when nothing takes the heat away. Water's k and ρc from Welch and van
+      Gemert (Valvano, Table 12.9; Diller, Table 10.2)
+
+### M11d2 Heating of a sample
+
 - [ ] The absorbed power density (M11a) as the heat source in the layer stack, with
       thermal conductivity, density and heat capacity per layer (water's from published
-      values with their source, e.g. the IAPWS releases; tissue's from the user);
-      boundaries at fixed temperature, insulated, or with a heat transfer coefficient
+      values with their source; tissue's from the user); boundaries at fixed temperature,
+      insulated, or with a heat transfer coefficient
 - [ ] Steady state and time-resolved temperature rise (a parked beam switched on and
-      off, a beam scanned over a field of view at a line rate), by a finite-volume solver
-      on a cylindrical grid about the axis, or a 3-D grid for scans
+      off; a beam scanned over a field of view: the absorbed density spread over the
+      field and weighted by the duty cycle, which holds while a frame is much shorter
+      than the time heat takes to cross the field, ~ field² / (4α), seconds for 1 mm in
+      water; the axially symmetric grid takes a square field as the disk of the same area)
 - [ ] Optional perfusion (Pennes bioheat: ρ_b c_b w_b (T − T_a)) for tissue in vivo
 - [ ] Reports: power at the sample surface and at the focal plane; peak and field-averaged
       temperature rise; warnings when the user's heating or saturation thresholds are
       passed
-- [ ] Graphs: temperature maps (r–z, x–z), temperature against time at chosen points
-- [ ] Checks: steady temperature rise of a Gaussian heat source in an infinite medium
-      against its analytic solution (the Green's function 1 / (4π κ r) integrated over
-      the source: ΔT(0) = P_abs / ((2π)^{3/2} κ σ) for a spherical Gaussian of width σ, and
-      the beam-shaped case along the axis); the time course at the centre against the
-      transient solution; a point source in a half-space at fixed surface temperature
-      against the image method; energy conserved by the solver (absorbed = conducted
-      out + stored, to its tolerance)
+- [ ] Graphs: temperature maps (r–z), temperature against time at chosen points
 
 ## Exit check
 

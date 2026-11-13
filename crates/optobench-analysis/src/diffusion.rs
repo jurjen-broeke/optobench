@@ -155,6 +155,58 @@ fn to_boundary(boundary: Boundary, d: f64, h: f64) -> f64 {
     }
 }
 
+/// Solves A x = b for a symmetric positive definite A (given by `apply`) by conjugate
+/// gradients with its diagonal as preconditioner, from `start`, to a relative residual of
+/// 10⁻¹². Returns x and the iterations taken.
+pub(crate) fn conjugate_gradients(
+    apply: &dyn Fn(&[f64], &mut [f64]),
+    diagonal: &[f64],
+    b: &[f64],
+    start: Vec<f64>,
+) -> (Vec<f64>, usize) {
+    let n = b.len();
+    let mut x = start;
+    let mut r = vec![0.0; n];
+    apply(&x, &mut r);
+    for k in 0..n {
+        r[k] = b[k] - r[k];
+    }
+    let mut z: Vec<f64> = r.iter().zip(diagonal).map(|(r, d)| r / d).collect();
+    let mut p = z.clone();
+    let mut rz: f64 = r.iter().zip(&z).map(|(a, b)| a * b).sum();
+    let norm = b.iter().map(|s| s * s).sum::<f64>().sqrt();
+    let mut ap = vec![0.0; n];
+    let mut iterations = 0;
+    if norm > 0.0 && r.iter().map(|v| v * v).sum::<f64>().sqrt() > 1e-12 * norm {
+        for _ in 0..20 * n.max(100) {
+            apply(&p, &mut ap);
+            let pap: f64 = p.iter().zip(&ap).map(|(a, b)| a * b).sum();
+            if pap <= 0.0 {
+                break;
+            }
+            let alpha = rz / pap;
+            for k in 0..n {
+                x[k] += alpha * p[k];
+                r[k] -= alpha * ap[k];
+            }
+            iterations += 1;
+            if r.iter().map(|v| v * v).sum::<f64>().sqrt() <= 1e-12 * norm {
+                break;
+            }
+            for k in 0..n {
+                z[k] = r[k] / diagonal[k];
+            }
+            let next: f64 = r.iter().zip(&z).map(|(a, b)| a * b).sum();
+            let beta = next / rz;
+            rz = next;
+            for k in 0..n {
+                p[k] = z[k] + beta * p[k];
+            }
+        }
+    }
+    (x, iterations)
+}
+
 impl Diffusion {
     /// A problem with µa and D per slice (the same in every ring), for layered media.
     pub fn layered(
@@ -268,43 +320,7 @@ impl Diffusion {
                 *o = v;
             }
         };
-        // Conjugate gradients with the diagonal as preconditioner.
-        let n = g.cells();
-        let mut x = vec![0.0; n];
-        let mut r: Vec<f64> = source.to_vec();
-        let mut z: Vec<f64> = r.iter().zip(&diagonal).map(|(r, d)| r / d).collect();
-        let mut p = z.clone();
-        let mut rz: f64 = r.iter().zip(&z).map(|(a, b)| a * b).sum();
-        let norm = source.iter().map(|s| s * s).sum::<f64>().sqrt();
-        let mut ap = vec![0.0; n];
-        let mut iterations = 0;
-        if norm > 0.0 {
-            for _ in 0..20 * n.max(100) {
-                apply(&p, &mut ap);
-                let pap: f64 = p.iter().zip(&ap).map(|(a, b)| a * b).sum();
-                if pap <= 0.0 {
-                    break;
-                }
-                let alpha = rz / pap;
-                for k in 0..n {
-                    x[k] += alpha * p[k];
-                    r[k] -= alpha * ap[k];
-                }
-                iterations += 1;
-                if r.iter().map(|v| v * v).sum::<f64>().sqrt() <= 1e-12 * norm {
-                    break;
-                }
-                for k in 0..n {
-                    z[k] = r[k] / diagonal[k];
-                }
-                let next: f64 = r.iter().zip(&z).map(|(a, b)| a * b).sum();
-                let beta = next / rz;
-                rz = next;
-                for k in 0..n {
-                    p[k] = z[k] + beta * p[k];
-                }
-            }
-        }
+        let (x, iterations) = conjugate_gradients(&apply, &diagonal, source, vec![0.0; g.cells()]);
         // Cell powers are W; fluence rate is power per cell over ... the unknown is Φ.
         let (mut absorbed, mut top, mut bottom, mut side) = (0.0, 0.0, 0.0, 0.0);
         for j in 0..g.slices {

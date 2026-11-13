@@ -5,6 +5,11 @@ with the release that introduced them.
 
 ## Unreleased
 
+- M11d1 the thermal solver: `optobench_analysis::thermal` gives the temperature rise from
+  an absorbed power density, steady or in time (Crank–Nicolson, with an on/off or duty
+  drive), with Pennes perfusion and fixed, insulated or heat-transfer boundaries, on a
+  graded grid of rings; checked against the Gaussian source, its time course, the image
+  method and the Pennes kernel.
 - M11c emitters through the excited volume: `emission` with `excited_by`, `focus` and
   `fluorophore` spreads the emitter over a grid around a laser's focus weighted by I²,
   its photons those of the two-photon excitation, and adds up the budgets. The PSF can
