@@ -276,6 +276,47 @@ pub struct Fluorophore {
     pub concentrations: Vec<Concentration>,
 }
 
+/// A boundary of a sample's thermal domain (M11d).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum HeatBoundary {
+    /// Held at the starting temperature.
+    Fixed,
+    /// No heat crosses it.
+    Insulated,
+    /// A heat transfer coefficient to a bath at the starting temperature (W mm⁻² K⁻¹).
+    Transfer(f64),
+}
+
+/// The thermal properties of one layer of a sample (M11d).
+#[derive(Debug, Clone, PartialEq)]
+pub struct ThermalProperties {
+    /// Thermal conductivity k (W mm⁻¹ K⁻¹).
+    pub conductivity: f64,
+    /// Volumetric heat capacity ρc (J mm⁻³ K⁻¹).
+    pub capacity: f64,
+    /// Perfusion ρ_b c_b w_b (W mm⁻³ K⁻¹); 0 without.
+    pub perfusion: f64,
+    /// Where the values come from.
+    pub source: String,
+}
+
+/// A sample's thermal description (M11d): per layer its properties, and the boundaries of
+/// the domain the layers make (the first face, the last and the side at the sample's
+/// radius).
+#[derive(Debug, Clone, PartialEq)]
+pub struct SampleThermal {
+    /// The sample element's id.
+    pub sample: String,
+    /// Per layer, in order; `None` where not given.
+    pub layers: Vec<Option<ThermalProperties>>,
+    /// At the first face.
+    pub top: HeatBoundary,
+    /// At the last face.
+    pub bottom: HeatBoundary,
+    /// At the side.
+    pub side: HeatBoundary,
+}
+
 /// How much of a fluorophore is in one layer of a sample.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Concentration {
@@ -414,6 +455,8 @@ pub struct Scene {
     pub dofs: Vec<dof::Dof>,
     /// Fluorophores in the samples (M11b).
     pub fluorophores: Vec<Fluorophore>,
+    /// The samples' thermal descriptions (M11d).
+    pub thermal: Vec<SampleThermal>,
 }
 
 /// Default splitting cutoff, as a fraction of the total source power.

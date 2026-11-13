@@ -582,6 +582,20 @@ pub fn draw(painter: &Painter, rect: Rect, id: &str, enabled: bool) {
             }
             c.line(&[pos2(32.0, 2.0), pos2(32.0, 30.0)], ACTION, r.beam);
         }
+        "heating" => {
+            // A slab warming under a beam: the beam, and rising heat lines.
+            c.line(&[pos2(6.0, 40.0), pos2(58.0, 40.0)], 1.8, r.a3);
+            c.line(&[pos2(32.0, 4.0), pos2(32.0, 48.0)], ACTION, r.beam);
+            for x in [18.0, 46.0] {
+                let wave: Vec<_> = (0..=12)
+                    .map(|k| {
+                        let y = 36.0 - 26.0 * k as f32 / 12.0;
+                        pos2(x + 3.0 * (k as f32 * 0.9).sin(), y)
+                    })
+                    .collect();
+                c.line(&wave, 1.8, r.beam);
+            }
+        }
         "import-fluorophore" => {
             // A molecule (a ring) glowing, and an arrow into the design.
             let centre = pos2(24.0, 26.0);
@@ -874,6 +888,7 @@ pub const ALL: &[&str] = &[
     "field",
     "fluence",
     "excitation",
+    "heating",
     "emission",
     "graph",
     "sweep",

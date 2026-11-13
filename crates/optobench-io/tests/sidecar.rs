@@ -81,6 +81,7 @@ fn step_lens_traces_like_the_same_lens_defined_inline() {
         split_cutoff: Some(optobench_scene::DEFAULT_SPLIT_CUTOFF),
         dofs: Vec::new(),
         fluorophores: Vec::new(),
+        thermal: Vec::new(),
     };
     let a = from_step.trace().expect("traces");
     let b = inline.trace().expect("traces");

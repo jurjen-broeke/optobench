@@ -138,7 +138,8 @@ pub fn sample_light(
         (Some(&a), Some(&b)) => (a, b),
         _ => (0, coefficients.len() - 1),
     };
-    if let Some(gap) = (first..=last).find(|k| coefficients[*k].3 <= 0.0) {
+    // With no turbid layer the grid spans every layer and there is no diffuse light.
+    if let Some(gap) = (first..=last).find(|k| !turbid.is_empty() && coefficients[*k].3 <= 0.0) {
         return Err(format!(
             "`{}`: the diffusion approximation needs the turbid layers to touch; layer {} between them is clear",
             element.id,

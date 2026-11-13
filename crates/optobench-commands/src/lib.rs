@@ -23,6 +23,7 @@ mod field;
 mod fluence;
 mod fluorophores;
 mod graph;
+mod heating;
 mod materials;
 mod moves;
 mod optimize;
@@ -298,6 +299,14 @@ const STANDARD: &[Command] = &[
         effect: Effect::Read,
         summary: "a fluorophore excited at a laser's focus: one- and two-photon rates, excitations and photons emitted, saturation, the pulse widened along the path",
         handler: excitation::command,
+    },
+    Command {
+        id: "heating",
+        label: "Heating",
+        icon: "heating",
+        effect: Effect::Read,
+        summary: "the temperature rise of a sample from the light it absorbs: steady or in time, parked or scanned, with perfusion",
+        handler: heating::command,
     },
     Command {
         id: "emission",

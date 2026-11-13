@@ -64,6 +64,7 @@ fn empty() -> Scene {
         split_cutoff: None,
         dofs: Vec::new(),
         fluorophores: Vec::new(),
+        thermal: Vec::new(),
     }
 }
 

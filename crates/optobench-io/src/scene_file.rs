@@ -89,6 +89,15 @@
 //!                                   # and says where they come from:
 //!                                   # { thickness = 1.0, material = 1.36, absorption = 0.02,
 //!                                   #   scattering = 20.0, anisotropy = 0.9, source = "…" }
+//!                                   # and thermal properties for heating (M11d):
+//!                                   # thermal = { conductivity_w_per_m_k = 0.527,
+//!                                   #   density_kg_per_m3 = 1040, heat_capacity_j_per_kg_k = 3650,
+//!                                   #   perfusion_per_s = 8.5e-3, blood_density_kg_per_m3 = 1060,
+//!                                   #   blood_heat_capacity_j_per_kg_k = 3600, source = "…" }
+//!                                   # (perfusion and the blood's values optional)
+//! thermal_boundaries = { top = "fixed", bottom = "fixed", side = "insulated" }
+//!                                   # optional, each "fixed" (default), "insulated" or a
+//!                                   # heat transfer coefficient (W m⁻² K⁻¹)
 //! below = 1.0                       # optional; default the surroundings
 //!
 //! [[element]]
@@ -993,8 +1002,16 @@ pub(crate) const OBJECTIVE_KEYS: &[&str] = &[
 ];
 
 /// The keys of a sample besides its placement.
-pub(crate) const SAMPLE_KEYS: &[&str] =
-    &["id", "kind", "layers", "above", "below", "diameter", "dof"];
+pub(crate) const SAMPLE_KEYS: &[&str] = &[
+    "id",
+    "kind",
+    "layers",
+    "above",
+    "below",
+    "diameter",
+    "thermal_boundaries",
+    "dof",
+];
 
 /// An `objective` entry's optics (layouts and sidecars alike).
 pub(crate) fn objective_kind(
@@ -1166,6 +1183,7 @@ pub(crate) fn sample_kind(item: &Item, lookup: &MaterialLookup) -> Result<Elemen
                     "scattering",
                     "anisotropy",
                     "source",
+                    "thermal",
                 ],
                 &context,
             )?;
@@ -1227,6 +1245,136 @@ pub(crate) fn sample_kind(item: &Item, lookup: &MaterialLookup) -> Result<Elemen
         below: material("below")?,
         diameter: item.optional_number("diameter", 50.0)?,
     })
+}
+
+/// A sample's thermal description (layouts and sidecars alike): each layer's
+/// `thermal = { conductivity_w_per_m_k, density_kg_per_m3, heat_capacity_j_per_kg_k,
+/// perfusion_per_s, blood_density_kg_per_m3, blood_heat_capacity_j_per_kg_k, source }`
+/// (perfusion and the blood's values optional, together) and the sample's
+/// `thermal_boundaries = { top, bottom, side }`, each `"fixed"` (default), `"insulated"`
+/// or a heat transfer coefficient in W m⁻² K⁻¹. `None` if no layer has `thermal`.
+pub(crate) fn sample_thermal(
+    item: &Item,
+    id: &str,
+) -> Result<Option<optobench_scene::SampleThermal>, FileError> {
+    use optobench_scene::{HeatBoundary, SampleThermal, ThermalProperties};
+    let Some(layers) = item.table.get("layers").and_then(Value::as_array) else {
+        return Ok(None);
+    };
+    let mut out = Vec::with_capacity(layers.len());
+    for (n, layer) in layers.iter().enumerate() {
+        let Some(value) = layer.get("thermal") else {
+            out.push(None);
+            continue;
+        };
+        let context = format!("{} layer {} `thermal`", item.context, n + 1);
+        let table = value.as_table().ok_or_else(|| {
+            error(format!(
+                "{context}: write {{ conductivity_w_per_m_k = …, … }}"
+            ))
+        })?;
+        check_keys(
+            table,
+            &[
+                "conductivity_w_per_m_k",
+                "density_kg_per_m3",
+                "heat_capacity_j_per_kg_k",
+                "perfusion_per_s",
+                "blood_density_kg_per_m3",
+                "blood_heat_capacity_j_per_kg_k",
+                "source",
+            ],
+            &context,
+        )?;
+        let t = Item { table, context };
+        let source = match table.get("source") {
+            Some(Value::String(s)) if !s.trim().is_empty() => s.clone(),
+            _ => {
+                return Err(error(format!(
+                    "{}: say where the values come from (`source`, text)",
+                    t.context
+                )));
+            }
+        };
+        let blood = ["blood_density_kg_per_m3", "blood_heat_capacity_j_per_kg_k"];
+        let perfusion = match table.get("perfusion_per_s") {
+            None => {
+                if blood.iter().any(|k| table.contains_key(*k)) {
+                    return Err(error(format!(
+                        "{}: the blood's values go with `perfusion_per_s`",
+                        t.context
+                    )));
+                }
+                0.0
+            }
+            Some(_) => {
+                let w = t.number("perfusion_per_s")?;
+                if !(w >= 0.0 && w.is_finite()) {
+                    return Err(error(format!(
+                        "{}: `perfusion_per_s` is a number, not negative",
+                        t.context
+                    )));
+                }
+                // ρ_b c_b w_b in W m⁻³ K⁻¹, to W mm⁻³ K⁻¹.
+                t.positive(blood[0])? * t.positive(blood[1])? * w * 1e-9
+            }
+        };
+        out.push(Some(ThermalProperties {
+            conductivity: t.positive("conductivity_w_per_m_k")? * 1e-3,
+            capacity: t.positive("density_kg_per_m3")?
+                * t.positive("heat_capacity_j_per_kg_k")?
+                * 1e-9,
+            perfusion,
+            source,
+        }));
+    }
+    let boundaries = item.table.get("thermal_boundaries");
+    if out.iter().all(Option::is_none) {
+        if boundaries.is_some() {
+            return Err(error(format!(
+                "{}: `thermal_boundaries` goes with the layers' `thermal`",
+                item.context
+            )));
+        }
+        return Ok(None);
+    }
+    let mut sides = [HeatBoundary::Fixed; 3];
+    if let Some(value) = boundaries {
+        let context = format!("{} `thermal_boundaries`", item.context);
+        let table = value.as_table().ok_or_else(|| {
+            error(format!(
+                "{context}: write {{ top = …, bottom = …, side = … }}"
+            ))
+        })?;
+        check_keys(table, &["top", "bottom", "side"], &context)?;
+        for (slot, key) in sides.iter_mut().zip(["top", "bottom", "side"]) {
+            *slot = match table.get(key) {
+                None => HeatBoundary::Fixed,
+                Some(Value::String(s)) if s == "fixed" => HeatBoundary::Fixed,
+                Some(Value::String(s)) if s == "insulated" => HeatBoundary::Insulated,
+                Some(Value::Float(_) | Value::Integer(_)) => {
+                    let h = Item {
+                        table,
+                        context: context.clone(),
+                    }
+                    .positive(key)?;
+                    HeatBoundary::Transfer(h * 1e-6) // W m⁻² K⁻¹ to W mm⁻² K⁻¹
+                }
+                _ => {
+                    return Err(error(format!(
+                        "{context}: `{key}` is \"fixed\", \"insulated\" or a heat transfer coefficient (W m⁻² K⁻¹)"
+                    )));
+                }
+            };
+        }
+    }
+    Ok(Some(SampleThermal {
+        sample: id.to_owned(),
+        layers: out,
+        top: sides[0],
+        bottom: sides[1],
+        side: sides[2],
+    }))
 }
 
 /// Reads a layout file into a scene. `lookup` resolves material names.
@@ -1392,6 +1540,7 @@ pub fn parse_with(text: &str, lookups: &Lookups) -> Result<Scene, FileError> {
         split_cutoff: trace_options(&root)?,
         dofs: Vec::new(),
         fluorophores: Vec::new(),
+        thermal: Vec::new(),
     };
 
     for item in items(&root, "source")? {
@@ -1527,6 +1676,9 @@ pub fn parse_with(text: &str, lookups: &Lookups) -> Result<Scene, FileError> {
             }
             "sample" => {
                 check_keys(item.table, &with(position, SAMPLE_KEYS), &item.context)?;
+                if let Some(thermal) = sample_thermal(item, &id)? {
+                    scene.thermal.push(thermal);
+                }
                 scene.elements.push(Element {
                     id,
                     frame: placement.frame(item)?,

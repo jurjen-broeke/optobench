@@ -39,6 +39,8 @@ const KINDS: &[&str] = &[
     "excitation-depth",
     "excitation-map",
     "pulse-width",
+    "temperature-map",
+    "temperature-time",
 ];
 
 /// The parameters of `of = "sweep"` and `of = "optimize"`, passed on to those commands.
@@ -383,6 +385,29 @@ fn of_design(parameters: &Parameters, kind: &str) -> Result<Graph, CommandError>
             ))
         });
     }
+    if matches!(kind, "temperature-map" | "temperature-time") {
+        let mut heating_parameters = parameters.clone();
+        let extent = heating_parameters.remove("extent_mm");
+        let h = crate::heating::compute(&heating_parameters)?;
+        if kind == "temperature-time" {
+            return graphs::temperature_time(&h).ok_or_else(|| {
+                invalid("`temperature-time` needs a time course: give `duration_s`")
+            });
+        }
+        let extent = match extent {
+            None => (
+                h.peak.1 + 2.0 * h.focal_depth.max(0.5),
+                2.0 * h.focal_depth.max(0.5),
+            ),
+            Some(v) => v
+                .as_array()
+                .filter(|a| a.len() == 2)
+                .and_then(|a| Some((a[0].as_f64()?, a[1].as_f64()?)))
+                .filter(|(r, z)| *r > 0.0 && *z > 0.0)
+                .ok_or_else(|| invalid("`extent_mm` is [radius, depth] in mm"))?,
+        };
+        return Ok(graphs::temperature_map(&h, extent));
+    }
     if kind == "pulse-width" {
         let (scene, path) = moved_scene(parameters)?;
         let source = match text(parameters, "source")? {
@@ -521,6 +546,8 @@ pub(crate) fn graph(parameters: &Parameters) -> Result<Value, CommandError> {
     keys.extend_from_slice(crate::field::FIELD_KEYS);
     keys.extend_from_slice(crate::fluence::LIGHT_KEYS);
     keys.extend_from_slice(crate::excitation::EXCITATION_KEYS);
+    keys.extend_from_slice(crate::heating::HEATING_KEYS);
+    keys.push("extent_mm");
     keys.sort_unstable();
     keys.dedup();
     check_keys(parameters, &keys)?;

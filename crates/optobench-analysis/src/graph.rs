@@ -39,6 +39,8 @@ pub enum Unit {
     Rate,
     /// Events per second per mm of depth (1/(s mm)).
     RatePerLength,
+    /// A temperature difference (K).
+    Temperature,
 }
 
 impl Unit {
@@ -56,6 +58,7 @@ impl Unit {
             Unit::Time => "time",
             Unit::Rate => "rate",
             Unit::RatePerLength => "rate-per-length",
+            Unit::Temperature => "temperature",
         }
     }
 
@@ -73,6 +76,7 @@ impl Unit {
             Unit::Time,
             Unit::Rate,
             Unit::RatePerLength,
+            Unit::Temperature,
         ]
         .into_iter()
         .find(|u| u.name() == name)
@@ -91,6 +95,7 @@ impl Unit {
             Unit::Time => "s",
             Unit::Rate => "1/s",
             Unit::RatePerLength => "1/(s mm)",
+            Unit::Temperature => "K",
         }
     }
 }
@@ -217,12 +222,23 @@ impl Axis {
                     ("ps", 1e12)
                 } else if size < 1e-6 {
                     ("ns", 1e9)
+                } else if size < 1e-3 {
+                    ("µs", 1e6)
+                } else if size < 1.0 {
+                    ("ms", 1e3)
                 } else {
                     ("s", 1.0)
                 }
             }
             Unit::Rate => ("1/s", 1.0),
             Unit::RatePerLength => ("1/(s mm)", 1.0),
+            Unit::Temperature => {
+                if size < 1.0 {
+                    ("mK", 1e3)
+                } else {
+                    ("K", 1.0)
+                }
+            }
         };
         let shown = size * factor;
         let exponent = if self.scale == Scale::Logarithmic
@@ -1074,6 +1090,88 @@ pub fn absorption_map(light: &crate::sample::SampleLight) -> Graph {
             g.z.0, g.z.1
         )],
     }
+}
+
+/// The temperature rise in a sample as an x–z map (the rings mirrored about the axis),
+/// sampled on even cells from the graded grid, out to `extent` (radius, depth; mm).
+pub fn temperature_map(heating: &crate::heating::Heating, extent: (f64, f64)) -> Graph {
+    let g = &heating.grid;
+    let (radius, depth) = (
+        extent.0.min(g.r[g.r.len() - 1]),
+        extent.1.min(g.z[g.z.len() - 1]),
+    );
+    let (columns, rows) = (200, 150);
+    let mut values = Vec::with_capacity(columns * rows);
+    for row in 0..rows {
+        // From low y: the deepest first.
+        let z = depth * (1.0 - (row as f64 + 0.5) / rows as f64);
+        for c in 0..columns {
+            let x = -radius + 2.0 * radius * (c as f64 + 0.5) / columns as f64;
+            values.push(
+                g.cell(x.abs(), z)
+                    .map_or(f64::NAN, |(i, j)| heating.rise[g.index(i, j)]),
+            );
+        }
+    }
+    let mut notes = vec![format!(
+        "peak {:.4} K at r {:.4} mm, depth {:.4} mm; {:.4} K on the axis at the focal depth {:.4} mm",
+        heating.peak.0, heating.peak.1, heating.peak.2, heating.at_focus, heating.focal_depth
+    )];
+    if let Some(a) = heating.field_average {
+        notes.push(format!(
+            "{a:.4} K averaged over the field at the focal depth"
+        ));
+    }
+    Graph {
+        title: format!("Temperature rise in `{}`", heating.sample),
+        x: Axis::new("x", Unit::Length),
+        y: Axis::new("−depth", Unit::Length),
+        plot: Plot::Map(Map {
+            columns,
+            rows,
+            x: (-radius, radius),
+            y: (-depth, 0.0),
+            values,
+            value: Axis::new("rise", Unit::Temperature),
+            colours: ColourScale::Sequential,
+        }),
+        equal_aspect: true,
+        markers: Vec::new(),
+        notes,
+    }
+}
+
+/// The temperature rise against time at the probes of a heating's time course.
+pub fn temperature_time(heating: &crate::heating::Heating) -> Option<Graph> {
+    let course = heating.course.as_ref()?;
+    let series = heating
+        .probes
+        .iter()
+        .zip(&course.probes)
+        .map(|(&(r, z), history)| Series {
+            label: format!("r {:.3} mm, depth {:.3} mm", r, z),
+            points: course
+                .times
+                .iter()
+                .copied()
+                .zip(history.iter().copied())
+                .collect(),
+            mark: Mark::Line,
+            reference: false,
+        })
+        .collect();
+    Some(Graph {
+        title: format!("Temperature rise in `{}` against time", heating.sample),
+        x: Axis::new("time", Unit::Time),
+        y: Axis::new("rise", Unit::Temperature),
+        plot: Plot::Series(series),
+        equal_aspect: false,
+        markers: Vec::new(),
+        notes: vec![format!(
+            "absorbed {:.4e} W; at the end stored {:.4e} J",
+            heating.absorbed, course.stored
+        )],
+    })
 }
 
 /// Where rays cross the axis near a detector, against their launch height.

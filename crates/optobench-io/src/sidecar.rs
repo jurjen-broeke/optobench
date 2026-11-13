@@ -766,6 +766,7 @@ pub fn read(text: &str, sidecar: &Path, lookups: &Lookups) -> Result<Read, FileE
         split_cutoff: crate::scene_file::trace_options(&root)?,
         dofs: Vec::new(),
         fluorophores: Vec::new(),
+        thermal: Vec::new(),
     };
     let mut tagged = vec![false; bodies.len()];
     // Bodies an element names, tagged or not (a library part's mount).
@@ -808,6 +809,9 @@ pub fn read(text: &str, sidecar: &Path, lookups: &Lookups) -> Result<Read, FileE
             let element_kind = if objective {
                 objective_kind(&item, lookup)?
             } else {
+                if let Some(thermal) = crate::scene_file::sample_thermal(&item, &id)? {
+                    scene.thermal.push(thermal);
+                }
                 sample_kind(&item, lookup)?
             };
             scene.dofs.extend(dofs(

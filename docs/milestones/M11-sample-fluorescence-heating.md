@@ -254,20 +254,34 @@ emitter is spread through the excited volume, its photons those of the excitatio
 
 ### M11d2 Heating of a sample
 
-- [ ] The absorbed power density (M11a) as the heat source in the layer stack, with
-      thermal conductivity, density and heat capacity per layer (water's from published
-      values with their source; tissue's from the user); boundaries at fixed temperature,
-      insulated, or with a heat transfer coefficient
-- [ ] Steady state and time-resolved temperature rise (a parked beam switched on and
-      off; a beam scanned over a field of view: the absorbed density spread over the
-      field and weighted by the duty cycle, which holds while a frame is much shorter
-      than the time heat takes to cross the field, ~ field² / (4α), seconds for 1 mm in
-      water; the axially symmetric grid takes a square field as the disk of the same area)
-- [ ] Optional perfusion (Pennes bioheat: ρ_b c_b w_b (T − T_a)) for tissue in vivo
-- [ ] Reports: power at the sample surface and at the focal plane; peak and field-averaged
-      temperature rise; warnings when the user's heating or saturation thresholds are
-      passed
-- [ ] Graphs: temperature maps (r–z), temperature against time at chosen points
+- [x] Thermal properties per sample layer in designs (`thermal = { conductivity_w_per_m_k,
+      density_kg_per_m3, heat_capacity_j_per_kg_k, perfusion_per_s,
+      blood_density_kg_per_m3, blood_heat_capacity_j_per_kg_k, source }`, SI units, the
+      source required, perfusion optional with the blood's values) and the sample's
+      `thermal_boundaries` (top, bottom, side: `"fixed"`, `"insulated"` or a heat transfer
+      coefficient in W m⁻² K⁻¹); nothing bundled (water's values remain an open
+      question, below)
+- [x] `optobench_analysis::heating`: the absorbed power density (M11a, direct and
+      diffuse) moved onto a graded thermal grid over the sample's layers by shared
+      volumes (power kept), every layer interface a cell edge; steady or in time (switched
+      on, optionally off); a scanned field as its time average, spread over the disk of
+      the field's area and weighted by the duty cycle, with a note of the frame time below
+      which that holds (side² / (4α)); perfusion where the layers have it
+- [x] Reports (command `heating`): power entering the first face and crossing the focal
+      plane (traced, ballistic), absorbed per layer, peak rise and where, the rise at the
+      focus and averaged over the field, the heat balance, time courses at probes, a
+      warning above `max_rise_k`; detectors are left out of the trace. Saturation
+      warnings stay with `excitation` (its k τ_f and per-pulse figures)
+- [x] Graphs: `temperature-map` (x–z, from the graded grid), `temperature-time`
+- [x] Checks (commands `tests/heating.rs`): an evenly lit absorbing layer between held
+      faces, insulated at its side: Beer–Lambert's absorbed power (10⁻³), the radial
+      average against the slab solution I₀ / (k µa) (1 − e^{−µa z}) + A z (1 % of the
+      peak), heat out only through the held faces (10⁻⁹); a scanned field halves the heat
+      at duty 0.5 (10⁻⁹) and lowers the peak; in time the focus settles to its steady rise
+      (1 %) and cools when switched off; the balance closes in time (10⁻⁹); missing and
+      malformed thermal properties refused; units read in mm. Fixed on the way: the light
+      in a sample with no scattering layer was refused (M11a2's check for clear gaps
+      between turbid layers ran with none)
 
 ## Exit check
 

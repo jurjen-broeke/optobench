@@ -5,6 +5,12 @@ with the release that introduced them.
 
 ## Unreleased
 
+- M11d2 heating of a sample: sample layers take `thermal` properties (with their source)
+  and samples `thermal_boundaries`; new command `heating` gives the temperature rise from
+  the light the sample absorbs, steady or in time, parked or over a scanned field, with
+  perfusion: power at the surface and the focal plane, peak and field-averaged rise, the
+  heat balance, warnings; graph kinds `temperature-map` and `temperature-time`. Fixed:
+  `fluence` refused a sample with no scattering layer.
 - M11d1 the thermal solver: `optobench_analysis::thermal` gives the temperature rise from
   an absorbed power density, steady or in time (Crank–Nicolson, with an on/off or duty
   drive), with Pennes perfusion and fixed, insulated or heat-transfer boundaries, on a
