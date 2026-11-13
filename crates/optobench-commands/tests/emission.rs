@@ -318,3 +318,103 @@ fn emitters_and_quantum_efficiencies_are_checked() {
         .contains("not_a_key")
     );
 }
+
+/// A pulsed Gaussian laser focused by the objective 1.5 mm into a matched sample with a
+/// two-photon dye, an emitter of the dye's emission placed at the focus and facing the
+/// objective, the focus's detector and the camera behind the pupil.
+fn excited_layout(data: &Scratch, dye: &str) -> String {
+    let path = data.0.join("excited.optobench");
+    std::fs::write(
+        &path,
+        format!(
+            "format = \"optobench/1\"\nkind = \"layout\"\nlayout = \"planar\"\n\n\
+             [[source]]\nid = \"laser\"\nkind = \"gaussian\"\nwaist_diameter = 3.0\nat = -10\n\
+             wavelength_um = 0.92\npower_w = 0.01\n\
+             pulse = {{ repetition_rate_mhz = 80, width_fs = 100 }}\n\n\
+             [[source]]\nid = \"E\"\nkind = \"isotropic\"\nat = 47\nreversed = true\n\
+             half_angle_deg = {HALF_ANGLE_DEG}\nrings = 24\npower_w = 1e-9\nwavelength_um = 0.52\n\n\
+             [[element]]\nid = \"OBJ\"\nkind = \"objective\"\nat = 0\nfocal_length = 9.0\nna = {NA}\n\
+             pupil_distance = 45.0\nworking_distance = 2.0\nimmersion = {N}\n\n\
+             [[element]]\nid = \"S\"\nkind = \"sample\"\nat = 45.5\nabove = {N}\nbelow = {N}\n\
+             layers = [ {{ thickness = 5.0, material = {N} }} ]\n\n\
+             [[detector]]\nid = \"focus\"\nat = 47\nsize = [1, 1]\npixels = [10, 10]\n\n\
+             [[detector]]\nid = \"camera\"\nat = -20\nsize = [30, 30]\npixels = [10, 10]\n\n\
+             {dye}"
+        ),
+    )
+    .expect("written");
+    path.to_string_lossy().into_owned()
+}
+
+const DYE: &str = "[[fluorophore]]\nid = \"dye\"\nsource = \"test values\"\nquantum_yield = 0.8\n\
+    two_photon_cross_section_gm = 40.0\n\
+    concentrations = [ { sample = \"S\", layer = 1, micromolar = 10.0 } ]\n";
+
+#[test]
+fn emitters_spread_through_the_excited_volume() {
+    let data = Scratch::new("excited");
+    let path = excited_layout(&data, DYE);
+    let parameters = json!({
+        "path": path, "excited_by": "laser", "focus": "focus", "samples": 84,
+        "cloud": [3, 5, 1.0], "data_directory": data.path(),
+    });
+    let spread = run("emission", parameters).expect("a budget");
+    let excitation = &spread["excitation"];
+    let photons = number(&excitation["emitted_photons_per_s"]);
+    assert_eq!(excitation["emitters"], 45);
+    let represented = number(&excitation["represented"]);
+    assert!(represented > 0.0 && represented < 1.0, "{represented}");
+    // Everything emitted is accounted for, the photons those of the excitation.
+    let emitted = &spread["emitted"];
+    assert!((number(&emitted["photons_per_s"]) / photons - 1.0).abs() < 1e-9);
+    check_closes(&spread);
+    // The same as the excitation command's photons emitted at the same settings.
+    let alone = run(
+        "excitation",
+        json!({ "path": path, "source": "laser", "detector": "focus", "samples": 84,
+                "planes": 24, "across": 24, "data_directory": data.path() }),
+    )
+    .expect("excitation");
+    let by_excitation = number(&alone["emitted_photons_per_s"]);
+    assert!(
+        (photons / by_excitation - 1.0).abs() < 1e-9,
+        "{photons} {by_excitation}"
+    );
+    // A few µm of spread barely changes what the objective collects: the cone's share,
+    // within the ring sampling's bound as for one emitter.
+    let theta = (NA / N).asin();
+    let cone = (1.0 - theta.cos()) / 2.0;
+    let collected = watts(&spread["collected"]) / watts(emitted);
+    assert!((collected / cone - 1.0).abs() < 0.06, "{collected} {cone}");
+    // All of it reaches the camera; the focus's detector takes none (left out).
+    let camera = spread["detectors"]
+        .as_array()
+        .expect("detectors")
+        .iter()
+        .find(|d| d["id"] == "camera")
+        .expect("camera");
+    assert!((watts(&camera["arriving"]) / watts(&spread["collected"]) - 1.0).abs() < 1e-9);
+    assert!(
+        spread["detectors"]
+            .as_array()
+            .expect("detectors")
+            .iter()
+            .all(|d| d["id"] != "focus")
+    );
+
+    // Without a two-photon cross-section nothing is emitted from the focus.
+    let one_photon = DYE.replace(
+        "two_photon_cross_section_gm = 40.0\n",
+        "one_photon_cross_section_cm2 = 1e-16\n",
+    );
+    let path = excited_layout(&data, &one_photon);
+    let error = run(
+        "emission",
+        json!({ "path": path, "excited_by": "laser", "focus": "focus", "samples": 84,
+                "data_directory": data.path() }),
+    )
+    .expect_err("no two-photon");
+    assert!(error.contains("two-photon cross-section"), "{error}");
+    let error = run("emission", json!({ "path": path, "focus": "focus" })).expect_err("alone");
+    assert!(error.contains("belongs with `excited_by`"), "{error}");
+}

@@ -5,6 +5,10 @@ with the release that introduced them.
 
 ## Unreleased
 
+- M11c emitters through the excited volume: `emission` with `excited_by`, `focus` and
+  `fluorophore` spreads the emitter over a grid around a laser's focus weighted by I²,
+  its photons those of the two-photon excitation, and adds up the budgets. The PSF can
+  give intensities on a grid around its peak (`cloud`).
 - M11b3 FPbase: new command `import-fluorophore` reads a fluorescent protein from the
   JSON the user downloaded from FPbase's API (spectra, extinction coefficient, quantum
   yield, lifetime, primary reference), shows FPbase's terms first, stores the files with

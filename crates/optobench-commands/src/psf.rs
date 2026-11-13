@@ -134,6 +134,7 @@ pub(crate) fn request(
         section: None,
         attenuated: false,
         volume: None,
+        cloud: None,
     };
     Ok((source, detector, settings))
 }

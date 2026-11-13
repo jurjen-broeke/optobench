@@ -186,9 +186,8 @@ the diffusion approximation here; photon transport by Monte Carlo replaces it in
 
 ## M11c Emission and the photon budget
 
-Built ahead of M11b: the emitter's power (its emission over all directions) is given
-by the user; M11b2's `excitation` now reports the photons emitted per second at a focus
-(times the photon energy, that power).
+Built ahead of M11b: a single emitter's power is given by the user; with M11b the
+emitter is spread through the excited volume, its photons those of the excitation.
 
 - [x] An isotropic point emitter (source kind `isotropic`: equal solid angles, the disk
       samples mapped onto the cap by cos θ = 1 − ρ² (1 − cos θ_max); `power_w` the total
@@ -204,7 +203,17 @@ by the user; M11b2's `excitation` now reports the photons emitted per second at 
       field's direction, the same optical path added (forward and back are each other's
       inverse to 10⁻¹²). Light reflected back into the objective in forward traces now
       passes back too, where it was clipped
-- [ ] Emitters sampled through the excited volume (with M11b's excitation volume)
+- [x] Emitters sampled through the excited volume: `emission` with `excited_by` (the
+      laser), `focus` (its detector) and `fluorophore` places the emitter at the cells of a
+      grid around the focus (`cloud`, ± widths of I²; `PsfSettings::cloud`), each with its
+      share of I², and the photons emitted per second those of M11b2's two-photon
+      excitation (× η); the budgets add up (`emission::budget_through`). The share of the
+      thick-sample excitation the grid covers is reported (`represented`); the rest, in the
+      cone's far tails, is spread over the grid. The focus's detector is left out of the
+      emission's trace. One-photon excitation is not confined to the focus and is not
+      spread. Check: a pulsed Gaussian focus in a matched sample, 45 places: the photons
+      equal the excitation's (10⁻⁹), the budget closes, the objective collects the
+      cone's share within the ring sampling's bound, all of it on the camera
 - [x] Photon budget (`optobench_analysis::emission`, command `emission`), in W and
       photons per second (P λ / (h c)): emitted, outside the traced cone, traced,
       collected by the objective; per sample part absorbed and scattered; per item the

@@ -243,6 +243,9 @@ pub struct ExcitationSettings {
     pub volume: (usize, usize),
     /// An x–z section of the excitation through the peak, (columns, rows).
     pub section: Option<(usize, usize)>,
+    /// Emitter points through the excited volume (`PsfSettings::cloud`): points across,
+    /// points along, half-extent in widths of I².
+    pub cloud: Option<(usize, usize, f64)>,
 }
 
 impl Default for ExcitationSettings {
@@ -252,6 +255,7 @@ impl Default for ExcitationSettings {
             polarization: Polarization::X,
             volume: (32, 32),
             section: None,
+            cloud: None,
         }
     }
 }
@@ -320,6 +324,13 @@ pub struct Excitation {
     /// Photons emitted per second (excitations times the quantum yield): two-photon
     /// excitations in the focus, else none.
     pub emitted: Option<f64>,
+    /// Emitters through the excited volume (if asked for): points in the scene frame and
+    /// their shares of the excitation (adding up to 1), weighted by I² for two-photon
+    /// excitation, else by I.
+    pub emitters: Vec<(optobench_math::Vec3, f64)>,
+    /// The share of the focus's two-photon excitation, ½ σ₂ C g ∫ F² dV, that the
+    /// emitters' grid covers; `None` without two-photon excitation or a grid.
+    pub represented: Option<f64>,
     /// What was left out and why.
     pub notes: Vec<String>,
     /// The focus (ballistic), with its volume integrals.
@@ -362,6 +373,7 @@ pub fn excitation(
             section: settings.section,
             attenuated: true,
             volume: Some(settings.volume),
+            cloud: settings.cloud,
             ..Default::default()
         },
     )?;
@@ -460,6 +472,23 @@ pub fn excitation(
         .as_ref()
         .and_then(|t| t.total)
         .map(|total| total * dye.quantum_yield);
+    // Emitters through the excited volume.
+    let squared = two_photon.is_some();
+    let weight = |i: f64| if squared { i * i } else { i };
+    let sum: f64 = psf.cloud.iter().map(|(_, i)| weight(*i)).sum();
+    let emitters: Vec<(optobench_math::Vec3, f64)> = if sum > 0.0 {
+        psf.cloud
+            .iter()
+            .filter(|(_, i)| weight(*i) > 0.0)
+            .map(|(r, i)| (det.frame.to_parent_point(*r), weight(*i) / sum))
+            .collect()
+    } else {
+        Vec::new()
+    };
+    let represented = match (&psf.volume, squared && sum > 0.0) {
+        (Some(v), true) if v.squared > 0.0 => Some(sum * psf.cloud_cell / v.squared),
+        _ => None,
+    };
     Ok(Excitation {
         source: src.id.clone(),
         detector: det.id.clone(),
@@ -475,6 +504,8 @@ pub fn excitation(
         one_photon,
         two_photon,
         emitted,
+        emitters,
+        represented,
         notes,
         psf,
     })

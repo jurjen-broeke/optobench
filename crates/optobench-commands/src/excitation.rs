@@ -62,6 +62,7 @@ pub(crate) fn compute(
         polarization: psf.polarization,
         volume: (count("planes", 32)?, count("across", 32)?),
         section,
+        cloud: None,
     };
     excitation(&scene, source, detector, fluorophore, &settings)
         .map_err(|e| CommandError::new(ErrorCode::Failed, format!("{path}: {e}")))

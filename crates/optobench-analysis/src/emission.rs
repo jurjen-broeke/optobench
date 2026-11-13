@@ -319,3 +319,89 @@ pub fn budget(scene: &Scene, emitter: usize) -> Result<Budget, String> {
         imbalance,
     })
 }
+
+impl Budget {
+    /// Adds another budget of the same emitter in the same scene (another place of it).
+    fn absorb(&mut self, other: &Budget) {
+        self.emitted.add(other.emitted);
+        self.outside_cone.add(other.outside_cone);
+        self.traced.add(other.traced);
+        self.collected.add(other.collected);
+        for (mine, theirs) in self.sample.iter_mut().zip(&other.sample) {
+            mine.absorbed.add(theirs.absorbed);
+            mine.scattered.add(theirs.scattered);
+        }
+        for theirs in &other.items {
+            let k = item(&mut self.items, &theirs.id);
+            self.items[k].at_faces.add(theirs.at_faces);
+            self.items[k].clipped.add(theirs.clipped);
+        }
+        for (mine, theirs) in self.detectors.iter_mut().zip(&other.detectors) {
+            mine.arriving.add(theirs.arriving);
+            if let (Some(a), Some(b)) = (mine.counted.as_mut(), theirs.counted) {
+                a.add(b);
+            }
+        }
+        let (e, o) = (&mut self.ends, &other.ends);
+        for (a, b) in [
+            (&mut e.detected, o.detected),
+            (&mut e.clipped, o.clipped),
+            (&mut e.absorbed_in_samples, o.absorbed_in_samples),
+            (&mut e.absorbed_in_other_media, o.absorbed_in_other_media),
+            (&mut e.absorbed_in_coatings, o.absorbed_in_coatings),
+            (&mut e.scattered, o.scattered),
+            (&mut e.reflected, o.reflected),
+            (&mut e.escaped, o.escaped),
+            (&mut e.stopped, o.stopped),
+        ] {
+            a.add(b);
+        }
+        self.imbalance += other.imbalance;
+    }
+}
+
+/// The photon budget of emitter `emitter` (an isotropic source) spread through an excited
+/// volume: placed in turn at each of `points` (scene frame, shares adding up to 1), with
+/// `photons` emitted per second in all (each place its share), its own direction, cone,
+/// spectrum and sampling kept; the budgets added up. The power per photon is the mean
+/// over the emitter's spectral lines, h c Σ wᵢ / λᵢ.
+pub fn budget_through(
+    scene: &Scene,
+    emitter: usize,
+    points: &[(optobench_math::Vec3, f64)],
+    photons: f64,
+) -> Result<Budget, String> {
+    let source = scene.sources.get(emitter).ok_or("no such source")?;
+    if points.is_empty() {
+        return Err("no emitter places: the excited volume is empty".into());
+    }
+    let lines: Vec<(f64, f64)> = if source.spectrum.is_empty() {
+        vec![(source.wavelength, 1.0)]
+    } else {
+        let total: f64 = source.spectrum.iter().map(|l| l.1).sum();
+        source
+            .spectrum
+            .iter()
+            .map(|&(w, p)| (w, p / total))
+            .collect()
+    };
+    let energy: f64 = lines
+        .iter()
+        .map(|&(w, share)| share * PLANCK * LIGHT_SPEED / (w * 1e-6))
+        .sum();
+    let [x, _, z] = source.frame.axes();
+    let mut total: Option<Budget> = None;
+    for &(point, share) in points {
+        let mut moved = scene.clone();
+        let placed = &mut moved.sources[emitter];
+        placed.frame =
+            optobench_math::Frame::new(point, z, x).ok_or("a degenerate emitter frame")?;
+        placed.power = photons * share * energy;
+        let b = budget(&moved, emitter)?;
+        match total.as_mut() {
+            None => total = Some(b),
+            Some(t) => t.absorb(&b),
+        }
+    }
+    total.ok_or_else(|| "no emitter places".into())
+}

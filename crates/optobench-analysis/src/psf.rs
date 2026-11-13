@@ -93,6 +93,10 @@ pub struct PsfSettings {
     pub attenuated: bool,
     /// Volume integrals over (planes, points across each plane); see the module notes.
     pub volume: Option<(usize, usize)>,
+    /// Intensities on a grid around the peak (M11c, emitters through the excited volume):
+    /// (points across, along x and y; points along the focus line; half-extent in widths
+    /// of I², `fwhm_squared`), cell centres.
+    pub cloud: Option<(usize, usize, f64)>,
 }
 
 impl Default for PsfSettings {
@@ -106,6 +110,7 @@ impl Default for PsfSettings {
             section: None,
             attenuated: false,
             volume: None,
+            cloud: None,
         }
     }
 }
@@ -209,6 +214,11 @@ pub struct Psf {
     pub wavefront: PupilWavefront,
     /// Volume integrals, if asked for.
     pub volume: Option<Volume>,
+    /// Intensities on a grid around the peak, if asked for: the grid's cell centres
+    /// (detector frame) and n |E|² there (W/mm²).
+    pub cloud: Vec<(Vec3, f64)>,
+    /// The volume of one cell of that grid (mm³).
+    pub cloud_cell: f64,
 }
 
 /// A complex 3-vector.
@@ -788,6 +798,28 @@ pub fn psf(
         peak_to_valley: greatest - least,
     };
 
+    // A grid of intensities around the peak, ± `extent` widths of I² each way.
+    let (mut cloud, mut cloud_cell) = (Vec::new(), 0.0);
+    if let Some((across, along, extent)) = settings.cloud {
+        let (across, along) = (across.max(1), along.max(1));
+        let wx = fwhm_squared.0.or(fwhm.0).unwrap_or(lateral_scale);
+        let wy = fwhm_squared.1.or(fwhm.1).unwrap_or(lateral_scale);
+        let wz = fwhm_squared.2.or(fwhm.2).unwrap_or(fringe);
+        let offset =
+            |k: usize, n: usize, w: f64| extent * w * (-1.0 + (2 * k + 1) as f64 / n as f64);
+        for k in 0..along {
+            let dz = offset(k, along, wz);
+            let centre = peak + mean * (dz / mean.z);
+            for j in 0..across {
+                for i in 0..across {
+                    let r = centre + Vec3::new(offset(i, across, wx), offset(j, across, wy), 0.0);
+                    cloud.push((r, intensity(&waves, index, r)));
+                }
+            }
+        }
+        cloud_cell = (2.0 * extent).powi(3) * wx * wy * wz / (across * across * along) as f64;
+    }
+
     let volume = match settings.volume {
         None => None,
         Some((planes, across)) => {
@@ -845,6 +877,8 @@ pub fn psf(
         section,
         wavefront,
         volume,
+        cloud,
+        cloud_cell,
     })
 }
 
