@@ -66,6 +66,7 @@ fn step_lens_traces_like_the_same_lens_defined_inline() {
             power: 0.001,
             rings: 6,
             spectrum: vec![],
+            pulse: None,
         }],
         proxies: vec![],
         detectors: vec![Detector {
@@ -79,6 +80,7 @@ fn step_lens_traces_like_the_same_lens_defined_inline() {
         // As the sidecar has it by default.
         split_cutoff: Some(optobench_scene::DEFAULT_SPLIT_CUTOFF),
         dofs: Vec::new(),
+        fluorophores: Vec::new(),
     };
     let a = from_step.trace().expect("traces");
     let b = inline.trace().expect("traces");

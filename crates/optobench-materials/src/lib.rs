@@ -17,6 +17,7 @@
 #![forbid(unsafe_code)]
 
 pub mod bundled;
+pub mod dispersion;
 mod formula;
 
 pub use formula::{Composite, DispersionFormula, FormulaKind};
@@ -38,6 +39,12 @@ pub enum MaterialError {
         /// The requested wavelength (µm).
         wavelength: f64,
     },
+    /// The index is a table, interpolated linearly: it has no second derivative, so no
+    /// group-delay dispersion ([`dispersion`]).
+    NotSmooth {
+        /// The requested wavelength (µm).
+        wavelength: f64,
+    },
 }
 
 impl core::fmt::Display for MaterialError {
@@ -51,6 +58,11 @@ impl core::fmt::Display for MaterialError {
             MaterialError::Undefined { wavelength } => {
                 write!(f, "no real refractive index at {wavelength} µm")
             }
+            MaterialError::NotSmooth { wavelength } => write!(
+                f,
+                "the index at {wavelength} µm comes from a table, which gives no dispersion \
+                 (d²n/dλ²); use a dispersion formula"
+            ),
         }
     }
 }
@@ -82,6 +94,13 @@ pub trait Material: core::fmt::Debug + Send + Sync {
     /// Anisotropy g, the mean cosine of the scattering angle (−1 to 1; 0 isotropic).
     fn anisotropy(&self, wavelength: f64) -> Result<f64, MaterialError> {
         self.refractive_index(wavelength).map(|_| 0.0)
+    }
+
+    /// Whether the index is a smooth function of wavelength (a formula), so that its
+    /// derivatives, and the dispersion of a pulse ([`dispersion`]), are defined. False for
+    /// a linearly interpolated table.
+    fn smooth_index(&self) -> bool {
+        true
     }
 }
 
@@ -164,6 +183,10 @@ impl Material for Turbid {
 
     fn anisotropy(&self, wavelength: f64) -> Result<f64, MaterialError> {
         self.anisotropy.at(wavelength)
+    }
+
+    fn smooth_index(&self) -> bool {
+        self.base.material().smooth_index()
     }
 }
 
@@ -345,6 +368,10 @@ impl Material for Tabulated {
 
     fn extinction(&self, wavelength: f64) -> Result<f64, MaterialError> {
         self.evaluate(wavelength).map(|(_, k)| k)
+    }
+
+    fn smooth_index(&self) -> bool {
+        false
     }
 }
 

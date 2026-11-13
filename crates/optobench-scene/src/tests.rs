@@ -15,6 +15,7 @@ fn beam(frame: Frame, diameter: f64) -> Source {
         power: 1.0,
         rings: 6,
         spectrum: vec![],
+        pulse: None,
     }
 }
 
@@ -62,6 +63,7 @@ fn empty() -> Scene {
         solids: vec![],
         split_cutoff: None,
         dofs: Vec::new(),
+        fluorophores: Vec::new(),
     }
 }
 
@@ -186,6 +188,7 @@ fn tube_clips_the_wide_part_of_a_cone() {
             power: 1.0,
             rings: 8,
             spectrum: vec![],
+            pulse: None,
         }],
         proxies: vec![Proxy {
             id: "tube".into(),
@@ -275,6 +278,7 @@ fn source(kind: SourceKind, rings: usize) -> Source {
         power: 1.0,
         rings,
         spectrum: vec![],
+        pulse: None,
     }
 }
 

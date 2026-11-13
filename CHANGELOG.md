@@ -5,6 +5,16 @@ with the release that introduced them.
 
 ## Unreleased
 
+- M11b1 fluorophores, lasers and excitation rates: layouts and sidecars take
+  `[[fluorophore]]` entries (quantum yield, lifetime, extinction coefficient with a
+  relative excitation spectrum or a one-photon cross-section, two-photon cross-section
+  in GM, emission spectrum, concentrations in sample layers; a `source` is required).
+  Sources take `pulse = { repetition_rate_mhz, width_fs, shape, prechirp_fs2 }`;
+  objectives take `group_delay_dispersion_fs2`. New `optobench_materials::dispersion`
+  (group index and group-velocity dispersion from a material's own formula; tables are
+  refused) and `optobench_analysis::excitation` (one- and two-photon rates, pulse
+  factors, Gaussian pulse broadening, the dispersion along a pulsed source's chief ray).
+  Ray records gain `media`.
 - M11c emission and photon budget: new command `emission` traces an emitter in a sample
   on its own and gives its photon budget in watts and photons per second: emitted,
   collected by the objective, lost in each part of the sample, at each element's faces

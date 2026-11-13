@@ -17,7 +17,7 @@ pub mod layout;
 
 use std::sync::Arc;
 
-use optobench_materials::Medium;
+use optobench_materials::{Medium, Spectrum};
 use optobench_math::{Frame, Vec3};
 use optobench_surfaces::brep::{BrepFace, FaceSurface};
 use optobench_surfaces::{Plane, Sphere, Surface};
@@ -116,6 +116,10 @@ pub enum ElementKind {
         /// The barrel's diameter at the pupil (mm): rays inside it but beyond the pupil
         /// are stopped, rays outside it pass by.
         diameter: f64,
+        /// The group-delay dispersion of its glass (s²), as its maker states it at the
+        /// laser's wavelength: the ideal objective has no glass of its own, so pulses
+        /// through it pick up this much (M11b). 0 if unknown.
+        group_delay_dispersion: f64,
     },
     /// A sample: flat layers from the frame's origin along +z, between the medium above
     /// the first face (the immersion) and the one below the last.
@@ -218,6 +222,69 @@ pub struct Source {
     /// Spectral lines as (wavelength µm, relative weight): the power is shared between
     /// them in proportion to the weights. Empty for a single `wavelength`.
     pub spectrum: Vec<(f64, f64)>,
+    /// For a pulsed laser, its pulses (M11b); `power` is then the mean power. `None` for
+    /// continuous light.
+    pub pulse: Option<Pulse>,
+}
+
+/// The shape of a laser pulse's intensity in time.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PulseShape {
+    /// exp(−4 ln 2 t² / τ²).
+    Gaussian,
+    /// sech²(1.7627 t / τ), as from a mode-locked Ti:sapphire laser.
+    SechSquared,
+}
+
+/// The pulses of a pulsed laser (M11b).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Pulse {
+    /// Pulses per second (Hz).
+    pub repetition_rate: f64,
+    /// Full width at half maximum of the intensity as the laser makes it, transform
+    /// limited (s).
+    pub width: f64,
+    /// The shape in time.
+    pub shape: PulseShape,
+    /// Group-delay dispersion the pulses carry as they leave the source (s²), such as a
+    /// negative prechirp that cancels the path's; 0 for transform-limited pulses.
+    pub prechirp: f64,
+}
+
+/// A fluorophore (M11b): what it absorbs and emits, from the user's data with its
+/// source, and where in the samples it is.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Fluorophore {
+    /// Unique id within the scene.
+    pub id: String,
+    /// One-photon absorption cross-section σ₁ (mm²) against vacuum wavelength (µm);
+    /// `None` if not given.
+    pub one_photon: Option<Spectrum>,
+    /// Two-photon absorption cross-section σ₂ (mm⁴ s) against the laser's vacuum
+    /// wavelength (µm), counting two photons per excitation (1 GM = 10⁻⁴⁸ mm⁴ s); `None`
+    /// if not given.
+    pub two_photon: Option<Spectrum>,
+    /// Emission spectrum (relative) against vacuum wavelength (µm); `None` if not given.
+    pub emission: Option<Spectrum>,
+    /// Photons emitted per excitation.
+    pub quantum_yield: f64,
+    /// Lifetime of the excited state (s); `None` if not given.
+    pub lifetime: Option<f64>,
+    /// Where the values come from.
+    pub source: String,
+    /// Where it is, and how much.
+    pub concentrations: Vec<Concentration>,
+}
+
+/// How much of a fluorophore is in one layer of a sample.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Concentration {
+    /// The sample element's id.
+    pub sample: String,
+    /// The layer, counted from 1.
+    pub layer: usize,
+    /// mol/L.
+    pub molar: f64,
 }
 
 /// A mechanical proxy: absorbs whatever hits it.
@@ -345,6 +412,8 @@ pub struct Scene {
     pub split_cutoff: Option<f64>,
     /// Degrees of freedom (see [`dof`]).
     pub dofs: Vec<dof::Dof>,
+    /// Fluorophores in the samples (M11b).
+    pub fluorophores: Vec<Fluorophore>,
 }
 
 /// Default splitting cutoff, as a fraction of the total source power.
@@ -597,6 +666,7 @@ impl Scene {
                 ElementKind::Objective {
                     objective,
                     diameter,
+                    ..
                 } => {
                     let id = &element.id;
                     if !(objective.focal_length > 0.0

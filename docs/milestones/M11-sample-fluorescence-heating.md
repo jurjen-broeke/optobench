@@ -70,9 +70,57 @@ the diffusion approximation here; photon transport by Monte Carlo replaces it in
 
 ## M11b Excitation
 
-- [ ] Fluorophores (user data, with provenance): excitation and emission spectra,
-      extinction coefficient or one-photon cross-section, two-photon cross-section
-      spectrum, quantum yield, lifetime, concentration; placed in a sample layer
+### M11b1 Fluorophores, lasers and the rates
+
+- [x] Fluorophores (user data, with provenance; `[[fluorophore]]` in layouts and
+      sidecars, `optobench_scene::Fluorophore`): emission spectrum, one-photon
+      cross-section (from the extinction coefficient at the peak shaped by a relative
+      excitation spectrum, σ₁ = 1000 ln 10 ε / N_A, or given directly in cm²), two-photon
+      cross-section spectrum (GM), quantum yield, lifetime; placed in sample layers with a
+      concentration (`concentrations = [{ sample, layer, micromolar }]`)
+- [x] Lasers: continuous, or pulsed (`pulse = { repetition_rate_mhz, width_fs, shape,
+      prechirp_fs2 }`, sech² or Gaussian; `power_w` the mean)
+- [x] One-photon excitation rate per molecule σ₁ I / (h ν)
+      (`optobench_analysis::excitation`); the saturation check (σ₁ I τ / (h ν) ≪ 1)
+      reported with the excitation volume (M11b2)
+- [x] Two-photon excitation: rate ½ σ₂ ⟨F²⟩, ⟨F²⟩ = g_p ⟨F⟩² / (f τ) for pulses, g_p
+      computed from the shapes (√(2 ln 2 / π) = 0.664 Gaussian, 2 ln(1 + √2) / 3 = 0.588
+      sech², as Xu and Webb 1996 quote them; their paper is not in the corpus, so the
+      convention, two photons per excitation, follows this plan); per-pulse probability
+      rate / f reported with the volume (M11b2)
+- [x] Pulse broadening: the group-velocity dispersion of each material from its own
+      formula (`optobench_materials::dispersion`: five-point differences at h and h/2,
+      Richardson extrapolated; a tabulated index is refused), summed along the chief ray
+      (ray records gain `media`; an ideal objective adds the GDD its maker states,
+      `group_delay_dispersion_fs2`) after the source's prechirp; a Gaussian pulse widened
+      to τ √(1 + (4 ln 2 · GDD / τ²)²), applied to sech² pulses as an approximation
+      (`excitation::pulse_path`)
+- [x] Checks: GDD of fused silica (Malitson's formula) and of a Schott-form glass against
+      the formulas differentiated by hand (n′ to 10⁻⁹, n″ to 10⁻⁶; catalogue BK7 is not
+      committed, so a Schott formula with chosen coefficients stands in); g_p of both
+      shapes by numerical integration (10⁻¹⁰); Gaussian broadening against the chirped
+      spectrum summed back into time (10⁻⁶); the rates against σ₁ F and ½ σ₂ F² g_p/(f τ);
+      a layout's dispersion along its chief ray (window, objective, water) against the
+      sum by hand (commands `tests/excitation.rs`); ε, GM and µM conversions; refusals
+
+### M11b2 The excitation volume
+
+- [ ] The excitation volume from the M9c2 vectorial PSF at the actual depth (index
+      mismatch and its aberration included), attenuated by the ballistic loss on the way
+      (per ray from its `media`); total excitation per second ∫ rate × concentration dV,
+      the volume's sizes, and the saturation checks (one-photon k τ_f, two-photon per
+      pulse)
+- [ ] Command `excitation`; graphs: excitation rate against depth, excitation maps (x–z),
+      pulse width along the path
+- [ ] Checks: the one-photon rate against σ₁ I / (h ν) for a uniform beam; the two-photon
+      total of a Gaussian–Lorentzian focus against its closed form, ∫ I² dV = π n P² / λ
+      for a Gaussian beam focused in a medium of index n (derived from the beam:
+      ∫ I² dA = P² / (π w²) per plane, integrated over z with w² = w₀² (1 + z² / z_R²),
+      z_R = π w₀² n / λ); Xu and Webb's own expression compared once their paper is in
+      the corpus
+
+### M11b3 FPbase
+
 - [ ] Import from FPbase (fpbase.org; T. J. Lambert, Nat. Methods 16, 277 (2019)) through
       its documented REST API: spectra, extinction coefficient, quantum yield, two-photon
       cross-section where given. Imported by the user like refractiveindex.info data,
@@ -81,27 +129,6 @@ the diffusion approximation here; photon transport by Monte Carlo replaces it in
       be credited, so the import shows that notice and stores the protein's references
       with the data (licence review entry first). FPbase's source code is GPL-3.0 and is
       not read; only the API documentation is
-- [ ] Lasers: continuous, or pulsed with repetition rate and pulse width (sech² or
-      Gaussian)
-- [ ] One-photon excitation rate per molecule σ₁ I / (h ν) from the local irradiance;
-      saturation check against the lifetime (σ₁ I τ / (h ν) ≪ 1)
-- [ ] Two-photon excitation: rate ½ σ₂ ⟨I²⟩ / (h ν)² per molecule (σ₂ the two-photon
-      absorption cross-section, two photons per excitation), with ⟨I²⟩ = g_p ⟨I⟩² / (f τ) for
-      pulses (g_p 0.664 Gaussian, 0.588 sech²; C. Xu and W. W. Webb, J. Opt. Soc. Am. B 13,
-      481 (1996)); per-pulse saturation check
-- [ ] The excitation volume from the M9c2 vectorial PSF at the actual depth (index
-      mismatch and its aberration included), attenuated by the ballistic loss on the way;
-      total excitation per second ∫ rate × concentration dV, and the volume's sizes
-- [ ] Pulse broadening: the group-delay dispersion of every glass on the path from the
-      same dispersion models the trace uses (GDD = λ³ / (2π c²) · d²n/dλ² · L); a Gaussian
-      pulse stretched to τ √(1 + (4 ln 2 · GDD / τ²)²) (e.g. J.-C. Diels and W. Rudolph,
-      Ultrashort Laser Pulse Phenomena, 2nd ed., 2006, ch. 1), which lowers ⟨I²⟩
-- [ ] Graphs: excitation rate against depth, excitation maps (x–z), pulse width along
-      the path
-- [ ] Checks: the one-photon rate against σ₁ I / (h ν) for a uniform beam; the two-photon
-      total of a Gaussian–Lorentzian focus against its closed form (Xu and Webb 1996);
-      GDD of fused silica and BK7 against the dispersion formulas differentiated by hand;
-      Gaussian pulse broadening by a given GDD
 
 ## M11c Emission and the photon budget
 

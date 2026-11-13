@@ -18,9 +18,9 @@ use optobench_scene::{Built, Owner, Scene, SceneTrace, SourceKind};
 use optobench_trace::nonsequential::{End, Role};
 
 /// Planck's constant (J s), exact in the SI since 2019.
-const PLANCK: f64 = 6.626_070_15e-34;
+pub(crate) const PLANCK: f64 = 6.626_070_15e-34;
 /// The speed of light (m/s), exact.
-const LIGHT_SPEED: f64 = 299_792_458.0;
+pub(crate) const LIGHT_SPEED: f64 = 299_792_458.0;
 
 /// An amount of light: power and photon rate.
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
@@ -135,7 +135,7 @@ pub struct Budget {
     pub imbalance: f64,
 }
 
-fn owner_id(scene: &Scene, owner: Owner) -> &str {
+pub(crate) fn owner_id(scene: &Scene, owner: Owner) -> &str {
     match owner {
         Owner::Element(i) => &scene.elements[i].id,
         Owner::Proxy(i) => &scene.proxies[i].id,

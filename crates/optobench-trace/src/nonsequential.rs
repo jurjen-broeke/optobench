@@ -420,12 +420,19 @@ pub struct RayRecord {
     pub faces: Vec<usize>,
     /// The power arriving at each hit (W), in the order of `points[1..]`.
     pub powers: Vec<f64>,
+    /// The medium (index into the system's media) the ray crossed to reach each hit, in
+    /// the order of `points[1..]`; [`NO_MEDIUM`] for the step through an ideal objective
+    /// (from its pupil to its front plane, or back), which holds no modelled medium.
+    pub media: Vec<usize>,
     /// At each refracting face crossed: (face, power not transmitted there), that is
     /// reflected (followed as a child ray or not) and absorbed in its coating (W).
     pub face_losses: Vec<(usize, f64)>,
     /// 0 for a launched ray, 1 for a ray split off a launched ray, and so on.
     pub generation: usize,
 }
+
+/// In [`RayRecord::media`]: the step through an ideal objective, no medium.
+pub const NO_MEDIUM: usize = usize::MAX;
 
 /// What a ray left in one medium's bulk (W).
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -648,6 +655,7 @@ impl NonSequentialSystem {
             detector_point: None,
             faces: Vec::new(),
             powers: Vec::new(),
+            media: Vec::new(),
             face_losses: Vec::new(),
             generation: branch.generation,
         };
@@ -705,6 +713,7 @@ impl NonSequentialSystem {
             record.points.push(ray.position);
             record.faces.push(face_index);
             record.powers.push(ray.power);
+            record.media.push(medium);
             record.optical_paths.push(ray.optical_path);
 
             let r = hit.point.x.hypot(hit.point.y);
@@ -749,6 +758,7 @@ impl NonSequentialSystem {
                         record.points.push(ray.position);
                         record.faces.push(face_index);
                         record.powers.push(ray.power);
+                        record.media.push(medium);
                         record.optical_paths.push(ray.optical_path);
                     }
                 }
@@ -783,6 +793,7 @@ impl NonSequentialSystem {
                             record.points.push(ray.position);
                             record.faces.push(face_index);
                             record.powers.push(ray.power);
+                            record.media.push(NO_MEDIUM);
                             record.optical_paths.push(ray.optical_path);
                             medium = *exit_medium;
                             // It leaves from another place: nothing to skip there.
@@ -829,6 +840,7 @@ impl NonSequentialSystem {
                             record.points.push(ray.position);
                             record.faces.push(face_index);
                             record.powers.push(ray.power);
+                            record.media.push(NO_MEDIUM);
                             record.optical_paths.push(ray.optical_path);
                             medium = face.negative_medium;
                             skip.clear();
