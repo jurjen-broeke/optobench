@@ -23,7 +23,7 @@ the diffusion approximation here; photon transport by Monte Carlo replaces it in
       Appl. Opt. 12, 555 (1973), in all 56 rows from 0.2 to 3.35 µm and at spot checks to
       200 µm (`bundled.rs` tests); marked verified in the asset manifest and ATTRIBUTION.md
 - [ ] Water's index against Daimon & Masumura 2007, once that paper is available (M2c's
-      item stays open for it)
+      item stays open for it; does not hold M11 back)
 - [x] The direct beam: rays lose power at µa + µs, the loss shared in proportion; the
       ledger gains `scattered` (handed to the diffuse light, not followed as rays) and
       still closes; each ray records what it left in each medium (`Deposit`), and the
@@ -325,7 +325,9 @@ emitter is spread through the excited volume, its photons those of the excitatio
       transport part of it moves to M15. Their code (available on request, no licence) is
       not used
 
-      **Result (2026-11-13, commands `tests/podgorski.rs`; not met).** Their conditions as
+      **Decided 2026-11-13: the gap is accepted for M11 and left to M15** (Monte Carlo
+      light transport, and an in-vivo µa if a source turns up); M11 closes with this item
+      open. **Result (2026-11-13, commands `tests/podgorski.rs`; not met).** Their conditions as
       above (NA 0.08 by an ideal lens, which they found heats as NA 0.8; brain a
       cylinder 6 mm by 10 mm as in Stujenske et al.; water and glass thermal values from
       Welch and van Gemert, glass from Valvano's Table 11.4 after Incropera 1990; µa
