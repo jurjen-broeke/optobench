@@ -425,6 +425,198 @@ pub fn sensitivity(
     })
 }
 
+/// One Monte Carlo trial.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Trial {
+    /// Its number in the run.
+    pub index: u64,
+    /// The errors drawn, one per tolerance (mm, radians, a fraction or Δn).
+    pub errors: Vec<f64>,
+    /// What it gave.
+    pub outcome: Outcome,
+}
+
+/// Trial `index` of a run seeded `seed`: every error drawn from the trial's own stream,
+/// applied, compensated and measured.
+pub fn trial(
+    scene: &Scene,
+    tolerancing: &Tolerancing,
+    merit: &[Merit],
+    options: &lm::Options,
+    seed: u64,
+    index: u64,
+) -> Trial {
+    let mut random = Random::stream(seed, index);
+    let errors: Vec<f64> = scene
+        .tolerances
+        .iter()
+        .map(|t| random.draw(t.distribution, t.limit))
+        .collect();
+    let outcome = match apply(scene, &errors) {
+        Ok(s) => evaluate(&s, tolerancing, merit, options),
+        Err(e) => Outcome {
+            values: vec![None; tolerancing.criteria.len()],
+            compensators: Vec::new(),
+            passed: false,
+            failure: Some(e),
+        },
+    };
+    Trial {
+        index,
+        errors,
+        outcome,
+    }
+}
+
+/// The distribution of one criterion over the trials that could measure it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Statistics {
+    /// Trials that measured it.
+    pub measured: usize,
+    /// Mean.
+    pub mean: f64,
+    /// Standard deviation (n − 1).
+    pub deviation: f64,
+    /// The 50th, 90th, 95th and 99th percentiles (nearest rank).
+    pub percentiles: [f64; 4],
+    /// The largest.
+    pub max: f64,
+    /// The share of all trials within its limit (unmeasured trials fail).
+    pub passing: f64,
+}
+
+/// The results of a Monte Carlo run.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MonteCarlo {
+    /// The trials, in order.
+    pub trials: Vec<Trial>,
+    /// The share of trials that pass every criterion.
+    pub yield_fraction: f64,
+    /// Its standard error, √(p (1 − p) / n).
+    pub yield_error: f64,
+    /// Per criterion.
+    pub statistics: Vec<Statistics>,
+    /// Per criterion, per tolerance: its share of the criterion's variance (first-order,
+    /// see [`variance_share`]).
+    pub shares: Vec<Vec<f64>>,
+    /// Per criterion, the tolerances from the largest share to the smallest.
+    pub ranking: Vec<Vec<usize>>,
+    /// Trials that could not be evaluated, with why (index, reason).
+    pub failures: Vec<(u64, String)>,
+}
+
+/// The first-order share of `y`'s variance due to `x`, Var(E[y | x]) / Var(y) (Pearson's
+/// correlation ratio η²; the first-order sensitivity index of variance-based sensitivity
+/// analysis), estimated by sorting the pairs by x into equal bins, less its bias under
+/// independence ((B − 1) / (n − 1) for B bins). Unlike a linear regression it sees
+/// symmetric effects (a criterion that grows with |x|).
+pub fn variance_share(x: &[f64], y: &[f64]) -> f64 {
+    let n = x.len().min(y.len());
+    if n < 4 {
+        return 0.0;
+    }
+    let bins = (n / 20).clamp(2, 20);
+    let mean = y[..n].iter().sum::<f64>() / n as f64;
+    let total: f64 = y[..n].iter().map(|v| (v - mean).powi(2)).sum();
+    if total <= 0.0 {
+        return 0.0;
+    }
+    let mut order: Vec<usize> = (0..n).collect();
+    order.sort_by(|&a, &b| x[a].total_cmp(&x[b]));
+    let mut between = 0.0;
+    for b in 0..bins {
+        let (lo, hi) = (b * n / bins, (b + 1) * n / bins);
+        if hi <= lo {
+            continue;
+        }
+        let m = order[lo..hi].iter().map(|&i| y[i]).sum::<f64>() / (hi - lo) as f64;
+        between += (hi - lo) as f64 * (m - mean).powi(2);
+    }
+    let eta = between / total;
+    let bias = (bins - 1) as f64 / (n - 1) as f64;
+    ((eta - bias) / (1.0 - bias)).clamp(0.0, 1.0)
+}
+
+/// Sums up trials (in any order; they are sorted by index).
+pub fn summarise(scene: &Scene, tolerancing: &Tolerancing, mut trials: Vec<Trial>) -> MonteCarlo {
+    trials.sort_by_key(|t| t.index);
+    let n = trials.len();
+    let passed = trials.iter().filter(|t| t.outcome.passed).count();
+    let p = if n > 0 { passed as f64 / n as f64 } else { 0.0 };
+    let criteria = tolerancing.criteria.len();
+    let mut statistics = Vec::with_capacity(criteria);
+    let mut shares = Vec::with_capacity(criteria);
+    let mut ranking = Vec::with_capacity(criteria);
+    for c in 0..criteria {
+        let measured: Vec<(usize, f64)> = trials
+            .iter()
+            .enumerate()
+            .filter_map(|(k, t)| t.outcome.values[c].map(|v| (k, v)))
+            .collect();
+        let m = measured.len();
+        let values: Vec<f64> = measured.iter().map(|p| p.1).collect();
+        let mean = if m > 0 {
+            values.iter().sum::<f64>() / m as f64
+        } else {
+            f64::NAN
+        };
+        let deviation = if m > 1 {
+            (values.iter().map(|v| (v - mean).powi(2)).sum::<f64>() / (m - 1) as f64).sqrt()
+        } else {
+            0.0
+        };
+        let mut sorted = values.clone();
+        sorted.sort_by(f64::total_cmp);
+        let rank = |q: f64| {
+            if m == 0 {
+                f64::NAN
+            } else {
+                sorted[((q * m as f64).ceil() as usize).clamp(1, m) - 1]
+            }
+        };
+        let limit = tolerancing.criteria[c].limit;
+        statistics.push(Statistics {
+            measured: m,
+            mean,
+            deviation,
+            percentiles: [rank(0.5), rank(0.9), rank(0.95), rank(0.99)],
+            max: sorted.last().copied().unwrap_or(f64::NAN),
+            passing: if n > 0 {
+                values.iter().filter(|v| **v <= limit).count() as f64 / n as f64
+            } else {
+                0.0
+            },
+        });
+        let row: Vec<f64> = (0..scene.tolerances.len())
+            .map(|t| {
+                let x: Vec<f64> = measured.iter().map(|&(k, _)| trials[k].errors[t]).collect();
+                variance_share(&x, &values)
+            })
+            .collect();
+        let mut order: Vec<usize> = (0..row.len()).collect();
+        order.sort_by(|&a, &b| row[b].total_cmp(&row[a]));
+        shares.push(row);
+        ranking.push(order);
+    }
+    let failures = trials
+        .iter()
+        .filter_map(|t| t.outcome.failure.clone().map(|f| (t.index, f)))
+        .collect();
+    MonteCarlo {
+        yield_fraction: p,
+        yield_error: if n > 0 {
+            (p * (1.0 - p) / n as f64).sqrt()
+        } else {
+            0.0
+        },
+        statistics,
+        shares,
+        ranking,
+        failures,
+        trials,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -496,5 +688,22 @@ mod tests {
             Random::stream(7, 0).next_u64(),
             Random::stream(7, 1).next_u64()
         );
+    }
+
+    #[test]
+    fn the_variance_share_sees_linear_and_symmetric_effects() {
+        let mut r = Random::new(3);
+        let n = 4000;
+        let a: Vec<f64> = (0..n).map(|_| r.draw(Distribution::Uniform, 1.0)).collect();
+        let b: Vec<f64> = (0..n).map(|_| r.draw(Distribution::Uniform, 1.0)).collect();
+        let c: Vec<f64> = (0..n).map(|_| r.draw(Distribution::Uniform, 1.0)).collect();
+        // y = a + 0.5 b: shares 0.8 and 0.2 (variances 1/3 and 1/12); c none.
+        let y: Vec<f64> = a.iter().zip(&b).map(|(a, b)| a + 0.5 * b).collect();
+        assert!((variance_share(&a, &y) - 0.8).abs() < 0.03);
+        assert!((variance_share(&b, &y) - 0.2).abs() < 0.03);
+        assert!(variance_share(&c, &y) < 0.02);
+        // y = a²: all of it from a, though a linear fit would find none.
+        let y: Vec<f64> = a.iter().map(|a| a * a).collect();
+        assert!(variance_share(&a, &y) > 0.95);
     }
 }

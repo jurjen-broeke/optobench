@@ -54,19 +54,24 @@ until then every number in a test is from theory (closed forms of the linear cas
 
 ## M14b Monte Carlo and yield
 
-- [ ] Trials: draw, apply, compensate, measure; per criterion the distribution (mean,
-      standard deviation, percentiles) and the yield; failures of a trial (a detector
-      the light misses) counted as failing, with the reason
-- [ ] Trials in parallel on desktop (threads in the command layer; the engine stays
-      single-threaded and builds for wasm32); the same results whatever the number of
-      threads (each trial's draws from its own stream)
-- [ ] Sensitivity from the Monte Carlo itself: each tolerance's share of each
-      criterion's variance (squared standardised regression coefficients, or rank
-      correlation where the response is not linear), and the ranking
-- [ ] Checks: a linear case with a closed form (a centroid that is the sum of uniform
-      decentres: its variance Σ L²/3 and, for two, the triangular distribution's yield);
-      the yield's sampling error within its binomial bound; identical results for 1 and
-      several threads and for the same seed
+- [x] Trials (`tolerance::trial`): every error drawn from the trial's own stream
+      (`Random::stream(seed, index)`), applied, compensated, measured; a trial that cannot
+      be evaluated (no light on a detector, a thickness reaching 0) fails, with the reason
+- [x] `tolerance::summarise`: per criterion mean, standard deviation, the 50th to 99th
+      percentiles, the largest, its passing share; the yield and its binomial standard
+      error √(p (1 − p) / n)
+- [x] Trials in parallel (command `tolerance`, `mode = "monte-carlo"`, threads in the
+      command layer pulling trial numbers; the engine single-threaded)
+- [x] Sensitivity from the Monte Carlo: each tolerance's first-order share of each
+      criterion's variance, Var(E[y | x]) / Var(y) (Pearson's correlation ratio over
+      quantile bins, less its bias under independence), which sees symmetric effects a
+      linear regression misses; the ranking by share
+- [x] Checks: the share estimator on y = a + b/2 (0.8, 0.2), y = a² (all of it) and an
+      unrelated c (none); two uniform decentres of ±L against the triangular difference:
+      E|X| = 2L/3 (within 4 standard errors), the yield 3/4 at |X| ≤ L (within 4 binomial
+      errors), each share exactly 1/10 (E[|X| | u] = (1 + u²)/2: Var 1/45 against 2/9);
+      the same results for 1 and 4 threads, other results for another seed, the larger
+      decentre first for four seeds
 
 ## M14c Report, graphs and the exit check
 

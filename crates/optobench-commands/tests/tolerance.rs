@@ -228,3 +228,105 @@ fn tolerances_are_checked() {
         "no detector `Q`",
     );
 }
+
+/// A lens and its detector each placed off sideways, uniformly within ±`l1` and ±`l2`
+/// (mm); the criterion is the centring at the detector, at most `max`.
+fn two_decentres(l1: f64, l2: f64, max: f64) -> String {
+    format!(
+        "{HEADER}[[element]]\nid = \"L\"\nkind = \"ideal_lens\"\nat = 50\nfocal_length = 100\n\n\
+         [[detector]]\nid = \"D\"\nat = 150\nsize = [10, 10]\npixels = [10, 10]\n\n\
+         [[tolerance]]\nname = \"L_x\"\nkind = \"slide\"\ntarget = \"L\"\naxis = \"x\"\nlimit = {l1}\n\n\
+         [[tolerance]]\nname = \"D_x\"\nkind = \"slide\"\ntarget = \"D\"\naxis = \"x\"\nlimit = {l2}\n\n\
+         [tolerancing]\ncriteria = [ {{ kind = \"centring\", detector = \"D\", max = {max} }} ]\n"
+    )
+}
+
+fn monte_carlo(text: &str, label: &str, extra: serde_json::Value) -> serde_json::Value {
+    let path = std::env::temp_dir().join(format!(
+        "optobench-tolerance-{label}-{}.optobench",
+        std::process::id()
+    ));
+    std::fs::write(&path, text).expect("written");
+    let mut parameters =
+        serde_json::json!({ "path": path.to_string_lossy(), "mode": "monte-carlo" });
+    for (k, v) in extra.as_object().expect("object") {
+        parameters[k] = v.clone();
+    }
+    let result = optobench_commands::Registry::standard()
+        .run("tolerance", &parameters)
+        .unwrap_or_else(|e| panic!("{}", e.message));
+    let _ = std::fs::remove_file(&path);
+    result
+}
+
+#[test]
+fn monte_carlo_of_two_decentres_against_the_triangular_distribution() {
+    // The centroid sits at the lens's decentre less the detector's: the difference of two
+    // uniforms on ±L, triangular on ±2L. E|X| = 2L/3, and |X| ≤ L with probability 3/4.
+    let l = 0.05;
+    let n = 2000;
+    let r = monte_carlo(
+        &two_decentres(l, l, l),
+        "triangle",
+        serde_json::json!({ "trials": n, "seed": 11 }),
+    );
+    let m = &r["monte_carlo"];
+    let mean = m["statistics"][0]["mean"].as_f64().expect("mean");
+    // The mean's standard error: √((2L²/3 − (2L/3)²) / n).
+    let error = ((2.0 * l * l / 3.0 - (2.0 * l / 3.0).powi(2)) / n as f64).sqrt();
+    assert!((mean - 2.0 * l / 3.0).abs() < 4.0 * error, "{mean}");
+    let passing = m["yield"].as_f64().expect("yield");
+    let bound = 4.0 * (0.75f64 * 0.25 / n as f64).sqrt();
+    assert!((passing - 0.75).abs() < bound, "{passing}");
+    assert!(
+        (m["yield_error"].as_f64().expect("error") - (passing * (1.0 - passing) / n as f64).sqrt())
+            .abs()
+            < 1e-12
+    );
+    // Each one's first-order share of |X|'s variance: with U₁, U₂ on ±1,
+    // E[|X| | U₁ = u] = (1 + u²)/2, so Var(E[|X| | U₁]) = Var(u²)/4 = 1/45 against
+    // Var(|X|) = 2/3 − 4/9 = 2/9: exactly 1/10 each, the rest their interaction.
+    let shares: Vec<f64> = m["shares"][0]
+        .as_array()
+        .expect("shares")
+        .iter()
+        .map(|v| v.as_f64().expect("share"))
+        .collect();
+    for share in &shares {
+        assert!((share - 0.1).abs() < 0.03, "{shares:?}");
+    }
+}
+
+#[test]
+fn monte_carlo_is_the_same_for_any_threads_and_its_ranking_holds_across_seeds() {
+    let text = two_decentres(0.05, 0.01, 0.04);
+    let one = monte_carlo(
+        &text,
+        "one",
+        serde_json::json!({ "trials": 300, "seed": 5, "threads": 1 }),
+    );
+    let four = monte_carlo(
+        &text,
+        "four",
+        serde_json::json!({ "trials": 300, "seed": 5, "threads": 4 }),
+    );
+    assert_eq!(one["monte_carlo"], four["monte_carlo"]);
+    let other = monte_carlo(
+        &text,
+        "other",
+        serde_json::json!({ "trials": 300, "seed": 6, "threads": 4 }),
+    );
+    assert_ne!(
+        one["monte_carlo"]["statistics"],
+        other["monte_carlo"]["statistics"]
+    );
+    // The larger decentre ranks first whatever the seed.
+    for seed in 1..=4 {
+        let r = monte_carlo(
+            &text,
+            "rank",
+            serde_json::json!({ "trials": 300, "seed": seed }),
+        );
+        assert_eq!(r["monte_carlo"]["ranking"][0][0], "L_x", "seed {seed}");
+    }
+}

@@ -30,6 +30,7 @@ mod optimize;
 mod parts;
 mod psf;
 mod sweep;
+mod tolerance;
 mod trace;
 
 use serde_json::{Map, Value, json};
@@ -315,6 +316,14 @@ const STANDARD: &[Command] = &[
         effect: Effect::Read,
         summary: "the photon budget of an emitter in a sample: collected by the objective, lost in the sample and at each element and filter, counted by the detectors",
         handler: emission::emission,
+    },
+    Command {
+        id: "tolerance",
+        label: "Tolerance",
+        icon: "tolerance",
+        effect: Effect::Read,
+        summary: "tolerances one at a time (sensitivity) or all at once (Monte Carlo): criteria after compensation, yield, the ranking",
+        handler: tolerance::command,
     },
     Command {
         id: "sweep",

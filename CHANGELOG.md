@@ -5,6 +5,11 @@ with the release that introduced them.
 
 ## Unreleased
 
+- M14b Monte Carlo: new command `tolerance` (sensitivity, or `mode = "monte-carlo"` with
+  `trials`, `seed`, `threads`): trials in parallel, each from its own random stream (the
+  same results for any number of threads), per-criterion statistics, the yield and its
+  error, and each tolerance's first-order share of each criterion's variance with the
+  ranking.
 - M14a tolerances: layouts and sidecars take `[[tolerance]]` (placement slides and tilts,
   DOF errors, lens radius, thickness and index, ideal-lens focal length; uniform, normal
   or end-point) and `[tolerancing]` (criteria with pass limits, compensators). New

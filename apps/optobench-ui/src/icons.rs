@@ -582,6 +582,21 @@ pub fn draw(painter: &Painter, rect: Rect, id: &str, enabled: bool) {
             }
             c.line(&[pos2(32.0, 2.0), pos2(32.0, 30.0)], ACTION, r.beam);
         }
+        "tolerance" => {
+            // A bell curve with its limits marked.
+            let curve: Vec<_> = (0..=40)
+                .map(|k| {
+                    let x = 6.0 + 52.0 * k as f32 / 40.0;
+                    let u = (x - 32.0) / 9.0;
+                    pos2(x, 52.0 - 40.0 * (-0.5 * u * u).exp())
+                })
+                .collect();
+            c.line(&[pos2(4.0, 52.0), pos2(60.0, 52.0)], 2.0, r.guide);
+            c.line(&curve, ACTION, r.beam);
+            for x in [16.0, 48.0] {
+                c.line(&[pos2(x, 8.0), pos2(x, 56.0)], 2.4, r.a3);
+            }
+        }
         "heating" => {
             // A slab warming under a beam: the beam, and rising heat lines.
             c.line(&[pos2(6.0, 40.0), pos2(58.0, 40.0)], 1.8, r.a3);
@@ -892,6 +907,7 @@ pub const ALL: &[&str] = &[
     "emission",
     "graph",
     "sweep",
+    "tolerance",
     "check-moves",
     "bodies",
     "tag-lens",
