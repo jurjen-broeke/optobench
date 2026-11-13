@@ -219,6 +219,7 @@ pub(crate) fn report(
 pub(crate) fn report_paths(
     design: &Path,
     parameter: &Value,
+    suffix: &str,
 ) -> Result<Option<(PathBuf, PathBuf)>, CommandError> {
     let stem = match parameter {
         Value::Bool(false) | Value::Null => return Ok(None),
@@ -236,8 +237,8 @@ pub(crate) fn report_paths(
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_default();
     Ok(Some((
-        stem.with_file_name(format!("{name}.moves.json")),
-        stem.with_file_name(format!("{name}.moves.md")),
+        stem.with_file_name(format!("{name}.{suffix}.json")),
+        stem.with_file_name(format!("{name}.{suffix}.md")),
     )))
 }
 

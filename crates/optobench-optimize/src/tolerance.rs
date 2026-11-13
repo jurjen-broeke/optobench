@@ -250,6 +250,9 @@ pub struct Outcome {
     /// Per criterion its magnitude; `None` where it could not be measured (no light on
     /// the detector).
     pub values: Vec<Option<f64>>,
+    /// Per criterion its residuals (signed: the centroid's x and y offsets, the slope
+    /// errors; one value for a scalar term), as the magnitude is made of.
+    pub residuals: Vec<Option<Vec<f64>>>,
     /// The compensators' values after compensation (mm or radians).
     pub compensators: Vec<(String, f64)>,
     /// Whether every criterion is within its limit.
@@ -258,16 +261,24 @@ pub struct Outcome {
     pub failure: Option<String>,
 }
 
-/// The magnitude of each criterion for a traced scene.
-fn magnitudes(criteria: &[Criterion], traced: &optobench_scene::SceneTrace) -> Vec<Option<f64>> {
+/// Each criterion's residuals for a traced scene (`None` where it cannot be measured).
+fn criterion_residuals(
+    criteria: &[Criterion],
+    traced: &optobench_scene::SceneTrace,
+) -> Vec<Option<Vec<f64>>> {
     criteria
         .iter()
         .map(|c| {
             residuals(std::slice::from_ref(&c.merit), traced)
                 .ok()
-                .map(|r| r[0].iter().map(|v| v * v).sum::<f64>().sqrt())
+                .map(|mut r| r.remove(0))
         })
         .collect()
+}
+
+/// The magnitude of a residual vector.
+fn magnitude(r: &[f64]) -> f64 {
+    r.iter().map(|v| v * v).sum::<f64>().sqrt()
 }
 
 /// Evaluates `scene` (errors applied): the compensators re-optimised on `merit` from
@@ -280,6 +291,7 @@ pub fn evaluate(
 ) -> Outcome {
     let fail = |why: String| Outcome {
         values: vec![None; tolerancing.criteria.len()],
+        residuals: vec![None; tolerancing.criteria.len()],
         compensators: Vec::new(),
         passed: false,
         failure: Some(why),
@@ -310,13 +322,18 @@ pub fn evaluate(
         Ok(t) => t,
         Err(e) => return fail(e.to_string()),
     };
-    let values = magnitudes(&tolerancing.criteria, &traced);
+    let residuals = criterion_residuals(&tolerancing.criteria, &traced);
+    let values: Vec<Option<f64>> = residuals
+        .iter()
+        .map(|r| r.as_deref().map(magnitude))
+        .collect();
     let passed = values
         .iter()
         .zip(&tolerancing.criteria)
         .all(|(v, c)| v.is_some_and(|v| v <= c.limit));
     Outcome {
         values,
+        residuals,
         compensators,
         passed,
         failure: None,
@@ -385,6 +402,7 @@ pub fn sensitivity(
                 Ok(s) => evaluate(&s, tolerancing, merit, options),
                 Err(e) => Outcome {
                     values: vec![None; tolerancing.criteria.len()],
+                    residuals: vec![None; tolerancing.criteria.len()],
                     compensators: Vec::new(),
                     passed: false,
                     failure: Some(e),
@@ -456,6 +474,7 @@ pub fn trial(
         Ok(s) => evaluate(&s, tolerancing, merit, options),
         Err(e) => Outcome {
             values: vec![None; tolerancing.criteria.len()],
+            residuals: vec![None; tolerancing.criteria.len()],
             compensators: Vec::new(),
             passed: false,
             failure: Some(e),
@@ -496,8 +515,10 @@ pub struct MonteCarlo {
     pub yield_error: f64,
     /// Per criterion.
     pub statistics: Vec<Statistics>,
-    /// Per criterion, per tolerance: its share of the criterion's variance (first-order,
-    /// see [`variance_share`]).
+    /// Per criterion, per tolerance: its first-order share of the variance of the
+    /// criterion's residual vector (summed over its components, each weighted by its own
+    /// variance; see [`variance_share`]). The residuals, not the magnitude, because they
+    /// are near linear in the errors, while the magnitude √(a² + b²) mixes them.
     pub shares: Vec<Vec<f64>>,
     /// Per criterion, the tolerances from the largest share to the smallest.
     pub ranking: Vec<Vec<usize>>,
@@ -587,10 +608,44 @@ pub fn summarise(scene: &Scene, tolerancing: &Tolerancing, mut trials: Vec<Trial
                 0.0
             },
         });
+        // The residual components over the measured trials.
+        let components: Vec<Vec<f64>> = {
+            let width = measured
+                .first()
+                .and_then(|&(k, _)| trials[k].outcome.residuals[c].as_ref().map(Vec::len))
+                .unwrap_or(0);
+            (0..width)
+                .map(|j| {
+                    measured
+                        .iter()
+                        .map(|&(k, _)| {
+                            trials[k].outcome.residuals[c]
+                                .as_ref()
+                                .and_then(|r| r.get(j).copied())
+                                .unwrap_or(0.0)
+                        })
+                        .collect()
+                })
+                .collect()
+        };
+        let variance = |y: &[f64]| {
+            let mean = y.iter().sum::<f64>() / y.len().max(1) as f64;
+            y.iter().map(|v| (v - mean).powi(2)).sum::<f64>()
+        };
+        let weights: Vec<f64> = components.iter().map(|y| variance(y)).collect();
+        let total: f64 = weights.iter().sum();
         let row: Vec<f64> = (0..scene.tolerances.len())
             .map(|t| {
                 let x: Vec<f64> = measured.iter().map(|&(k, _)| trials[k].errors[t]).collect();
-                variance_share(&x, &values)
+                if total <= 0.0 {
+                    return 0.0;
+                }
+                components
+                    .iter()
+                    .zip(&weights)
+                    .map(|(y, w)| w * variance_share(&x, y))
+                    .sum::<f64>()
+                    / total
             })
             .collect();
         let mut order: Vec<usize> = (0..row.len()).collect();

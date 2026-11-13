@@ -283,9 +283,8 @@ fn monte_carlo_of_two_decentres_against_the_triangular_distribution() {
             .abs()
             < 1e-12
     );
-    // Each one's first-order share of |X|'s variance: with U₁, U₂ on ±1,
-    // E[|X| | U₁ = u] = (1 + u²)/2, so Var(E[|X| | U₁]) = Var(u²)/4 = 1/45 against
-    // Var(|X|) = 2/3 − 4/9 = 2/9: exactly 1/10 each, the rest their interaction.
+    // Their shares of the residual's variance: the centroid's x offset is U₁ − U₂ (y is
+    // 0), linear, so each has exactly half.
     let shares: Vec<f64> = m["shares"][0]
         .as_array()
         .expect("shares")
@@ -293,7 +292,7 @@ fn monte_carlo_of_two_decentres_against_the_triangular_distribution() {
         .map(|v| v.as_f64().expect("share"))
         .collect();
     for share in &shares {
-        assert!((share - 0.1).abs() < 0.03, "{shares:?}");
+        assert!((share - 0.5).abs() < 0.03, "{shares:?}");
     }
 }
 
@@ -329,4 +328,146 @@ fn monte_carlo_is_the_same_for_any_threads_and_its_ranking_holds_across_seeds() 
         );
         assert_eq!(r["monte_carlo"]["ranking"][0][0], "L_x", "seed {seed}");
     }
+}
+
+/// The golden periscope (crates/optobench-io/tests/step/periscope.*, M6) with tolerances
+/// added: setting errors of its five adjusters, decentres of both lenses and a tilt of
+/// the first, against centring, pointing and collimation on the screen.
+pub fn golden_periscope() -> String {
+    let fixtures =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../optobench-io/tests/step");
+    let text = std::fs::read_to_string(fixtures.join("periscope.optobench")).expect("fixture");
+    let step = fixtures.join("periscope.step");
+    text.replacen(
+        "kind = \"sidecar\"\n",
+        &format!(
+            "kind = \"sidecar\"\nstep = \"{}\"\n",
+            step.to_string_lossy()
+        ),
+        1,
+    ) + "\n\
+        [[tolerance]]\nname = \"M1_y set\"\nkind = \"dof\"\ndof = \"M1_y\"\nlimit = 0.05\n\n\
+        [[tolerance]]\nname = \"M1_d set\"\nkind = \"dof\"\ndof = \"M1_d\"\nlimit = 0.05\n\n\
+        [[tolerance]]\nname = \"M2_y set\"\nkind = \"dof\"\ndof = \"M2_y\"\nlimit = 0.02\n\n\
+        [[tolerance]]\nname = \"M2_d set\"\nkind = \"dof\"\ndof = \"M2_d\"\nlimit = 0.02\n\n\
+        [[tolerance]]\nname = \"L2_z set\"\nkind = \"dof\"\ndof = \"L2_z\"\nlimit = 0.2\n\n\
+        [[tolerance]]\nname = \"L1 decentre\"\nkind = \"slide\"\ntarget = \"L1\"\naxis = \"x\"\nlimit = 0.1\n\n\
+        [[tolerance]]\nname = \"L2 decentre\"\nkind = \"slide\"\ntarget = \"L2\"\naxis = \"y\"\nlimit = 0.05\n\n\
+        [[tolerance]]\nname = \"L1 tilt\"\nkind = \"tilt\"\ntarget = \"L1\"\naxis = \"y\"\nlimit = 0.5\n\n\
+        [tolerancing]\ncriteria = [ { kind = \"centring\", detector = \"screen\", max = 0.5 },\n\
+                    { kind = \"pointing\", detector = \"screen\", max = 0.5 },\n\
+                    { kind = \"collimation\", detector = \"screen\", max = 0.2 } ]\n"
+}
+
+/// The M14 exit check: on the golden periscope the ranking is the same for several seeds,
+/// wherever it is decided by more than the sampling: the leading tolerance of every
+/// criterion is the same, and two tolerances whose mean shares differ by more than 0.05
+/// keep their order in every run. (Tolerances whose shares differ by less, within the
+/// share's scatter from seed to seed, about 0.01 to 0.02 at 600 trials, may swap.)
+#[test]
+fn the_golden_periscope_ranking_is_stable_across_seeds() {
+    let text = golden_periscope();
+    let runs: Vec<serde_json::Value> = (1..=3)
+        .map(|seed| {
+            monte_carlo(
+                &text,
+                "golden",
+                serde_json::json!({ "trials": 600, "seed": seed }),
+            )["monte_carlo"]
+                .clone()
+        })
+        .collect();
+    let criteria = 3;
+    for c in 0..criteria {
+        let first: Vec<&serde_json::Value> = runs.iter().map(|r| &r["ranking"][c][0]).collect();
+        assert!(
+            first.iter().all(|f| *f == first[0]),
+            "criterion {c}: {first:?}"
+        );
+        let shares: Vec<Vec<f64>> = runs
+            .iter()
+            .map(|r| {
+                r["shares"][c]
+                    .as_array()
+                    .expect("shares")
+                    .iter()
+                    .map(|v| v.as_f64().expect("share"))
+                    .collect()
+            })
+            .collect();
+        let tolerances = shares[0].len();
+        let mean: Vec<f64> = (0..tolerances)
+            .map(|k| shares.iter().map(|s| s[k]).sum::<f64>() / shares.len() as f64)
+            .collect();
+        for a in 0..tolerances {
+            for b in 0..tolerances {
+                if mean[a] - mean[b] > 0.05 {
+                    for (run, s) in shares.iter().enumerate() {
+                        assert!(
+                            s[a] > s[b],
+                            "criterion {c}, run {run}: tolerance {a} ({}) below {b} ({})",
+                            s[a],
+                            s[b]
+                        );
+                    }
+                }
+            }
+        }
+    }
+    // What leads: M1's setting about y for centring, L1's decentre for pointing, L2's
+    // height for collimation (as one at a time).
+    assert_eq!(runs[0]["ranking"][0][0], "M1_y set");
+    assert_eq!(runs[0]["ranking"][1][0], "L1 decentre");
+    assert_eq!(runs[0]["ranking"][2][0], "L2_z set");
+}
+
+#[test]
+fn the_report_and_the_graphs() {
+    let dir =
+        std::env::temp_dir().join(format!("optobench-tolerance-report-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("dir");
+    let path = dir.join("decentres.optobench");
+    std::fs::write(&path, two_decentres(0.05, 0.01, 0.04)).expect("written");
+    let path = path.to_string_lossy().into_owned();
+    let registry = optobench_commands::Registry::standard();
+    let r = registry
+        .run("tolerance", &serde_json::json!({ "path": path, "mode": "monte-carlo", "trials": 200, "report": true }))
+        .unwrap_or_else(|e| panic!("{}", e.message));
+    let markdown = std::fs::read_to_string(dir.join("decentres.tolerance.md")).expect("report");
+    assert!(
+        markdown.contains("## Monte Carlo") && markdown.contains("| L_x |"),
+        "{markdown}"
+    );
+    let json: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(dir.join("decentres.tolerance.json")).expect("json"),
+    )
+    .expect("parses");
+    assert_eq!(json["monte_carlo"]["yield"], r["monte_carlo"]["yield"]);
+    assert!(json.get("seconds").is_none());
+    for of in [
+        "tolerance-histogram",
+        "tolerance-sensitivity",
+        "tolerance-yield",
+    ] {
+        let graph = registry
+            .run(
+                "graph",
+                &serde_json::json!({ "path": path, "of": of, "trials": 100 }),
+            )
+            .unwrap_or_else(|e| panic!("{of}: {}", e.message));
+        assert!(graph["graph"]["title"].is_string(), "{of}: {graph}");
+    }
+    let sensitivity = registry
+        .run(
+            "tolerance",
+            &serde_json::json!({ "path": path, "report": dir.join("one").to_string_lossy() }),
+        )
+        .expect("sensitivity");
+    assert!(sensitivity["sensitivity"]["rows"].is_array());
+    assert!(
+        std::fs::read_to_string(dir.join("one.tolerance.md"))
+            .expect("report")
+            .contains("## Sensitivity")
+    );
+    let _ = std::fs::remove_dir_all(&dir);
 }

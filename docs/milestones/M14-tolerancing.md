@@ -1,7 +1,7 @@
 # M14 Tolerancing
 
 Exit criterion (docs/design.md, milestone table): the sensitivity ranking is stable
-across seeds; the runtime is documented.
+across seeds; the runtime is documented. Met 2026-11-13 (M14c).
 
 Scope: Monte Carlo over DOFs, mount and part tolerances; a yield and sensitivity report.
 It builds on M6 (the DOF model, merit terms, the damped least-squares optimiser and the
@@ -75,14 +75,36 @@ until then every number in a test is from theory (closed forms of the linear cas
 
 ## M14c Report, graphs and the exit check
 
-- [ ] Command `tolerance` (sensitivity or Monte Carlo; trials, seed, threads) and a
-      report next to the design (`<design>.tolerance.json` and `.md`): tolerances, the
-      sensitivity table, distributions, yield, the ranking
-- [ ] Graphs: histograms of each criterion with its pass limit, the sensitivity ranking
-      as bars, the yield against the number of trials
-- [ ] Exit check: on the golden periscope (and the local Thorlabs one), the ranking of
-      the top tolerances is the same for several seeds; the runtime per trial and for a
-      full run is measured and written down (as M7's benchmarks are)
+- [x] Command `tolerance` (`mode` `sensitivity` or `monte-carlo`; `trials`, `seed`,
+      `threads`, `max_iterations`) and its report next to the design with `report`
+      (`<design>.tolerance.json`, without run times, and `.tolerance.md`: tolerances,
+      criteria, compensators, the sensitivity table or the Monte Carlo's statistics,
+      yield and shares by rank); the Monte Carlo result holds every trial's values
+- [x] Graphs: `tolerance-histogram` (a criterion's distribution with its pass limit
+      marked), `tolerance-sensitivity` (changes, or shares, in rank order as bars with the
+      tolerances' names), `tolerance-yield` (the running yield and its ±2σ band);
+      `criterion` picks the criterion
+- [x] Ranking by the shares of each criterion's residual vector (its components'
+      first-order shares weighted by their variances), not of its magnitude: the
+      magnitude √(a² + b²) mixes the errors (on the periscope the first-order shares of
+      the pointing magnitude added up to 0.1 and its ranking changed with the seed),
+      while the components are near linear in them
+- [x] Exit check (commands `tests/tolerance.rs`): on the golden periscope (the M6 STEP
+      sidecar with setting errors of its five adjusters, the decentres of both lenses and
+      a tilt of the first; centring, pointing and collimation), three seeds of 600
+      trials: the leading tolerance of every criterion is the same (M1's setting about y,
+      L1's decentre, L2's height: as one at a time), and every two tolerances whose mean
+      shares differ by more than 0.05 keep their order in every run. At 2000 trials and
+      five seeds only tolerances within 0.01 of each other in share swapped. On the local
+      Thorlabs periscope (eight tolerances), 200 trials and three seeds: the same leaders
+      for centring (Mb_tip setting, share 0.35–0.45) and collimation (L2_z setting,
+      0.95); pointing's two leaders, tied at 0.26, swap
+- [x] Runtime (release, Intel Core i7-8750H, 6 cores, 12 threads, 2026-11-13): golden
+      periscope 8.3 ms per trial on one thread, 2.2 ms on four (500 trials: 4.2 s and
+      1.1 s), 2000 trials in 3.1–3.4 s on 12; its sensitivity analysis (17 evaluations)
+      0.15 s. Local Thorlabs periscope (165 solids): 200 trials in 13–15 s on 12 threads
+      (about 0.75 s of trace per trial). A trial with compensators costs one trace per
+      optimiser evaluation (about 10–20 per trial)
 
 ## Open questions
 

@@ -118,7 +118,7 @@ pub(crate) fn optimize(parameters: &Parameters) -> Result<Value, CommandError> {
     let mut written = Value::Null;
     if let Some(parameter) = parameters.get("report") {
         if let Some((json_path, md_path)) =
-            crate::moves::report_paths(std::path::Path::new(path), parameter)?
+            crate::moves::report_paths(std::path::Path::new(path), parameter, "moves")?
         {
             let (report, markdown) =
                 crate::moves::report(&scene, &result, &dofs, &terms, std::path::Path::new(path))?;

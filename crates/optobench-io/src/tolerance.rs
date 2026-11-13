@@ -6,12 +6,14 @@
 //! name = "L1_decentre_x"
 //! kind = "slide"                    # or "tilt" (degrees), "dof", "radius", "thickness",
 //!                                   # "index", "focal_length"
-//! target = "L1"                     # an element, source or detector; in a sidecar a CAD
-//!                                   # occurrence is named by `occurrence = "<path>"`
+//! target = "L1"                     # an element, source or detector; a sidecar element of
+//!                                   # CAD bodies moves its occurrence (as its DOFs), or
+//!                                   # name one by `occurrence = "<path>"`
 //! axis = "x"                        # slide and tilt: "x", "y", "z" or [x, y, z], in the
-//! frame = "local"                   # target's own frame at its nominal pose (default) or
-//!                                   # "scene" (occurrences: scene only)
-//! pivot = [0, 0, 0]                 # tilt: default the target's origin (occurrences: required)
+//! frame = "local"                   # target's own frame at its nominal pose or "scene";
+//!                                   # default local, for CAD elements the assembly frame
+//! pivot = [0, 0, 0]                 # tilt: default the target's origin (CAD elements: the
+//!                                   # centre of their bodies; occurrences: required)
 //! limit = 0.05                      # mm, degrees, a fraction (relative) or Δn
 //! distribution = "uniform"          # or "normal" (σ = limit / 3, truncated), "end" (±limit)
 //!
@@ -39,8 +41,24 @@ use toml::{Table, Value};
 
 use crate::scene_file::{FileError, Item, check_keys, error, items};
 
-/// The `[[tolerance]]` tables, checked against the scene (at its nominal poses).
-pub(crate) fn tolerances(root: &Table, scene: &Scene) -> Result<Vec<Tolerance>, FileError> {
+/// A sidecar element made of CAD bodies: its id, its occurrence, the frame of its first
+/// body and the centre of its bodies (assembly frame), as its DOFs use them.
+#[derive(Debug, Clone)]
+pub(crate) struct CadElement {
+    pub(crate) id: String,
+    pub(crate) occurrence: String,
+    pub(crate) frame: Frame,
+    pub(crate) centre: Vec3,
+}
+
+/// The `[[tolerance]]` tables, checked against the scene (at its nominal poses); `cad`
+/// lists a sidecar's elements made of CAD bodies, which a `target` may name like its
+/// occurrence (axes in the assembly frame by default, tilts about the bodies' centre).
+pub(crate) fn tolerances(
+    root: &Table,
+    scene: &Scene,
+    cad: &[CadElement],
+) -> Result<Vec<Tolerance>, FileError> {
     let mut out: Vec<Tolerance> = Vec::new();
     for item in items(root, "tolerance")? {
         check_keys(
@@ -124,7 +142,10 @@ pub(crate) fn tolerances(root: &Table, scene: &Scene) -> Result<Vec<Tolerance>, 
                 )))
             }
         };
-        // The target, and its frame at the nominal pose (None: the scene frame only).
+        // The target, its frame at the nominal pose (None: the scene frame only), whether
+        // axes default to the scene frame, and its default pivot.
+        let mut scene_default = false;
+        let mut default_pivot: Option<Vec3> = None;
         let (target, frame): (Target, Option<Frame>) = if kind == "dof" {
             let dof = item.text("dof")?;
             if !scene.dofs.iter().any(|d| d.name == dof) {
@@ -151,6 +172,15 @@ pub(crate) fn tolerances(root: &Table, scene: &Scene) -> Result<Vec<Tolerance>, 
                 (Target::Source(id.to_owned()), Some(s.frame))
             } else if let Some(d) = scene.detectors.iter().find(|d| d.id == id) {
                 (Target::Detector(id.to_owned()), Some(d.frame))
+            } else if let Some(c) = cad.iter().find(|c| c.id == id) {
+                if !matches!(kind, "slide" | "tilt") {
+                    return Err(error(format!(
+                        "{context}: `{id}` is made of CAD bodies: it takes slide and tilt tolerances only"
+                    )));
+                }
+                scene_default = true;
+                default_pivot = Some(c.centre);
+                (Target::Occurrence(c.occurrence.clone()), Some(c.frame))
             } else {
                 return Err(error(format!(
                     "{context}: no element, source or detector `{id}` (a CAD part is named by `occurrence`)"
@@ -164,7 +194,7 @@ pub(crate) fn tolerances(root: &Table, scene: &Scene) -> Result<Vec<Tolerance>, 
         let kind = match kind {
             "slide" | "tilt" => {
                 let in_scene = match item.table.get("frame").map(|f| f.as_str()) {
-                    None => frame.is_none(),
+                    None => frame.is_none() || scene_default,
                     Some(Some("scene")) => true,
                     Some(Some("local")) if frame.is_some() => false,
                     _ => {
@@ -199,7 +229,7 @@ pub(crate) fn tolerances(root: &Table, scene: &Scene) -> Result<Vec<Tolerance>, 
                     let pivot = match (item.table.contains_key("pivot"), frame) {
                         (true, Some(f)) if !in_scene => f.to_parent_point(item.vector("pivot")?),
                         (true, _) => item.vector("pivot")?,
-                        (false, Some(f)) => f.origin(),
+                        (false, Some(f)) => default_pivot.unwrap_or_else(|| f.origin()),
                         (false, None) => {
                             return Err(error(format!(
                                 "{context}: a tilt of a CAD occurrence needs its `pivot` (scene frame)"

@@ -5,6 +5,12 @@ with the release that introduced them.
 
 ## Unreleased
 
+- M14c tolerance report and graphs: `tolerance` writes `<design>.tolerance.json` and
+  `.tolerance.md` with `report`; graph kinds `tolerance-histogram`,
+  `tolerance-sensitivity` and `tolerance-yield`. Monte Carlo shares are now taken over
+  each criterion's residual components, which keeps the ranking stable; sidecar
+  tolerances can name a CAD element by its id. Exit check met on the golden periscope;
+  runtimes recorded in the milestone.
 - M14b Monte Carlo: new command `tolerance` (sensitivity, or `mode = "monte-carlo"` with
   `trials`, `seed`, `threads`): trials in parallel, each from its own random stream (the
   same results for any number of threads), per-criterion statistics, the yield and its

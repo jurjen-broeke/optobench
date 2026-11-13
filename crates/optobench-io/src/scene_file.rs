@@ -1909,7 +1909,7 @@ pub fn parse_with(text: &str, lookups: &Lookups) -> Result<Scene, FileError> {
     }
     scene.fluorophores = fluorophores(&root, &scene)?;
     check_dofs(&scene)?;
-    scene.tolerances = crate::tolerance::tolerances(&root, &scene)?;
+    scene.tolerances = crate::tolerance::tolerances(&root, &scene, &[])?;
     scene.placed().map_err(|e| error(e.to_string()))
 }
 

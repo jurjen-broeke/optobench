@@ -154,29 +154,25 @@ pub struct PlacedBody {
     pub faces: Vec<SolidFace>,
 }
 
-/// An element's DOFs: they move its CAD occurrence (every body of it, the mount too).
-/// Axes are in the assembly frame unless a DOF says `frame = "local"` (the body's own
-/// frame); tilts turn about the centre of the element's bodies unless given a `pivot`.
-fn element_dofs(
+/// The CAD occurrence an element's bodies belong to, with the frame of its first body and
+/// the centre of the box around its bodies (assembly frame); `None` without bodies. Its
+/// bodies must all be in one occurrence.
+fn element_occurrence(
     item: &Item,
     bodies: &[PlacedBody],
     found: &[usize],
-) -> Result<Vec<optobench_scene::dof::Dof>, FileError> {
-    if !item.table.contains_key("dof") {
-        return Ok(Vec::new());
-    }
+) -> Result<Option<(String, Frame, Vec3)>, FileError> {
     let occurrences: Vec<String> = found.iter().map(|&i| bodies[i].occurrence()).collect();
     let Some(first) = occurrences.first() else {
-        return Ok(Vec::new());
+        return Ok(None);
     };
     if occurrences.iter().any(|o| o != first) {
         return Err(error(format!(
-            "{}: an element with a DOF must be one CAD occurrence; its bodies are in {}",
+            "{}: an element that moves (a DOF, a tolerance) must be one CAD occurrence; its bodies are in {}",
             item.context,
             occurrences.join(", ")
         )));
     }
-    // The centre of the box around the element's bodies, in the assembly frame.
     let points: Vec<Vec3> = found
         .iter()
         .flat_map(|&i| {
@@ -201,14 +197,28 @@ fn element_dofs(
         });
         (low + high) * 0.5
     };
-    let local = Frame::from_transform(bodies[found[0]].placement);
-    dofs(
-        item,
-        &Target::Occurrence(first.clone()),
-        &local,
-        true,
+    Ok(Some((
+        first.clone(),
+        Frame::from_transform(bodies[found[0]].placement),
         centre,
-    )
+    )))
+}
+
+/// An element's DOFs: they move its CAD occurrence (every body of it, the mount too).
+/// Axes are in the assembly frame unless a DOF says `frame = "local"` (the body's own
+/// frame); tilts turn about the centre of the element's bodies unless given a `pivot`.
+fn element_dofs(
+    item: &Item,
+    bodies: &[PlacedBody],
+    found: &[usize],
+) -> Result<Vec<optobench_scene::dof::Dof>, FileError> {
+    if !item.table.contains_key("dof") {
+        return Ok(Vec::new());
+    }
+    let Some((occurrence, local, centre)) = element_occurrence(item, bodies, found)? else {
+        return Ok(Vec::new());
+    };
+    dofs(item, &Target::Occurrence(occurrence), &local, true, centre)
 }
 
 impl PlacedBody {
@@ -774,6 +784,7 @@ pub fn read(text: &str, sidecar: &Path, lookups: &Lookups) -> Result<Read, FileE
     let mut tagged = vec![false; bodies.len()];
     // Bodies an element names, tagged or not (a library part's mount).
     let mut claimed = vec![false; bodies.len()];
+    let mut cad: Vec<crate::tolerance::CadElement> = Vec::new();
     let mut parts: Vec<PartMatch> = Vec::new();
 
     for item in items(&root, "element")? {
@@ -891,6 +902,16 @@ pub fn read(text: &str, sidecar: &Path, lookups: &Lookups) -> Result<Read, FileE
                 claimed[i] = true;
             }
             scene.dofs.extend(element_dofs(&item, &bodies, &found)?);
+            if let Some((path, frame, centre)) =
+                element_occurrence(&item, &bodies, &found).unwrap_or(None)
+            {
+                cad.push(crate::tolerance::CadElement {
+                    id: item.text("id")?.to_owned(),
+                    occurrence: path,
+                    frame,
+                    centre,
+                });
+            }
             continue;
         }
         let kind = item.text("kind")?;
@@ -1039,6 +1060,16 @@ pub fn read(text: &str, sidecar: &Path, lookups: &Lookups) -> Result<Read, FileE
             }
         }
         scene.dofs.extend(element_dofs(&item, &bodies, &found)?);
+        if let Some((path, frame, centre)) =
+            element_occurrence(&item, &bodies, &found).unwrap_or(None)
+        {
+            cad.push(crate::tolerance::CadElement {
+                id: item.text("id")?.to_owned(),
+                occurrence: path,
+                frame,
+                centre,
+            });
+        }
     }
 
     // Products named after a library part: their glass bodies become lenses.
@@ -1147,7 +1178,7 @@ pub fn read(text: &str, sidecar: &Path, lookups: &Lookups) -> Result<Read, FileE
     }
     scene.fluorophores = crate::scene_file::fluorophores(&root, &scene)?;
     crate::scene_file::check_dofs(&scene)?;
-    scene.tolerances = crate::tolerance::tolerances(&root, &scene)?;
+    scene.tolerances = crate::tolerance::tolerances(&root, &scene, &cad)?;
     let scene = scene.placed().map_err(|e| error(e.to_string()))?;
     Ok(Read { scene, parts })
 }
