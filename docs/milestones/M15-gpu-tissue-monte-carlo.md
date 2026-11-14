@@ -84,14 +84,17 @@ descriptions; no code is adapted.
       36.1, p = 0.999). Speed on an AMD Radeon Pro 555X against one core of an Intel Core
       i7-8750H (both release): 6.5 µs against 195 µs per packet, 30×
 
-## M15c Non-sequential batches on the GPU
+## M15c Non-sequential batches on the GPU (deferred)
 
-- [ ] Ray batches through faces with analytic surfaces (planes, spheres, conics, ideal
-      lenses and objectives) on the GPU; B-spline and other exact B-rep faces stay on the
-      CPU (decided here: their Newton iterations and trimming loops are a large port for
-      little gain while STEP scenes are mostly analytic)
-- [ ] Check: the same detector powers, centroids and ledgers as the CPU trace, within f32
-      accuracy, on the golden scenes
+Deferred 2026-11-14, by decision: M15's exit criterion is met without it (the GPU equals
+the CPU and the published benchmarks, both through the tissue walk). A port worth having
+must carry STEP scenes: trimmed faces tested against their boundary loops (M7's segment
+trees and plane grids), cylinders, cones, tori and B-splines besides planes and spheres,
+and a BVH over the mounts' faces, all in f32 WGSL, for a trace M7 already brought to
+about 0.4 s on the Thorlabs periscope. Rays on the CPU's threads (M7's open item) are
+likely to give more for much less, and come first if speed is needed.
+
+- [ ] Ray batches on the GPU (moved to the open questions)
 
 ## M15d Fluence and heating from the Monte Carlo
 
@@ -118,5 +121,8 @@ descriptions; no code is adapted.
       the paper's 100 mW is measured. 500 µm against 150 µm: +29 % (measured +20 ± 7 %)
 
 ## Open questions
+
+- Non-sequential ray batches on the GPU (M15c, deferred): worth it only if they carry STEP
+  scenes; rays on CPU threads first.
 
 - Polarisation in the tissue walk (ch. 7 of Welch and van Gemert): not planned.
