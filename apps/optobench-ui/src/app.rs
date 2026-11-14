@@ -59,6 +59,8 @@ pub struct App {
     graph_dialog: bool,
     /// The kinds ticked in it (kept for next time).
     graph_choice: Vec<&'static str>,
+    /// New's chooser is open: planar, or a table with this pitch (mm).
+    new_dialog: Option<f64>,
 }
 
 /// Where in the design file an item of the view is written: its table and the entry.
@@ -204,6 +206,7 @@ impl App {
             graph_cursor: None,
             graph_dialog: false,
             graph_choice: vec!["spot"],
+            new_dialog: None,
         };
         if let Some(path) = path {
             app.open(path);
@@ -282,7 +285,7 @@ impl App {
                 Action::Right => self.camera.right(),
                 Action::Isometric => self.camera.isometric(),
                 Action::Rays => self.show_rays = !self.show_rays,
-                Action::New => self.new_layout(),
+                Action::New => self.new_dialog = Some(25.0),
                 Action::Undo => {
                     if let Some(doc) = &mut self.doc {
                         doc.undo();
@@ -538,7 +541,67 @@ impl App {
     }
 
     /// Starts a new planar layout at the path typed in the title bar, and opens it.
-    fn new_layout(&mut self) {
+    /// New's chooser: a planar layout, or a table layout on a breadboard of a pitch.
+    fn new_dialog(&mut self, ctx: &egui::Context) {
+        let Some(mut pitch) = self.new_dialog else {
+            return;
+        };
+        let mut open = true;
+        let mut chosen: Option<Option<f64>> = None;
+        egui::Window::new("New layout")
+            .collapsible(false)
+            .resizable(false)
+            .open(&mut open)
+            .anchor(egui::Align2::CENTER_CENTER, Vec2::ZERO)
+            .show(ctx, |ui| {
+                if ui
+                    .button("Planar")
+                    .on_hover_text("Items placed along a folded optical axis")
+                    .clicked()
+                {
+                    chosen = Some(None);
+                }
+                ui.separator();
+                ui.horizontal(|ui| {
+                    if ui
+                        .button("Table")
+                        .on_hover_text("Items placed on the holes of a breadboard, at a height")
+                        .clicked()
+                    {
+                        chosen = Some(Some(pitch));
+                    }
+                    ui.label(RichText::new("pitch").color(DARK.text_dim));
+                    ui.add(
+                        egui::DragValue::new(&mut pitch)
+                            .range(1.0..=200.0)
+                            .speed(0.1)
+                            .suffix(" mm"),
+                    );
+                    if ui
+                        .small_button("25 mm")
+                        .on_hover_text("Metric breadboard")
+                        .clicked()
+                    {
+                        pitch = 25.0;
+                    }
+                    if ui
+                        .small_button("1 in")
+                        .on_hover_text("Imperial breadboard, 25.4 mm")
+                        .clicked()
+                    {
+                        pitch = 25.4;
+                    }
+                });
+            });
+        self.new_dialog = open.then_some(pitch);
+        if let Some(table) = chosen {
+            self.new_dialog = None;
+            self.new_layout(table);
+        }
+    }
+
+    /// Starts a new layout: planar, or a table with this pitch (mm).
+    fn new_layout(&mut self, table: Option<f64>) {
         let typed = self.open_path.trim();
         let path = if typed.is_empty() || PathBuf::from(typed).exists() {
             let base = std::env::current_dir().unwrap_or_default();
@@ -551,7 +614,13 @@ impl App {
         };
         let result = optobench_commands::Registry::standard().run(
             "edit",
-            &json!({ "path": path.to_string_lossy(), "create": { "layout": "planar" } }),
+            &json!({
+                "path": path.to_string_lossy(),
+                "create": match table {
+                    Some(pitch) => json!({ "layout": "table", "pitch": pitch }),
+                    None => json!({ "layout": "planar" }),
+                },
+            }),
         );
         match result {
             Ok(_) => {
@@ -1897,6 +1966,7 @@ impl eframe::App for App {
         self.confirm_dialog(&ctx);
         self.licence_dialog(&ctx);
         self.graph_dialog(&ctx);
+        self.new_dialog(&ctx);
         self.screenshot(&ctx);
     }
 }
@@ -2106,6 +2176,32 @@ mod exit {
     }
 
     #[test]
+    fn new_starts_a_table_layout_on_a_breadboard() {
+        let dir = scratch("new-table");
+        let path = dir.join("bench.optobench");
+        let mut h = window(None, &dir);
+        click(&mut h, "Workspace");
+        click(&mut h, "Layout");
+        h.state_mut().open_path = path.to_string_lossy().into_owned();
+        click(&mut h, "New");
+        click(&mut h, "1 in");
+        click(&mut h, "Table");
+        let text = std::fs::read_to_string(&path).expect("New made the file");
+        assert!(
+            text.contains("layout = \"table\"") && text.contains("pitch = 25.4"),
+            "{text}"
+        );
+        click(&mut h, "Source");
+        assert!(errors(&h).is_empty(), "{:?}", errors(&h));
+        // The board is listed, and its Properties give the pitch.
+        click(&mut h, "Breadboard");
+        assert!(
+            h.query_by_label("Keep this size").is_some(),
+            "the board's Properties"
+        );
+    }
+
+    #[test]
     fn an_item_is_moved_and_turned_by_dragging_its_handles() {
         // The table periscope's screen at hole (8, 0): Move on, its x arrow dragged
         // about two pitches to the right (seen from above) puts it at hole (10, 0); its
@@ -2283,6 +2379,7 @@ mod exit {
         click(&mut h, "Layout");
         h.state_mut().open_path = path.to_string_lossy().into_owned(); // typed in the title bar
         click(&mut h, "New");
+        click(&mut h, "Planar");
         assert!(path.is_file(), "New made the file");
         for add in ["Source", "Lens", "Detector"] {
             click(&mut h, add);

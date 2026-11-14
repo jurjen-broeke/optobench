@@ -31,6 +31,9 @@ the alignment irises go.
       stands: its hole and height at a glance
 - [x] The browser lists the Breadboard (show, hide, select); its Properties set the
       pitch, the size in holes and the corner hole, or keep the fitted size
+- [x] New asks what to start: a planar layout, or a table layout with its pitch (25 mm,
+      1 in or typed); before, New made only planar layouts, so a new design never showed
+      a board (found by the user, 2026-11-14)
 - [x] `edit` sets keys in `[table]`, `[planar]` and `[trace]` (`section`), making the
       section when it is missing
 

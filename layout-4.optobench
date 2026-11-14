@@ -1,0 +1,11 @@
+format = "optobench/1"
+kind = "layout"
+layout = "planar"
+
+[[source]]
+id = "S1"
+kind = "collimated"
+wavelength_um = 0.55
+power_w = 0.001
+diameter = 4.0
+at = 0.0

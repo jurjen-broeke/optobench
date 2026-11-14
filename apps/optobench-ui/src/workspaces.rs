@@ -117,7 +117,9 @@ impl Action {
             Action::Fit => "fit the scene to the view",
             Action::Top | Action::Front | Action::Right | Action::Isometric => "a standard view",
             Action::Rays => "show or hide the traced rays",
-            Action::New => "start a new planar layout at the path typed in the title bar",
+            Action::New => {
+                "start a new layout at the path typed in the title bar: planar, or a table on a breadboard"
+            }
             Action::Undo => "put the file back as it was before the last change",
             Action::Remove => "take the selected item out of the design",
             Action::AddLens => "add a biconvex singlet after the last item",
