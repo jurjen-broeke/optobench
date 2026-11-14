@@ -57,7 +57,7 @@ fn part(surfaces: &[f64], thickness: &[f64], diameter: f64) -> Part {
         number: "PC-30".into(),
         part_type: PartType::Lens,
         source: "test".into(),
-        outline: Outline::Round { diameter },
+        outline: Some(Outline::Round { diameter }),
         clear_aperture: None,
         surfaces: surfaces
             .iter()
@@ -68,6 +68,7 @@ fn part(surfaces: &[f64], thickness: &[f64], diameter: f64) -> Part {
         coating: None,
         coatings: vec![],
         products: vec!["pc-lens".into()],
+        adjusters: Vec::new(),
     }
 }
 
@@ -174,10 +175,10 @@ fn rectangular_plate_axis_comes_from_its_thinnest_pair_of_faces() {
     assert_eq!(p.rim_radius, None);
     let dichroic = Part {
         part_type: PartType::Filter,
-        outline: Outline::Rectangular {
+        outline: Some(Outline::Rectangular {
             width: 25.0,
             height: 36.0,
-        },
+        }),
         ..part(&[f64::INFINITY, f64::INFINITY], &[1.1], 0.0)
     };
     let c = closest(&dichroic, &p, None).expect("comparable");
@@ -283,4 +284,84 @@ fn profile_surfaces_name_their_faces() {
     let p = read(&lens);
     assert_eq!(p.surface_faces, vec![vec![1], vec![2, 3]]);
     assert_eq!(p.flipped().surface_faces, vec![vec![2, 3], vec![1]]);
+}
+
+#[test]
+fn mounts_hold_adjusters_and_no_optics() {
+    let slide = |name: &str, reach: Reach| Adjuster {
+        name: name.into(),
+        kind: AdjusterKind::Slide,
+        axis: Vec3::X,
+        pivot: None,
+        reach,
+    };
+    let mount = Part {
+        part_type: PartType::Mount,
+        number: "XY1".into(),
+        outline: None,
+        surfaces: vec![],
+        thickness: vec![],
+        glass: vec![],
+        products: vec![],
+        adjusters: vec![
+            slide(
+                "x",
+                Reach::Range {
+                    low: -1.0,
+                    high: 1.0,
+                },
+            ),
+            slide("z", Reach::Travel(12.7)),
+        ],
+        ..part(&[], &[], 1.0)
+    };
+    assert_eq!(mount.check(), Ok(()));
+    assert!(!mount.part_type.transmits() && !mount.part_type.is_optic());
+    let library = Library::new(vec![
+        mount.clone(),
+        part(&[30.0, f64::INFINITY], &[5.0], 25.4),
+    ])
+    .expect("two parts");
+    assert!(library.mount("example/xy1").is_some());
+    assert!(
+        library.mount("example/PC-30").is_none(),
+        "a lens is no mount"
+    );
+
+    let fails = |m: Part, words: &str| {
+        let e = m.check().expect_err(words);
+        assert!(e.contains(words), "{e}");
+    };
+    fails(
+        Part {
+            adjusters: vec![],
+            ..mount.clone()
+        },
+        "at least one adjuster",
+    );
+    fails(
+        Part {
+            outline: Some(Outline::Round { diameter: 25.4 }),
+            ..mount.clone()
+        },
+        "no optics",
+    );
+    let mut twice = mount.clone();
+    twice.adjusters[1].name = "x".into();
+    fails(twice, "two adjusters are named `x`");
+    let mut pivoted = mount.clone();
+    pivoted.adjusters[0].pivot = Some(Vec3::ZERO);
+    fails(pivoted, "a slide has no pivot");
+    let mut backwards = mount.clone();
+    backwards.adjusters[0].reach = Reach::Range {
+        low: 1.0,
+        high: -1.0,
+    };
+    fails(backwards, "from low to high");
+    let mut still = mount.clone();
+    still.adjusters[0].axis = Vec3::ZERO;
+    fails(still, "no direction");
+    let mut lens = part(&[30.0, f64::INFINITY], &[5.0], 25.4);
+    lens.adjusters = mount.adjusters.clone();
+    fails(lens, "only a mount has adjusters");
 }

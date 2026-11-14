@@ -5,6 +5,15 @@ with the release that introduced them.
 
 ## Unreleased
 
+- Mounts in the parts library: a part file of `type = "mount"` keeps a mount's
+  adjusters and ranges from its spec sheet; designs name it by key
+  (`mount = "thorlabs/CXY1A"`), a design's own `[[mount]]` of that id taking precedence.
+  `parts` lists mounts with their adjusters, `embed` keeps the ones a design uses.
+- Rays in parallel (M7): the non-sequential trace runs its rays on every core
+  (`[trace] threads`, default 0 for every core; 1 for the calling thread), with records
+  and power ledger the same bit for bit as on one thread; wasm32 stays on one. The
+  Thorlabs expander periscope traces 5.8× faster on 6 cores (0.065 s), its optimisation
+  4.9×.
 - M15d light by Monte Carlo: `fluence` and `heating` (and their graphs) take
   `transport = "monte-carlo"` (`packets`, `seed`, `gpu`, `threads`), run on the GPU when
   one is found, else on the CPU's threads; diffusion stays the default. The brain heating

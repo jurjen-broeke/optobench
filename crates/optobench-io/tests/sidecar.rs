@@ -79,6 +79,7 @@ fn step_lens_traces_like_the_same_lens_defined_inline() {
         solids: vec![],
         // As the sidecar has it by default.
         split_cutoff: Some(optobench_scene::DEFAULT_SPLIT_CUTOFF),
+        threads: 0,
         dofs: Vec::new(),
         fluorophores: Vec::new(),
         thermal: Vec::new(),
@@ -221,7 +222,7 @@ fn library_part_coatings_land_on_their_own_faces() {
         number: "PC-30".into(),
         part_type: PartType::Lens,
         source: "hand-written for the golden cage relay".into(),
-        outline: Outline::Round { diameter: 25.4 },
+        outline: Some(Outline::Round { diameter: 25.4 }),
         clear_aperture: Some(22.9),
         surfaces: vec![
             PartSurface {
@@ -235,6 +236,7 @@ fn library_part_coatings_land_on_their_own_faces() {
         coating: None,
         coatings: vec![CoatingSpec::Curve("c".into()), CoatingSpec::Ideal],
         products: vec!["pc-lens".into()],
+        adjusters: Vec::new(),
     };
     let library = Library::new(vec![part]).expect("one part");
     let materials = |name: &str| Err(format!("no material `{name}`"));

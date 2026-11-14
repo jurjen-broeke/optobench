@@ -14,7 +14,7 @@ pub mod graph;
 pub mod library;
 pub mod merit;
 pub mod mesh;
-mod mounts;
+pub mod mounts;
 pub mod placements;
 pub mod refractiveindex;
 pub mod resolved;

@@ -32,21 +32,117 @@
 //! changes the mount's entry key by key (a `value`, `locked`, another `range`); other
 //! entries are added. The expansion is done on the file's tables before anything else
 //! reads them.
+//!
+//! A mount in the user's parts library (`type = "mount"`, see `library`) is named by its
+//! key: `mount = "thorlabs/CXY1A"`. Its adjusters are in the element's own frame
+//! (`frame = "local"`): in a layout the element's frame, +z along its optical axis; in a
+//! sidecar the frame of the element's body as the STEP file places it, which follows the
+//! vendor's model. Where that frame's axes are not the mount's, the design names the DOF
+//! and gives its `axis` (and `frame`), key by key as above. A `[[mount]]` in the file
+//! with the same id as a library key is used instead of the library's (ids, like keys,
+//! ignore case), and `embed`
+//! keeps the library mounts a design uses in its `[resolved]` section.
 
+use optobench_library::{AdjusterKind, Library, Part, Reach};
 use toml::{Table, Value};
 
 use crate::scene_file::{FileError, check_keys, error};
 
-/// Expands every `mount = …` in `[[element]]`, `[[source]]` and `[[detector]]` tables into
-/// their `dof` lists and removes the `[[mount]]` tables.
-pub(crate) fn expand(root: &mut Table) -> Result<(), FileError> {
-    let Some(list) = root.remove("mount") else {
-        return Ok(());
+/// The library mounts the items of a file name (by key, as the library writes them),
+/// leaving out names the file's own `[[mount]]` tables define. For `embed`.
+pub fn library_mounts(root: &Table, library: &Library) -> Vec<String> {
+    let own: Vec<&str> = root
+        .get("mount")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|m| m.get("id").and_then(Value::as_str))
+        .collect();
+    let mut keys: Vec<String> = Vec::new();
+    for kind in ["element", "source", "detector"] {
+        for item in root
+            .get(kind)
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+        {
+            let names: Vec<&str> = match item.get("mount") {
+                Some(Value::String(s)) => vec![s.as_str()],
+                Some(Value::Array(a)) => a.iter().filter_map(Value::as_str).collect(),
+                _ => Vec::new(),
+            };
+            for name in names {
+                if own.iter().any(|o| o.eq_ignore_ascii_case(name)) {
+                    continue;
+                }
+                if let Some(part) = library.mount(name) {
+                    if !keys.contains(&part.key()) {
+                        keys.push(part.key());
+                    }
+                }
+            }
+        }
+    }
+    keys
+}
+
+/// A library mount's adjusters as `[[mount]]` adjuster tables, in the item's frame.
+fn library_adjusters(part: &Part) -> Vec<Value> {
+    let vector = |v: optobench_math::Vec3| {
+        Value::Array(vec![
+            Value::Float(v.x),
+            Value::Float(v.y),
+            Value::Float(v.z),
+        ])
     };
-    let list = list
-        .as_array()
-        .cloned()
-        .ok_or_else(|| error("`mount` must be a list of tables ([[mount]])"))?;
+    part.adjusters
+        .iter()
+        .map(|a| {
+            let mut t = Table::new();
+            t.insert("name".into(), Value::String(a.name.clone()));
+            t.insert(
+                "kind".into(),
+                Value::String(
+                    match a.kind {
+                        AdjusterKind::Slide => "slide",
+                        AdjusterKind::Tilt => "tilt",
+                    }
+                    .into(),
+                ),
+            );
+            t.insert("axis".into(), vector(a.axis));
+            t.insert("frame".into(), Value::String("local".into()));
+            if let Some(p) = a.pivot {
+                t.insert("pivot".into(), vector(p));
+            }
+            match a.reach {
+                Reach::Unlimited => {}
+                Reach::Range { low, high } => {
+                    t.insert(
+                        "range".into(),
+                        Value::Array(vec![Value::Float(low), Value::Float(high)]),
+                    );
+                }
+                Reach::Travel(travel) => {
+                    t.insert("travel".into(), Value::Float(travel));
+                }
+            }
+            Value::Table(t)
+        })
+        .collect()
+}
+
+/// Expands every `mount = …` in `[[element]]`, `[[source]]` and `[[detector]]` tables into
+/// their `dof` lists and removes the `[[mount]]` tables. Names not defined in the file are
+/// looked up as mounts in `library`.
+pub(crate) fn expand(root: &mut Table, library: &Library) -> Result<(), FileError> {
+    let list = match root.remove("mount") {
+        None => Vec::new(),
+        Some(list) => list
+            .as_array()
+            .cloned()
+            .ok_or_else(|| error("`mount` must be a list of tables ([[mount]])"))?,
+    };
     let mut mounts: Vec<(String, Table)> = Vec::new();
     for (n, value) in list.iter().enumerate() {
         let context = format!("[[mount]] number {}", n + 1);
@@ -58,7 +154,7 @@ pub(crate) fn expand(root: &mut Table) -> Result<(), FileError> {
             .get("id")
             .and_then(Value::as_str)
             .ok_or_else(|| error(format!("{context}: missing `id`")))?;
-        if mounts.iter().any(|(m, _)| m == id) {
+        if mounts.iter().any(|(m, _)| m.eq_ignore_ascii_case(id)) {
             return Err(error(format!("{context}: a second mount `{id}`")));
         }
         let context = format!("[[mount]] `{id}`");
@@ -129,15 +225,38 @@ pub(crate) fn expand(root: &mut Table) -> Result<(), FileError> {
             };
             let mut entries: Vec<Table> = Vec::new();
             for name in &names {
-                let (_, mount) = mounts
+                let (adjusters, source) = match mounts
                     .iter()
-                    .find(|(m, _)| m == name)
-                    .ok_or_else(|| error(format!("{context}: no [[mount]] `{name}`")))?;
-                for a in mount["adjusters"].as_array().into_iter().flatten() {
+                    .find(|(m, _)| m.eq_ignore_ascii_case(name))
+                {
+                    Some((_, mount)) => (
+                        mount["adjusters"].as_array().cloned().unwrap_or_default(),
+                        mount["source"].clone(),
+                    ),
+                    None => match library.get(name) {
+                        Some(part) if part.part_type.is_optic() => {
+                            return Err(error(format!(
+                                "{context}: `{}` in the parts library is a {}, not a mount",
+                                part.key(),
+                                part.part_type.as_str()
+                            )));
+                        }
+                        Some(part) => (
+                            library_adjusters(part),
+                            Value::String(format!("{} ({})", part.source, part.key())),
+                        ),
+                        None => {
+                            return Err(error(format!(
+                                "{context}: no [[mount]] `{name}` in the file, and no mount `{name}` in the parts library (see the `parts` command)"
+                            )));
+                        }
+                    },
+                };
+                for a in &adjusters {
                     let mut entry = a.as_table().cloned().unwrap_or_default();
                     let adjuster = entry["name"].as_str().unwrap_or("?").to_owned();
                     entry.insert("name".into(), Value::String(format!("{id}_{adjuster}")));
-                    entry.insert("source".into(), mount["source"].clone());
+                    entry.insert("source".into(), source.clone());
                     entries.push(entry);
                 }
             }

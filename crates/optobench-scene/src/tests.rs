@@ -62,6 +62,7 @@ fn empty() -> Scene {
         detectors: vec![],
         solids: vec![],
         split_cutoff: None,
+        threads: 0,
         dofs: Vec::new(),
         fluorophores: Vec::new(),
         thermal: Vec::new(),

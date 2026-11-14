@@ -54,6 +54,14 @@ pub const COINCIDENT: f64 = 1e-6;
 /// Default limit on interactions per ray.
 pub const DEFAULT_INTERACTION_LIMIT: usize = 1000;
 
+/// Rays per thread below which tracing uses fewer threads.
+#[cfg(not(target_arch = "wasm32"))]
+const MIN_RAYS_PER_THREAD: usize = 32;
+
+/// Chunks of rays per thread, so threads that finish early take more.
+#[cfg(not(target_arch = "wasm32"))]
+const CHUNKS_PER_THREAD: usize = 8;
+
 /// The geometry of a face in its local frame.
 #[derive(Debug, Clone)]
 pub enum Shape {
@@ -517,6 +525,11 @@ pub struct NonSequentialSystem {
     /// `None` (the default) follows only the transmitted part and books the reflection as
     /// reflected.
     pub split_cutoff: Option<f64>,
+    /// Threads to trace rays on: 0 (the default) uses every core the platform reports, 1
+    /// traces on the calling thread. Rays are independent, so the records and ledger are
+    /// the same, bit for bit, whatever the count; on wasm32 rays are always traced on the
+    /// calling thread.
+    pub threads: usize,
     /// The search index over `faces`, if built, with the faces' bounding boxes.
     index: Option<(Bvh, Vec<Aabb>)>,
 }
@@ -530,6 +543,7 @@ impl NonSequentialSystem {
             start_medium: 0,
             interaction_limit: DEFAULT_INTERACTION_LIMIT,
             split_cutoff: None,
+            threads: 0,
             index: None,
         }
     }
@@ -630,12 +644,7 @@ impl NonSequentialSystem {
 
     /// Traces one ray and every ray split off it: the launched ray's record first.
     pub fn trace_tree(&self, launched: Ray) -> Vec<RayRecord> {
-        let mut pending = vec![Branch::root(launched, self.start_medium)];
-        let mut records = Vec::new();
-        while let Some(branch) = pending.pop() {
-            records.push(self.trace_branch(branch, &mut pending));
-        }
-        records
+        self.trace_tree_from(launched, self.start_medium)
     }
 
     fn trace_branch(&self, branch: Branch, children: &mut Vec<Branch>) -> RayRecord {
@@ -970,19 +979,84 @@ impl NonSequentialSystem {
         &self,
         rays: impl IntoIterator<Item = (Ray, usize)>,
     ) -> (Vec<RayRecord>, Ledger) {
+        let rays: Vec<(Ray, usize)> = rays.into_iter().collect();
+        let trees = self.trace_trees(&rays);
         let mut ledger = Ledger::default();
-        let mut records = Vec::new();
-        for (ray, medium) in rays {
-            let mut pending = vec![Branch::root(ray, medium)];
-            let mut tree = Vec::new();
-            while let Some(branch) = pending.pop() {
-                tree.push(self.trace_branch(branch, &mut pending));
-            }
-            for record in tree {
-                ledger.add(&record);
-                records.push(record);
-            }
+        let mut records = Vec::with_capacity(trees.iter().map(Vec::len).sum());
+        // Booked in the rays' order, so the sums do not depend on the threads.
+        for record in trees.into_iter().flatten() {
+            ledger.add(&record);
+            records.push(record);
         }
         (records, ledger)
+    }
+
+    /// As [`Self::trace_tree`], the ray starting in `medium`.
+    fn trace_tree_from(&self, ray: Ray, medium: usize) -> Vec<RayRecord> {
+        let mut pending = vec![Branch::root(ray, medium)];
+        let mut tree = Vec::new();
+        while let Some(branch) = pending.pop() {
+            tree.push(self.trace_branch(branch, &mut pending));
+        }
+        tree
+    }
+
+    /// The threads to use for `rays` rays.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn thread_count(&self, rays: usize) -> usize {
+        let available = match self.threads {
+            0 => std::thread::available_parallelism().map_or(1, usize::from),
+            n => n,
+        };
+        // A thread is worth starting for some tens of rays at least.
+        available.min(rays / MIN_RAYS_PER_THREAD).max(1)
+    }
+
+    /// Every ray's tree, in the rays' order.
+    fn trace_trees(&self, rays: &[(Ray, usize)]) -> Vec<Vec<RayRecord>> {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let threads = self.thread_count(rays.len());
+            if threads > 1 {
+                return self.trace_trees_threaded(rays, threads);
+            }
+        }
+        rays.iter()
+            .map(|&(r, m)| self.trace_tree_from(r, m))
+            .collect()
+    }
+
+    /// Chunks of rays handed out to `threads` threads as they come free (rays differ a lot
+    /// in cost: some leave at once, others split many times), put back in order.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn trace_trees_threaded(&self, rays: &[(Ray, usize)], threads: usize) -> Vec<Vec<RayRecord>> {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let chunk = rays.len().div_ceil(threads * CHUNKS_PER_THREAD).max(1);
+        let chunks: Vec<&[(Ray, usize)]> = rays.chunks(chunk).collect();
+        let next = AtomicUsize::new(0);
+        let mut done: Vec<(usize, Vec<Vec<RayRecord>>)> = std::thread::scope(|scope| {
+            let workers: Vec<_> = (0..threads)
+                .map(|_| {
+                    scope.spawn(|| {
+                        let mut out = Vec::new();
+                        loop {
+                            let k = next.fetch_add(1, Ordering::Relaxed);
+                            let Some(part) = chunks.get(k) else {
+                                break;
+                            };
+                            let trees = part.iter().map(|&(r, m)| self.trace_tree_from(r, m));
+                            out.push((k, trees.collect()));
+                        }
+                        out
+                    })
+                })
+                .collect();
+            workers
+                .into_iter()
+                .flat_map(|w| w.join().unwrap_or_else(|e| std::panic::resume_unwind(e)))
+                .collect()
+        });
+        done.sort_unstable_by_key(|(k, _)| *k);
+        done.into_iter().flat_map(|(_, trees)| trees).collect()
     }
 }

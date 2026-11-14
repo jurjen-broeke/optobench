@@ -81,9 +81,17 @@ pub(crate) fn design(parameters: &Parameters) -> Result<Design, CommandError> {
 /// stream, so the result does not depend on the threads).
 pub(crate) fn run_trials(design: &Design, seed: u64, trials: u64, threads: usize) -> Vec<Trial> {
     let threads = threads.clamp(1, trials.max(1) as usize);
+    // With trials on threads, each trial traces on its own thread (not threads in threads).
+    let mut single = None;
+    if threads > 1 {
+        let mut scene = design.scene.clone();
+        scene.threads = 1;
+        single = Some(scene);
+    }
+    let scene = single.as_ref().unwrap_or(&design.scene);
     let one = |index: u64| {
         trial(
-            &design.scene,
+            scene,
             &design.tolerancing,
             &design.merit,
             &design.options,
