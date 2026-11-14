@@ -40,7 +40,14 @@ fn choices(table: &str, key: &str) -> Option<&'static [&'static str]> {
     match (table, key) {
         ("element", "kind") => Some(&["lens", "mirror", "filter"]),
         ("source", "kind") => Some(&["collimated", "point", "gaussian"]),
-        ("merit", "kind") => Some(&["focus", "centring", "pointing", "collimation", "power"]),
+        ("merit", "kind") => Some(&[
+            "focus",
+            "centring",
+            "pointing",
+            "collimation",
+            "diameter",
+            "power",
+        ]),
         ("proxy", "kind") => Some(&["tube"]),
         _ => None,
     }

@@ -180,7 +180,8 @@
 //! concentrations = [ { sample = "S", layer = 2, micromolar = 10.0 } ]
 //!
 //! [[merit]]                         # what `optimize` aligns for: see `merit`
-//! kind = "focus"                    # or "centring", "pointing", "collimation", "power"
+//! kind = "focus"                    # or "centring", "pointing", "collimation", "diameter"
+//!                                   # (with target, mm), "power"
 //! detector = "screen"
 //!
 //! # [resolved] ...                  # written by `embed`, always last: see `resolved`

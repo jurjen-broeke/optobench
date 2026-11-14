@@ -33,6 +33,7 @@ fn term_json(merit: &Merit, start: &[f64], end: &[f64]) -> Value {
     let unit = match merit.term {
         Term::Focus | Term::Centring { .. } => "mm",
         Term::Pointing { .. } | Term::Collimation => "mrad",
+        Term::Diameter { .. } => "mm",
         Term::Power => "fraction",
         Term::Headroom => "half range",
     };

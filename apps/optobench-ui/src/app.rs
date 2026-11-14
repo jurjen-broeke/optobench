@@ -1559,12 +1559,25 @@ impl App {
                 let first = design["detector"][0]["id"].as_str().map(str::to_owned);
                 ui.horizontal_wrapped(|ui| {
                     ui.label(RichText::new("Add merit").color(DARK.text_dim));
-                    for kind in ["focus", "centring", "pointing", "collimation", "power"] {
+                    for kind in [
+                        "focus",
+                        "centring",
+                        "pointing",
+                        "collimation",
+                        "diameter",
+                        "power",
+                    ] {
                         if let Some(detector) = &first {
                             if ui.small_button(kind).clicked() {
+                                // A diameter needs its target: 5 mm to start, set in its
+                                // editor.
+                                let mut entry =
+                                    vec![json!(["kind", kind]), json!(["detector", detector])];
+                                if kind == "diameter" {
+                                    entry.push(json!(["target", 5.0]));
+                                }
                                 operations.push(json!({
-                                    "op": "add", "table": "merit",
-                                    "entry": [["kind", kind], ["detector", detector]],
+                                    "op": "add", "table": "merit", "entry": entry,
                                 }));
                             }
                         }
