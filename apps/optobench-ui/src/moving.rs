@@ -288,9 +288,13 @@ mod tests {
     use super::*;
 
     #[test]
+    #[allow(
+        clippy::float_cmp,
+        reason = "snapped values are whole multiples of the step"
+    )]
     fn turns_are_right_handed_and_steps_snap() {
         let p = turned([1.0, 0.0, 5.0], [0.0, 0.0, 5.0], 2, 90.0);
-        assert!((p[0]).abs() < 1e-12 && (p[1] - 1.0).abs() < 1e-12 && p[2] == 5.0);
+        assert!((p[0]).abs() < 1e-12 && (p[1] - 1.0).abs() < 1e-12 && (p[2] - 5.0).abs() < 1e-12);
         let q = turned([0.0, 1.0, 0.0], [0.0; 3], 0, 90.0);
         assert!((q[2] - 1.0).abs() < 1e-12, "y turns to z about x");
         assert_eq!(snapped(37.0, 25.0), 25.0);
