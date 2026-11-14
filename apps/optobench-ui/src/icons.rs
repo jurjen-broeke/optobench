@@ -306,6 +306,16 @@ pub fn draw(painter: &Painter, rect: Rect, id: &str, enabled: bool) {
                 r.line,
             );
         }
+        "move" => {
+            // Four arrows out from the middle, as the move handles.
+            for (dx, dy) in [(1.0, 0.0), (-1.0, 0.0), (0.0, 1.0), (0.0, -1.0)] {
+                let tip = pos2(32.0 + 24.0 * dx, 32.0 + 24.0 * dy);
+                c.line(&[pos2(32.0, 32.0), tip], NAVIGATION, r.line);
+                let side = Vec2::new(-dy, dx) * 6.0;
+                let back = Vec2::new(dx, dy) * -9.0;
+                c.fill(&[tip, tip + back + side, tip + back - side], r.line);
+            }
+        }
         "fit" => {
             for (a, b, d) in [
                 (pos2(8.0, 22.0), pos2(8.0, 8.0), pos2(22.0, 8.0)),
@@ -875,6 +885,7 @@ pub const ALL: &[&str] = &[
     "reload",
     "undo",
     "fit",
+    "move",
     "isometric",
     "top",
     "front",

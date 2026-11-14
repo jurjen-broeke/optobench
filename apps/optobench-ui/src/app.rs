@@ -29,6 +29,11 @@ pub struct App {
     selected: Option<usize>,
     hidden: Vec<bool>,
     show_rays: bool,
+    /// Whether a table layout's breadboard is drawn.
+    show_board: bool,
+    /// The Move tool, when it is on (its steps are kept while it is off).
+    move_on: bool,
+    move_tool: crate::moving::MoveTool,
     fit_pending: bool,
     open_path: String,
     /// Where imported materials, parts and curves are; empty for the platform's default.
@@ -50,6 +55,31 @@ pub struct App {
     /// The graph cursor of the last frame (its x quantity and value), shown on graphs
     /// whose x measures the same.
     graph_cursor: Option<(optobench_analysis::graph::Unit, f64)>,
+    /// The Graph button's chooser is open.
+    graph_dialog: bool,
+    /// The kinds ticked in it (kept for next time).
+    graph_choice: Vec<&'static str>,
+    /// New's chooser is open: planar, or a table with this pitch (mm).
+    new_dialog: Option<f64>,
+    /// A new item waiting for a hole to be clicked, with the library part it is.
+    placing: Option<(New, Option<String>)>,
+    /// The Lens chooser is open: its search text and the library's lenses.
+    lens_chooser: Option<(String, Vec<Value>)>,
+    /// A lens's STEP file dropped on the window: its prescription and what is typed to
+    /// make it a library part.
+    lens_import: Option<LensImport>,
+}
+
+/// A lens's STEP file being made a library part.
+struct LensImport {
+    path: PathBuf,
+    found: Value,
+    vendor: String,
+    part: String,
+    source: String,
+    glasses: Vec<String>,
+    /// Clear aperture (mm): from the spec sheet; a STEP file does not give it.
+    clear_aperture: f64,
 }
 
 /// Where in the design file an item of the view is written: its table and the entry.
@@ -62,6 +92,87 @@ fn entry_of(design: &Value, id: &str) -> Option<(String, Value, usize)> {
         }
     }
     None
+}
+
+/// Where the scene placed an item or source of this id (mm).
+fn origin_of(scene: &crate::document::Scene, id: &str) -> Option<crate::camera::V3> {
+    scene
+        .items
+        .iter()
+        .find(|i| i.id == id)
+        .and_then(|i| i.origin)
+        .or_else(|| scene.sources.iter().find(|s| s.id == id).map(|s| s.origin))
+}
+
+/// What the Move tool moves: the selected entry (an item, or a source chosen in the
+/// browser) or, when it is in a group, every member of its group.
+struct Movable {
+    /// Each member's place in the file and where it stands.
+    members: Vec<editors::Member>,
+    /// Where the selected one stands: the handles' place, turns' centre.
+    anchor: crate::camera::V3,
+    /// The members' outlines.
+    outline: Vec<Vec<crate::camera::V3>>,
+    /// Members that are scene items, and sources, by index.
+    items: Vec<usize>,
+    sources: Vec<usize>,
+    /// The group, if a group is moved.
+    group: Option<String>,
+}
+
+fn movable(
+    scene: &crate::document::Scene,
+    selected: Option<usize>,
+    focus: Option<&(String, String)>,
+) -> Option<Movable> {
+    if scene.design["layout"] != "table" {
+        return None;
+    }
+    let id = match (selected.and_then(|i| scene.items.get(i)), focus) {
+        (Some(item), _) => item.id.clone(),
+        (None, Some((t, id))) if t == "source" => id.clone(),
+        _ => return None,
+    };
+    let (_, entry, _) = entry_of(&scene.design, &id)?;
+    let group = entry["group"].as_str().map(str::to_owned);
+    let ids: Vec<String> = match &group {
+        None => vec![id.clone()],
+        Some(g) => ["element", "source", "detector", "proxy"]
+            .iter()
+            .filter_map(|t| scene.design[*t].as_array())
+            .flatten()
+            .filter(|e| e["group"] == g.as_str())
+            .filter_map(|e| e["id"].as_str().map(str::to_owned))
+            .collect(),
+    };
+    let mut moving = Movable {
+        members: Vec::new(),
+        anchor: [0.0; 3],
+        outline: Vec::new(),
+        items: Vec::new(),
+        sources: Vec::new(),
+        group,
+    };
+    for member in &ids {
+        let (table, entry, index) = entry_of(&scene.design, member)?;
+        let origin = if let Some(i) = scene.items.iter().position(|it| &it.id == member) {
+            moving.items.push(i);
+            moving.outline.extend(scene.items[i].lines.iter().cloned());
+            scene.items[i].origin?
+        } else {
+            let j = scene.sources.iter().position(|s| &s.id == member)?;
+            let s = &scene.sources[j];
+            moving.sources.push(j);
+            let tip = [0, 1, 2].map(|k| s.origin[k] + s.axis[k] * 20.0);
+            moving.outline.push(vec![s.origin, tip]);
+            s.origin
+        };
+        if *member == id {
+            moving.anchor = origin;
+        }
+        moving.members.push((table, entry, index, origin));
+    }
+    Some(moving)
 }
 
 /// A few words on what operations change, for the runs strip.
@@ -121,6 +232,9 @@ impl App {
             selected: None,
             hidden: Vec::new(),
             show_rays: true,
+            show_board: true,
+            move_on: false,
+            move_tool: crate::moving::MoveTool::default(),
             fit_pending: false,
             open_path: String::new(),
             data_directory: data_directory
@@ -151,6 +265,12 @@ impl App {
                 done: Default::default(),
             }),
             graph_cursor: None,
+            graph_dialog: false,
+            graph_choice: vec!["spot"],
+            new_dialog: None,
+            placing: None,
+            lens_chooser: None,
+            lens_import: None,
         };
         if let Some(path) = path {
             app.open(path);
@@ -160,6 +280,9 @@ impl App {
             .and_then(|w| w.parse::<usize>().ok())
         {
             app.workspace = w.min(WORKSPACES.len() - 1);
+        }
+        if std::env::var_os("OPTOBENCH_UI_MOVE").is_some() {
+            app.move_on = true;
         }
         if let Some(stage) = std::env::var("OPTOBENCH_UI_STAGE")
             .ok()
@@ -226,7 +349,7 @@ impl App {
                 Action::Right => self.camera.right(),
                 Action::Isometric => self.camera.isometric(),
                 Action::Rays => self.show_rays = !self.show_rays,
-                Action::New => self.new_layout(),
+                Action::New => self.new_dialog = Some(25.0),
                 Action::Undo => {
                     if let Some(doc) = &mut self.doc {
                         doc.undo();
@@ -239,10 +362,19 @@ impl App {
                         self.apply(vec![op]);
                     }
                 }
-                Action::AddLens => self.add(New::Lens),
-                Action::AddMirror => self.add(New::Mirror),
-                Action::AddSource => self.add(New::Source),
-                Action::AddDetector => self.add(New::Detector),
+                Action::AddLens => {
+                    let lenses = self
+                        .quick("parts", json!({}))
+                        .and_then(|v| v["parts"].as_array().cloned())
+                        .unwrap_or_default()
+                        .into_iter()
+                        .filter(|p| p["type"] == "lens")
+                        .collect();
+                    self.lens_chooser = Some((String::new(), lenses));
+                }
+                Action::AddMirror => self.start_adding(New::Mirror),
+                Action::AddSource => self.start_adding(New::Source),
+                Action::AddDetector => self.start_adding(New::Detector),
                 Action::TagLens | Action::TagMirror => {
                     if let Ok(op) = self.tagging(action == Action::TagMirror) {
                         self.apply(vec![op]);
@@ -253,7 +385,20 @@ impl App {
                         doc.apply_optimised();
                     }
                 }
+                Action::Move => {
+                    // Pressed again, Move ends as Escape does: the pending move is dropped.
+                    self.move_on = !self.move_on;
+                    self.move_tool.drag = None;
+                    self.move_tool.pending.clear();
+                    // The pitch is the step to start with on a table.
+                    if let Some(pitch) = self.design().and_then(|d| d["table"]["pitch"].as_f64()) {
+                        if self.move_tool.pitch != Some(pitch) {
+                            self.move_tool.step = pitch;
+                        }
+                    }
+                }
             },
+            Control::Command("graph") => self.graph_dialog = true,
             Control::Command(id) => {
                 let writes = optobench_commands::Registry::standard()
                     .get(id)
@@ -293,9 +438,238 @@ impl App {
             .map(|s| &s.design)
     }
 
-    fn add(&mut self, new: New) {
-        if let Some(op) = self.design().and_then(|d| editors::add(d, new)) {
+    /// Adds a new item: on a table layout it waits for a hole to be clicked (or Enter),
+    /// on a planar layout it goes after the last item at once.
+    fn start_adding(&mut self, new: New) {
+        self.start_adding_part(new, None);
+    }
+
+    /// As `start_adding`, a lens from the parts library when `library` names it.
+    fn start_adding_part(&mut self, new: New, library: Option<String>) {
+        if self.design().is_some_and(|d| d["layout"] == "table") {
+            self.end_move();
+            self.placing = Some((new, library));
+        } else if let Some(op) = self
+            .design()
+            .and_then(|d| editors::add_at(d, new, None, library.as_deref()))
+        {
             self.apply(vec![op]);
+        }
+    }
+
+    /// Lens: a singlet (its shape and focal length set in Properties), or a lens of the
+    /// parts library (singlets, cemented and air-spaced doublets, triplets).
+    fn lens_chooser(&mut self, ctx: &egui::Context) {
+        let Some((mut search, lenses)) = self.lens_chooser.take() else {
+            return;
+        };
+        let mut open = true;
+        let mut chosen: Option<Option<String>> = None;
+        egui::Window::new("Lens")
+            .collapsible(false)
+            .resizable(false)
+            .open(&mut open)
+            .anchor(egui::Align2::CENTER_CENTER, Vec2::ZERO)
+            .show(ctx, |ui| {
+                if ui
+                    .button("Singlet")
+                    .on_hover_text("A biconvex singlet: set its shape and focal length in Properties")
+                    .clicked()
+                {
+                    chosen = Some(None);
+                }
+                ui.separator();
+                ui.label(RichText::new("From the parts library").strong());
+                if lenses.is_empty() {
+                    ui.label(
+                        RichText::new("No lenses yet: drop a lens's STEP file (or a part file) on the window to add one")
+                            .color(DARK.text_dim),
+                    );
+                } else {
+                    ui.add(egui::TextEdit::singleline(&mut search).hint_text("search"));
+                    egui::ScrollArea::vertical().max_height(260.0).show(ui, |ui| {
+                        for p in &lenses {
+                            let key = p["key"].as_str().unwrap_or("?");
+                            if !search.is_empty()
+                                && !key.to_lowercase().contains(&search.to_lowercase())
+                            {
+                                continue;
+                            }
+                            let glass = p["glass"].as_array().cloned().unwrap_or_default();
+                            let air = glass.iter().filter(|g| *g == "standard-air").count();
+                            let what = match (glass.len() - air, air > 0) {
+                                (1, _) => "singlet".to_owned(),
+                                (2, false) => "cemented doublet".to_owned(),
+                                (2, true) => "air-spaced doublet".to_owned(),
+                                (3, false) => "cemented triplet".to_owned(),
+                                (n, _) => format!("{n} glasses"),
+                            };
+                            let size = p["diameter_mm"]
+                                .as_f64()
+                                .map_or(String::new(), |d| format!(" · Ø{d}"));
+                            if ui
+                                .button(key)
+                                .on_hover_text(p["source"].as_str().unwrap_or(""))
+                                .clicked()
+                            {
+                                chosen = Some(Some(key.to_owned()));
+                            }
+                            ui.label(
+                                RichText::new(format!("{what}{size}"))
+                                    .color(DARK.text_dim)
+                                    .size(11.0),
+                            );
+                        }
+                    });
+                }
+            });
+        match chosen {
+            Some(library) => self.start_adding_part(New::Lens, library),
+            None if open => self.lens_chooser = Some((search, lenses)),
+            None => {}
+        }
+    }
+
+    /// A lens's STEP file dropped: what was found, and the vendor, part number, spec
+    /// sheet and glasses that make it a library part.
+    fn lens_import_dialog(&mut self, ctx: &egui::Context) {
+        let Some(mut import) = self.lens_import.take() else {
+            return;
+        };
+        let mut open = true;
+        let mut done = false;
+        egui::Window::new("Lens from STEP")
+            .collapsible(false)
+            .resizable(false)
+            .open(&mut open)
+            .anchor(egui::Align2::CENTER_CENTER, Vec2::ZERO)
+            .show(ctx, |ui| {
+                let f = &import.found;
+                ui.label(
+                    RichText::new(format!(
+                        "{}, Ø{} mm{}",
+                        f["kind"].as_str().unwrap_or("?"),
+                        f["diameter_mm"].as_f64().unwrap_or(0.0),
+                        match f["left_out"].as_u64() {
+                            Some(0) | None => String::new(),
+                            Some(n) => format!(" ({n} mount bodies left out)"),
+                        }
+                    ))
+                    .strong(),
+                );
+                let show = |v: &Value| match v {
+                    Value::String(s) => s.clone(),
+                    v => v.to_string(),
+                };
+                let radii: Vec<String> = f["radii_mm"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .map(show)
+                    .collect();
+                let thickness: Vec<String> = f["thickness_mm"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .map(show)
+                    .collect();
+                let gaps: Vec<String> = f["gaps"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .map(show)
+                    .collect();
+                egui::Grid::new("lens-import")
+                    .num_columns(2)
+                    .show(ui, |ui| {
+                        for (k, r) in radii.iter().enumerate() {
+                            ui.label(RichText::new(format!("R{}", k + 1)).color(DARK.text_dim));
+                            ui.label(format!("{r} mm"));
+                            ui.end_row();
+                            if let (Some(t), Some(g)) = (thickness.get(k), gaps.get(k)) {
+                                ui.label(
+                                    RichText::new(format!("tc{}", k + 1)).color(DARK.text_dim),
+                                );
+                                ui.label(format!("{t} mm, {g}"));
+                                ui.end_row();
+                            }
+                        }
+                    });
+                ui.separator();
+                egui::Grid::new("lens-import-fields")
+                    .num_columns(2)
+                    .show(ui, |ui| {
+                        for (label, value) in [
+                            ("vendor", &mut import.vendor),
+                            ("part number", &mut import.part),
+                            ("spec sheet", &mut import.source),
+                        ] {
+                            ui.label(RichText::new(label).color(DARK.text_dim));
+                            ui.text_edit_singleline(value);
+                            ui.end_row();
+                        }
+                        ui.label(RichText::new("clear aperture").color(DARK.text_dim))
+                            .on_hover_text("from the spec sheet; a STEP file does not give it");
+                        ui.add(
+                            egui::DragValue::new(&mut import.clear_aperture)
+                                .range(0.1..=1000.0)
+                                .speed(0.1)
+                                .suffix(" mm"),
+                        );
+                        ui.end_row();
+                        for (k, glass) in import.glasses.iter_mut().enumerate() {
+                            ui.label(
+                                RichText::new(format!("glass {}", k + 1)).color(DARK.text_dim),
+                            )
+                            .on_hover_text(
+                                "a material name (bundled or imported, e.g. N-BK7) or an index",
+                            );
+                            ui.text_edit_singleline(glass);
+                            ui.end_row();
+                        }
+                    });
+                let ready = !import.vendor.trim().is_empty()
+                    && !import.part.trim().is_empty()
+                    && !import.source.trim().is_empty()
+                    && import.glasses.iter().all(|g| !g.trim().is_empty());
+                if ui
+                    .add_enabled(ready, egui::Button::new("Import"))
+                    .on_hover_text("Write the part file into the parts library")
+                    .clicked()
+                {
+                    done = true;
+                }
+            });
+        if done {
+            let glass: Vec<Value> = import
+                .glasses
+                .iter()
+                .map(|g| {
+                    g.trim()
+                        .parse::<f64>()
+                        .map_or_else(|_| json!(g.trim()), |n| json!(n))
+                })
+                .collect();
+            let made = self.quick(
+                "part-from-step",
+                json!({
+                    "path": import.path.to_string_lossy(),
+                    "vendor": import.vendor.trim(),
+                    "part": import.part.trim(),
+                    "source": import.source.trim(),
+                    "glass": glass,
+                    "clear_aperture": import.clear_aperture,
+                    "import": true,
+                }),
+            );
+            if let Some(made) = made {
+                let key = made["part"]["key"].as_str().unwrap_or("?").to_owned();
+                self.notice = Some((false, format!("Lens imported: {key}; add it with Lens")));
+                return;
+            }
+        }
+        if open {
+            self.lens_import = Some(import);
         }
     }
 
@@ -398,6 +772,25 @@ impl App {
                     self.open(path);
                 }
             }
+            "step" | "stp" => {
+                if let Some(found) = self.quick("part-from-step", json!({ "path": shown })) {
+                    let glasses = found["glasses"].as_u64().unwrap_or(1) as usize;
+                    // A start: 90 % of the diameter, as spec sheets often give it.
+                    let clear_aperture =
+                        (found["diameter_mm"].as_f64().unwrap_or(25.4) * 9.0).round() / 10.0;
+                    self.lens_import = Some(LensImport {
+                        path,
+                        found,
+                        clear_aperture,
+                        vendor: String::new(),
+                        part: name.to_uppercase(),
+                        source: format!(
+                            "{name}: radii from its STEP file, glasses from its spec sheet"
+                        ),
+                        glasses: vec![String::new(); glasses],
+                    });
+                }
+            }
             "yml" | "yaml" => {
                 if let Some(preview) =
                     self.quick("import-material", json!({ "path": shown, "name": name }))
@@ -415,7 +808,7 @@ impl App {
                 self.notice = Some((
                     true,
                     format!(
-                        "{name}.{other}: drop a design (.optobench), a part, a curve table (.xlsx, .csv, .zip) or a material (.yml)"
+                        "{name}.{other}: drop a design (.optobench), a part, a lens's STEP file, a curve table (.xlsx, .csv, .zip) or a material (.yml)"
                     ),
                 ));
             }
@@ -471,7 +864,74 @@ impl App {
     }
 
     /// Starts a new planar layout at the path typed in the title bar, and opens it.
-    fn new_layout(&mut self) {
+    /// New's chooser: a planar layout, or a table layout on a breadboard of a pitch.
+    fn new_dialog(&mut self, ctx: &egui::Context) {
+        let Some(mut pitch) = self.new_dialog else {
+            return;
+        };
+        let mut open = true;
+        let mut chosen: Option<Option<f64>> = None;
+        egui::Window::new("New layout")
+            .collapsible(false)
+            .resizable(false)
+            .open(&mut open)
+            .anchor(egui::Align2::CENTER_CENTER, Vec2::ZERO)
+            .show(ctx, |ui| {
+                if ui
+                    .button("Planar")
+                    .on_hover_text("Items placed along a folded optical axis")
+                    .clicked()
+                {
+                    chosen = Some(None);
+                }
+                ui.separator();
+                ui.horizontal(|ui| {
+                    if ui
+                        .button("Table")
+                        .on_hover_text("Items placed on the holes of a breadboard, at a height")
+                        .clicked()
+                    {
+                        chosen = Some(Some(pitch));
+                    }
+                    ui.label(RichText::new("pitch").color(DARK.text_dim));
+                    ui.add(
+                        egui::DragValue::new(&mut pitch)
+                            .range(1.0..=200.0)
+                            .speed(0.1)
+                            .suffix(" mm"),
+                    );
+                    if ui
+                        .small_button("25 mm")
+                        .on_hover_text("Metric breadboard")
+                        .clicked()
+                    {
+                        pitch = 25.0;
+                    }
+                    if ui
+                        .small_button("1 in")
+                        .on_hover_text("Imperial breadboard, 25.4 mm")
+                        .clicked()
+                    {
+                        pitch = 25.4;
+                    }
+                });
+            });
+        self.new_dialog = open.then_some(pitch);
+        if let Some(table) = chosen {
+            self.new_dialog = None;
+            self.new_layout(table);
+        }
+    }
+
+    /// Ends the Move tool, dropping what is pending (written already when applied).
+    fn end_move(&mut self) {
+        self.move_on = false;
+        self.move_tool.drag = None;
+        self.move_tool.pending.clear();
+    }
+
+    /// Starts a new layout: planar, or a table with this pitch (mm).
+    fn new_layout(&mut self, table: Option<f64>) {
         let typed = self.open_path.trim();
         let path = if typed.is_empty() || PathBuf::from(typed).exists() {
             let base = std::env::current_dir().unwrap_or_default();
@@ -484,7 +944,13 @@ impl App {
         };
         let result = optobench_commands::Registry::standard().run(
             "edit",
-            &json!({ "path": path.to_string_lossy(), "create": { "layout": "planar" } }),
+            &json!({
+                "path": path.to_string_lossy(),
+                "create": match table {
+                    Some(pitch) => json!({ "layout": "table", "pitch": pitch }),
+                    None => json!({ "layout": "planar" }),
+                },
+            }),
         );
         match result {
             Ok(_) => {
@@ -894,6 +1360,57 @@ impl App {
                         }
                     });
                 };
+                if crate::board::Board::of(&scene.design, &scene).is_some() {
+                    ui.horizontal(|ui| {
+                        ui.checkbox(&mut self.show_board, "")
+                            .on_hover_text("Show or hide the breadboard");
+                        swatch(ui, Color32::from_rgb(56, 61, 71));
+                        let key = ("table".to_owned(), "board".to_owned());
+                        let on = self.focus.as_ref() == Some(&key);
+                        if ui.selectable_label(on, "Breadboard").clicked() {
+                            self.focus = (!on).then_some(key);
+                            self.selected = None;
+                        }
+                    });
+                }
+                let groups = editors::groups_of(&scene.design);
+                if !groups.is_empty() {
+                    egui::CollapsingHeader::new(format!("Groups ({})", groups.len()))
+                        .default_open(true)
+                        .show(ui, |ui| {
+                            for g in &groups {
+                                let members: Vec<String> =
+                                    ["element", "source", "detector", "proxy"]
+                                        .iter()
+                                        .filter_map(|t| scene.design[*t].as_array())
+                                        .flatten()
+                                        .filter(|e| e["group"] == g.as_str())
+                                        .filter_map(|e| e["id"].as_str().map(str::to_owned))
+                                        .collect();
+                                let label = format!("{g}  ·  {}", members.join(", "));
+                                if ui
+                                    .selectable_label(false, label)
+                                    .on_hover_text(
+                                        "Select its first item; Move moves the whole group",
+                                    )
+                                    .clicked()
+                                {
+                                    if let Some(first) = members.first() {
+                                        match scene.items.iter().position(|i| &i.id == first) {
+                                            Some(i) => {
+                                                self.selected = Some(i);
+                                                self.focus = None;
+                                            }
+                                            None => {
+                                                self.selected = None;
+                                                self.focus = Some(("source".into(), first.clone()));
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        });
+                }
                 egui::CollapsingHeader::new(format!("Sources ({})", scene.sources.len()))
                     .default_open(true)
                     .show(ui, |ui| {
@@ -935,30 +1452,76 @@ impl App {
                             row(ui, self, i, scene.items[i].id.clone());
                         }
                     });
+                // What the optimiser aligns for: always listed, terms added here.
                 let merit = scene.design["merit"]
                     .as_array()
                     .cloned()
                     .unwrap_or_default();
-                if !merit.is_empty() {
-                    egui::CollapsingHeader::new(format!("Merit ({})", merit.len())).show(
-                        ui,
-                        |ui| {
-                            for (i, term) in merit.iter().enumerate() {
-                                let key = ("merit".to_owned(), i.to_string());
-                                let on = self.focus.as_ref() == Some(&key);
-                                let label = format!(
-                                    "{} · {}",
-                                    term["kind"].as_str().unwrap_or("?"),
-                                    term["detector"].as_str().unwrap_or("?")
+                let first_detector = scene.design["detector"][0]["id"]
+                    .as_str()
+                    .map(str::to_owned);
+                egui::CollapsingHeader::new(format!("Merit ({})", merit.len()))
+                    .default_open(true)
+                    .show(ui, |ui| {
+                        for (i, term) in merit.iter().enumerate() {
+                            let key = ("merit".to_owned(), i.to_string());
+                            let on = self.focus.as_ref() == Some(&key);
+                            let target = match &term["target"] {
+                                Value::Null => String::new(),
+                                t => format!(" → {t}"),
+                            };
+                            let label = format!(
+                                "{} · {}{target}",
+                                term["kind"].as_str().unwrap_or("?"),
+                                term["detector"].as_str().unwrap_or("")
+                            );
+                            if ui.selectable_label(on, label).clicked() {
+                                self.focus = (!on).then_some(key);
+                                self.selected = None;
+                            }
+                        }
+                        ui.menu_button("Add a term", |ui| {
+                            let Some(detector) = &first_detector else {
+                                ui.label(
+                                    RichText::new("Add a detector first: terms are measured on one")
+                                        .color(DARK.text_dim),
                                 );
-                                if ui.selectable_label(on, label).clicked() {
-                                    self.focus = (!on).then_some(key);
+                                return;
+                            };
+                            for (kind, help) in [
+                                ("centring", "the beam on the detector's centre (mm)"),
+                                ("pointing", "the beam along the detector's axis (mrad)"),
+                                ("collimation", "the beam collimated: no spread of directions (mrad)"),
+                                ("diameter", "the beam this wide (mm; target 5 to start)"),
+                                ("focus", "the smallest spot (mm)"),
+                                ("power", "as much light as possible arriving"),
+                                ("headroom", "adjusters near the middle of their ranges (small weight)"),
+                            ] {
+                                if ui.button(kind).on_hover_text(help).clicked() {
+                                    let mut entry = vec![json!(["kind", kind])];
+                                    if kind != "headroom" {
+                                        entry.push(json!(["detector", detector]));
+                                    }
+                                    if kind == "diameter" {
+                                        entry.push(json!(["target", 5.0]));
+                                    }
+                                    self.apply(vec![json!({
+                                        "op": "add", "table": "merit", "entry": entry,
+                                    })]);
+                                    self.focus = Some(("merit".into(), merit.len().to_string()));
                                     self.selected = None;
+                                    ui.close();
                                 }
                             }
-                        },
-                    );
-                }
+                        });
+                        if !merit.is_empty() && scene.dofs.is_empty() {
+                            ui.label(
+                                RichText::new("Optimise needs degrees of freedom: add a slide or tilt to an item")
+                                    .color(DARK.text_dim)
+                                    .size(11.0),
+                            );
+                        }
+                    });
                 if !scene.dofs.is_empty() {
                     egui::CollapsingHeader::new(format!(
                         "Degrees of freedom ({})",
@@ -1036,6 +1599,7 @@ impl App {
             return Vec::new();
         };
         let context = editors::Context::of(&design);
+        let scene = self.doc.as_ref().and_then(|d| d.scene.clone());
         let mut operations = Vec::new();
         let list = design[table].as_array().cloned().unwrap_or_default();
         ui.label(RichText::new(format!("{title} ({})", list.len())).strong());
@@ -1053,6 +1617,19 @@ impl App {
             egui::CollapsingHeader::new(name)
                 .id_salt(format!("{table}-{i}"))
                 .show(ui, |ui| {
+                    let origin = scene
+                        .as_ref()
+                        .zip(entry["id"].as_str())
+                        .and_then(|(scene, id)| origin_of(scene, id));
+                    let lens = scene
+                        .as_ref()
+                        .zip(entry["id"].as_str())
+                        .and_then(|(s, id)| {
+                            s.items
+                                .iter()
+                                .find(|i| i.id == id)
+                                .and_then(|i| i.lens.clone())
+                        });
                     operations.extend(editors::entry(
                         ui,
                         &mut self.drafts,
@@ -1060,6 +1637,8 @@ impl App {
                         entry,
                         i,
                         &context,
+                        origin,
+                        lens.as_ref(),
                     ));
                 });
         }
@@ -1106,12 +1685,25 @@ impl App {
                 let first = design["detector"][0]["id"].as_str().map(str::to_owned);
                 ui.horizontal_wrapped(|ui| {
                     ui.label(RichText::new("Add merit").color(DARK.text_dim));
-                    for kind in ["focus", "centring", "pointing", "collimation", "power"] {
+                    for kind in [
+                        "focus",
+                        "centring",
+                        "pointing",
+                        "collimation",
+                        "diameter",
+                        "power",
+                    ] {
                         if let Some(detector) = &first {
                             if ui.small_button(kind).clicked() {
+                                // A diameter needs its target: 5 mm to start, set in its
+                                // editor.
+                                let mut entry =
+                                    vec![json!(["kind", kind]), json!(["detector", detector])];
+                                if kind == "diameter" {
+                                    entry.push(json!(["target", 5.0]));
+                                }
                                 operations.push(json!({
-                                    "op": "add", "table": "merit",
-                                    "entry": [["kind", kind], ["detector", detector]],
+                                    "op": "add", "table": "merit", "entry": entry,
                                 }));
                             }
                         }
@@ -1140,6 +1732,11 @@ impl App {
         };
         let design = scene.design.clone();
         let context = editors::Context::of(&design);
+        if self.focus.as_ref().is_some_and(|(t, _)| t == "table") {
+            if let Some(board) = crate::board::Board::of(&design, scene) {
+                return editors::board(ui, &mut self.drafts, &board);
+            }
+        }
         // A source or merit term chosen in the browser.
         if let Some((table, key)) = self.focus.clone() {
             let found = if table == "merit" {
@@ -1156,7 +1753,17 @@ impl App {
             };
             if let Some((entry, i)) = found {
                 ui.label(RichText::new(format!("{table} {key}")).color(DARK.text_dim));
-                return editors::entry(ui, &mut self.drafts, &table, &entry, i, &context);
+                let origin = origin_of(scene, &key);
+                return editors::entry(
+                    ui,
+                    &mut self.drafts,
+                    &table,
+                    &entry,
+                    i,
+                    &context,
+                    origin,
+                    None,
+                );
             }
         }
         let Some(item) = self.selected.and_then(|i| scene.items.get(i)).cloned() else {
@@ -1169,7 +1776,16 @@ impl App {
         match entry_of(&design, &item.id) {
             Some((table, entry, i)) => {
                 ui.label(RichText::new(format!("{table} · {}", item.role)).color(DARK.text_dim));
-                operations = editors::entry(ui, &mut self.drafts, &table, &entry, i, &context);
+                operations = editors::entry(
+                    ui,
+                    &mut self.drafts,
+                    &table,
+                    &entry,
+                    i,
+                    &context,
+                    item.origin,
+                    item.lens.as_ref(),
+                );
             }
             None => {
                 egui::Grid::new("properties")
@@ -1325,51 +1941,146 @@ impl App {
         });
     }
 
-    /// The graphs: which one the Graph button draws, and the last three drawn.
+    /// The graphs: one shown at a time, a switcher between those open, a mark on graphs
+    /// drawn before the design last changed, Redraw and Close.
     fn graphs_panel(&mut self, ui: &mut egui::Ui) {
         let App {
             doc, graph_cursor, ..
         } = self;
         let Some(doc) = doc else { return };
         let mut hovered = None;
+        let mut redraw: Option<String> = None;
+        let mut close = None;
+        // Half the strip for a graph; little until one is open.
+        let width = if doc.graphs.is_empty() {
+            240.0
+        } else {
+            (ui.available_width() * 0.45).max(380.0)
+        };
         ui.vertical(|ui| {
+            ui.set_width(width);
             ui.horizontal(|ui| {
                 ui.label(RichText::new("Graphs").strong());
-                let name = crate::graphs::KINDS
-                    .iter()
-                    .find(|(id, _)| *id == doc.graph_kind)
-                    .map_or("?", |(_, name)| name);
-                egui::ComboBox::new("graph kind", "drawn by Graph")
-                    .selected_text(name)
+                if doc.graphs.is_empty() {
+                    return;
+                }
+                let shown = doc.shown_graph.min(doc.graphs.len() - 1);
+                egui::ComboBox::new("open graphs", "")
+                    .selected_text(doc.graphs[shown].graph.title.clone())
                     .show_ui(ui, |ui| {
-                        for (id, name) in crate::graphs::KINDS {
-                            ui.selectable_value(&mut doc.graph_kind, id, *name);
+                        for i in 0..doc.graphs.len() {
+                            let title = doc.graphs[i].graph.title.clone();
+                            let stale = doc.out_of_date(&doc.graphs[i]);
+                            let label = if stale {
+                                format!("{title} · out of date")
+                            } else {
+                                title
+                            };
+                            ui.selectable_value(&mut doc.shown_graph, i, label);
                         }
                     });
+                let graph = &doc.graphs[shown];
+                if doc.out_of_date(graph) {
+                    // The reload icon with a warning dot: drawn before the last change.
+                    let (rect, response) = ui.allocate_exact_size(Vec2::splat(16.0), Sense::hover());
+                    crate::icons::draw(ui.painter(), rect, "reload", true);
+                    ui.painter()
+                        .circle_filled(rect.right_top() + Vec2::new(-2.0, 2.0), 3.0, DARK.warning);
+                    response.on_hover_text("Out of date: the design changed after this graph was drawn");
+                }
+                if ui
+                    .small_button("Redraw")
+                    .on_hover_text("Draw this graph again from the design as it is now")
+                    .clicked()
+                {
+                    redraw = Some(graph.kind.clone());
+                }
+                if ui.small_button("×").on_hover_text("Close this graph").clicked() {
+                    close = Some(shown);
+                }
             });
             if doc.graphs.is_empty() {
-                ui.label(
-                    RichText::new("Choose one and press Graph; scroll to zoom, drag to pan, double-click to fit")
-                        .color(DARK.text_dim),
+                ui.add(
+                    egui::Label::new(
+                        RichText::new("Graph draws the graphs you choose; scroll to zoom, drag to pan, double-click to fit")
+                            .color(DARK.text_dim),
+                    )
+                    .wrap(),
                 );
                 return;
             }
+            let shown = doc.shown_graph.min(doc.graphs.len() - 1);
             let height = ui.available_height().max(150.0);
-            ui.horizontal_top(|ui| {
-                for (graph, view) in &mut doc.graphs {
-                    if let Some(c) = crate::graphs::show(
-                        ui,
-                        graph,
-                        view,
-                        *graph_cursor,
-                        Vec2::new(380.0, height),
-                    ) {
-                        hovered = Some(c);
-                    }
-                }
-            });
+            let open = &mut doc.graphs[shown];
+            if let Some(c) = crate::graphs::show(
+                ui,
+                &open.graph,
+                &mut open.view,
+                *graph_cursor,
+                Vec2::new(width, height),
+            ) {
+                hovered = Some(c);
+            }
         });
         *graph_cursor = hovered;
+        if let Some(kind) = redraw {
+            doc.draw_graphs(&[kind]);
+        }
+        if let Some(i) = close {
+            doc.graphs.remove(i);
+            doc.shown_graph = doc.shown_graph.min(doc.graphs.len().saturating_sub(1));
+        }
+    }
+
+    /// The Graph button's chooser: tick the graphs to draw, all at once.
+    fn graph_dialog(&mut self, ctx: &egui::Context) {
+        if !self.graph_dialog {
+            return;
+        }
+        let mut open = true;
+        let mut draw = false;
+        egui::Window::new("Graphs to draw")
+            .collapsible(false)
+            .resizable(false)
+            .open(&mut open)
+            .anchor(egui::Align2::CENTER_CENTER, Vec2::ZERO)
+            .show(ctx, |ui| {
+                for (id, name) in crate::graphs::KINDS {
+                    let mut on = self.graph_choice.contains(id);
+                    if ui.checkbox(&mut on, *name).changed() {
+                        if on {
+                            self.graph_choice.push(id);
+                        } else {
+                            self.graph_choice.retain(|k| k != id);
+                        }
+                    }
+                }
+                ui.separator();
+                ui.horizontal(|ui| {
+                    let some = !self.graph_choice.is_empty();
+                    if ui.add_enabled(some, egui::Button::new("Draw")).clicked() {
+                        draw = true;
+                    }
+                    if ui.button("Cancel").clicked() {
+                        self.graph_dialog = false;
+                    }
+                });
+            });
+        if draw {
+            // In the list's order, so the first ticked is shown.
+            let kinds: Vec<String> = crate::graphs::KINDS
+                .iter()
+                .filter(|(id, _)| self.graph_choice.contains(id))
+                .map(|(id, _)| (*id).to_owned())
+                .collect();
+            if let Some(doc) = &mut self.doc {
+                doc.draw_graphs(&kinds);
+            }
+            self.graph_dialog = false;
+        }
+        if !open {
+            self.graph_dialog = false;
+        }
     }
 
     /// Messages, the power ledger, detectors, runs and the last command's output.
@@ -1377,7 +2088,7 @@ impl App {
         let Some(doc) = &self.doc else { return };
         ui.horizontal_top(|ui| {
             ui.vertical(|ui| {
-                ui.set_width(340.0);
+                ui.set_width(300.0);
                 ui.label(RichText::new("Messages").strong());
                 for m in doc.messages.iter().rev().take(6) {
                     ui.label(RichText::new(&m.text).color(if m.error {
@@ -1390,7 +2101,7 @@ impl App {
             ui.separator();
             if let Some(trace) = &doc.trace {
                 ui.vertical(|ui| {
-                    ui.set_width(260.0);
+                    ui.set_width(210.0);
                     ui.label(RichText::new("Power ledger (W)").strong());
                     egui::Grid::new("ledger").num_columns(2).show(ui, |ui| {
                         if let Some(ledger) = trace.report["ledger"].as_object() {
@@ -1406,6 +2117,7 @@ impl App {
                 });
                 ui.separator();
                 ui.vertical(|ui| {
+                    ui.set_max_width(300.0);
                     ui.label(RichText::new("Detectors").strong());
                     for d in trace.report["detectors"]
                         .as_array()
@@ -1416,6 +2128,31 @@ impl App {
                             RichText::new(d["id"].as_str().unwrap_or("?")).color(DARK.text_dim),
                         );
                         detector_grid(ui, &d);
+                    }
+                    let irises = &trace.report["alignment_irises"];
+                    if let Some(list) = irises["irises"].as_array() {
+                        ui.add_space(4.0);
+                        ui.label(RichText::new("Alignment irises").strong())
+                            .on_hover_text("Where to put irises on the bench to align this run; not part of the design");
+                        for (k, i) in list.iter().enumerate() {
+                            let hole = &i["hole"];
+                            ui.label(format!(
+                                "I{}  hole ({}, {}) · {} mm high{}",
+                                k + 1,
+                                hole[0],
+                                hole[1],
+                                i["height"].as_f64().unwrap_or(0.0),
+                                if i["on_grid"] == true { "" } else { " · off the grid" }
+                            ));
+                        }
+                        ui.add(
+                            egui::Label::new(
+                                RichText::new(irises["advice"].as_str().unwrap_or(""))
+                                    .color(DARK.text_dim)
+                                    .size(11.0),
+                            )
+                            .wrap(),
+                        );
                     }
                 });
             }
@@ -1600,18 +2337,63 @@ impl eframe::App for App {
             .show(ui, |ui| {
                 // Fit once the scene has arrived, with the view's own aspect.
                 if self.fit_pending {
-                    if let Some((low, high)) = self
-                        .doc
-                        .as_ref()
-                        .and_then(|d| d.scene.as_ref())
-                        .and_then(|s| s.bounds)
-                    {
+                    let scene = self.doc.as_ref().and_then(|d| d.scene.as_ref());
+                    let board = scene
+                        .and_then(|s| crate::board::Board::of(&s.design, s))
+                        .filter(|_| self.show_board);
+                    let bounds = match board {
+                        Some(board) => Some(board.around(scene.and_then(|s| s.bounds))),
+                        None => scene.and_then(|s| s.bounds),
+                    };
+                    if let Some((low, high)) = bounds {
                         let size = ui.available_size();
                         self.camera
                             .fit(low, high, (size.x / size.y.max(1.0)) as f64);
                         self.fit_pending = false;
                     }
                 }
+                self.view.board = self
+                    .doc
+                    .as_ref()
+                    .and_then(|d| d.scene.as_ref())
+                    .and_then(|s| crate::board::Board::of(&s.design, s));
+                self.view.show_board = self.show_board;
+                self.view.placing = self.placing.clone().and_then(|(new, part)| {
+                    let design = self.design()?;
+                    Some(viewport::Placing {
+                        what: match (new, part) {
+                            (New::Lens, Some(key)) => key,
+                            (New::Lens, None) => "Lens".into(),
+                            (New::Mirror, _) => "Mirror".into(),
+                            (New::Source, _) => "Source".into(),
+                            (New::Detector, _) => "Detector".into(),
+                        },
+                        height: editors::new_height(design),
+                        pitch: design["table"]["pitch"].as_f64()?,
+                    })
+                });
+                self.view.moving = self.move_on.then(|| {
+                    let mut tool = self.move_tool.clone();
+                    let scene = self.doc.as_ref().and_then(|d| d.scene.as_ref());
+                    tool.pitch = scene.and_then(|s| s.design["table"]["pitch"].as_f64());
+                    let moving = scene.and_then(|s| movable(s, self.selected, self.focus.as_ref()));
+                    tool.target = moving.as_ref().map(|m| (m.anchor, m.outline.clone()));
+                    // The posts that follow the move: every member's.
+                    tool.items = moving.as_ref().map_or_else(Vec::new, |m| m.items.clone());
+                    tool.sources = moving.as_ref().map_or_else(Vec::new, |m| m.sources.clone());
+                    tool.posts = moving
+                        .as_ref()
+                        .map_or_else(Vec::new, |m| m.members.iter().map(|x| x.3).collect());
+                    tool.label = moving.as_ref().and_then(|m| {
+                        m.group
+                            .as_ref()
+                            .map(|g| format!("group {g}: {} items", m.members.len()))
+                    });
+                    if tool.target.is_none() {
+                        tool.pending.clear();
+                    }
+                    tool
+                });
                 viewport::show(
                     ui,
                     &mut self.camera,
@@ -1624,17 +2406,56 @@ impl eframe::App for App {
                 )
             })
             .inner;
+        // The Move tool's steps and drag live on in the app.
+        if let Some(tool) = self.view.moving.take() {
+            self.move_tool = tool;
+        }
         for request in requests {
             match request {
                 Request::Select(index) => {
-                    self.selected = index;
-                    self.focus = None;
+                    // While moving, a click beside the handles keeps what is selected, and
+                    // nothing else is selected while a move is pending.
+                    let pending = self.move_on && !self.move_tool.pending.is_empty();
+                    if !(self.move_on && index.is_none()) && !pending {
+                        self.selected = index;
+                        self.focus = None;
+                    }
                 }
                 Request::Fit => self.fit_pending = true,
+                Request::MoveApply(steps) => {
+                    let operations = self
+                        .doc
+                        .as_ref()
+                        .and_then(|d| d.scene.as_ref())
+                        .and_then(|s| {
+                            let pitch = s.design["table"]["pitch"].as_f64()?;
+                            let m = movable(s, self.selected, self.focus.as_ref())?;
+                            Some(editors::moved_group(&m.members, pitch, m.anchor, &steps))
+                        })
+                        .unwrap_or_default();
+                    self.apply(operations);
+                    self.end_move();
+                }
+                Request::MoveCancel => self.end_move(),
+                Request::Place(hole) => {
+                    if let Some((new, part)) = self.placing.take() {
+                        if let Some(op) = self
+                            .design()
+                            .and_then(|d| editors::add_at(d, new, hole, part.as_deref()))
+                        {
+                            self.apply(vec![op]);
+                        }
+                    }
+                }
+                Request::PlaceCancel => self.placing = None,
             }
         }
         self.confirm_dialog(&ctx);
         self.licence_dialog(&ctx);
+        self.graph_dialog(&ctx);
+        self.new_dialog(&ctx);
+        self.lens_chooser(&ctx);
+        self.lens_import_dialog(&ctx);
         self.screenshot(&ctx);
     }
 }
@@ -1844,6 +2665,352 @@ mod exit {
     }
 
     #[test]
+    fn new_starts_a_table_layout_on_a_breadboard() {
+        let dir = scratch("new-table");
+        let path = dir.join("bench.optobench");
+        let mut h = window(None, &dir);
+        click(&mut h, "Workspace");
+        click(&mut h, "Layout");
+        h.state_mut().open_path = path.to_string_lossy().into_owned();
+        click(&mut h, "New");
+        click(&mut h, "1 in");
+        click(&mut h, "Table");
+        let text = std::fs::read_to_string(&path).expect("New made the file");
+        assert!(
+            text.contains("layout = \"table\"") && text.contains("pitch = 25.4"),
+            "{text}"
+        );
+        // Source waits for a hole; Enter puts it where Add always did (hole (0, 0)).
+        click(&mut h, "Source");
+        h.key_press(egui::Key::Enter);
+        h.step();
+        settle(&mut h);
+        let text = std::fs::read_to_string(&path).expect("written");
+        assert!(text.contains("hole = [0, 0]"), "{text}");
+        // Mirror: a click on the board over hole (3, 2) puts it there.
+        click(&mut h, "Mirror");
+        let at = {
+            let app = h.state();
+            let rect = app.view.rect.expect("drawn");
+            let (x, y) = app.camera.to_screen(
+                [3.0 * 25.4, 2.0 * 25.4, 0.0],
+                (rect.center().x as f64, rect.center().y as f64),
+                rect.height() as f64,
+            );
+            egui::pos2(x as f32, y as f32)
+        };
+        h.event(egui::Event::PointerMoved(at));
+        h.step();
+        for pressed in [true, false] {
+            h.event(egui::Event::PointerButton {
+                pos: at,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: egui::Modifiers::NONE,
+            });
+            h.step();
+        }
+        settle(&mut h);
+        let text = std::fs::read_to_string(&path).expect("written");
+        assert!(text.contains("hole = [3, 2]"), "{text}");
+        assert!(h.state().placing.is_none());
+        // A lens's STEP file dropped on the window becomes a library lens (the golden
+        // plano-convex lens), placed from Lens's chooser.
+        let step = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../crates/optobench-io/tests/step/lens.step");
+        h.state_mut().dropped(step);
+        h.step();
+        {
+            let import = h.state_mut().lens_import.as_mut().expect("the dialog");
+            assert_eq!(import.found["radii_mm"], json!([30.0, "inf"]));
+            import.vendor = "Example".into();
+            import.part = "PC-30".into();
+            import.glasses = vec!["1.5".into()];
+        }
+        click(&mut h, "Import");
+        assert!(h.state().lens_import.is_none(), "{:?}", h.state().notice);
+        click(&mut h, "Lens");
+        click(&mut h, "example/PC-30");
+        h.key_press(egui::Key::Enter);
+        h.step();
+        settle(&mut h);
+        let text = std::fs::read_to_string(&path).expect("written");
+        assert!(text.contains("library = \"example/PC-30\""), "{text}");
+        assert!(errors(&h).is_empty(), "{:?}", errors(&h));
+        // Escape places nothing.
+        click(&mut h, "Lens");
+        click(&mut h, "Singlet");
+        h.key_press(egui::Key::Escape);
+        h.step();
+        settle(&mut h);
+        assert_eq!(std::fs::read_to_string(&path).expect("read"), text);
+        assert!(errors(&h).is_empty(), "{:?}", errors(&h));
+        // The board is listed, and its Properties give the pitch.
+        click(&mut h, "Breadboard");
+        assert!(
+            h.query_by_label("Keep this size").is_some(),
+            "the board's Properties"
+        );
+    }
+
+    #[test]
+    fn merit_and_lens_types_are_set_in_the_layout_workspace() {
+        // A table layout: a source, a singlet, a detector. A collimation term added from
+        // the browser; the singlet (biconvex R ±50, n 1.5, 4 mm: f 50.67 mm) made
+        // plano-concave keeps |f| and becomes R −25.3 then flat; Flip puts the flat first.
+        let dir = scratch("merit-lens");
+        let path = dir.join("bench.optobench");
+        let mut h = window(None, &dir);
+        click(&mut h, "Workspace");
+        click(&mut h, "Layout");
+        h.state_mut().open_path = path.to_string_lossy().into_owned();
+        click(&mut h, "New");
+        click(&mut h, "Table");
+        for add in ["Source", "Lens", "Detector"] {
+            click(&mut h, add);
+            if add == "Lens" {
+                click(&mut h, "Singlet");
+            }
+            h.key_press(egui::Key::Enter);
+            h.step();
+            settle(&mut h);
+        }
+        click(&mut h, "Add a term");
+        click(&mut h, "collimation");
+        let text = std::fs::read_to_string(&path).expect("written");
+        assert!(
+            text.contains("kind = \"collimation\"\ndetector = \"D1\""),
+            "{text}"
+        );
+        click(&mut h, "L1  ·  lens");
+        // The lens's type: the first list in its Properties.
+        h.query_all_by_role(egui::accesskit::Role::ComboBox)
+            .next()
+            .expect("the type list")
+            .click();
+        h.step();
+        h.step();
+        click(&mut h, "plano-concave");
+        let text = std::fs::read_to_string(&path).expect("written");
+        let f = 1.0 / (0.5 * (2.0 / 50.0 - 0.5 * 4.0 / (1.5 * 2500.0)));
+        let r = format!("{:.4}", -0.5 * f);
+        assert!(
+            text.contains(&format!(
+                "surfaces = [{{ radius = {r} }}, {{ radius = \"inf\" }}]"
+            )),
+            "{r}: {text}"
+        );
+        click(&mut h, "Flip");
+        let text = std::fs::read_to_string(&path).expect("written");
+        let flipped = format!("{:.4}", 0.5 * f);
+        assert!(
+            text.contains(&format!(
+                "surfaces = [{{ radius = \"inf\" }}, {{ radius = {flipped} }}]"
+            )),
+            "{text}"
+        );
+        assert!(errors(&h).is_empty(), "{:?}", errors(&h));
+    }
+
+    #[test]
+    fn a_group_moves_as_one() {
+        // Two lenses in the group `expander`, a detector outside it: Move on L1, its x
+        // arrow dragged two holes, Enter: both lenses move two holes, the detector not.
+        let dir = scratch("group");
+        let path = dir.join("expander.optobench");
+        std::fs::write(
+            &path,
+            "format = \"optobench/1\"\nkind = \"layout\"\nlayout = \"table\"\n\n[table]\npitch = 25.0\n\n\
+             [[source]]\nid = \"laser\"\nkind = \"collimated\"\nwavelength_um = 0.633\npower_w = 0.001\ndiameter = 1.0\nhole = [0, 0]\nheight = 75.0\naxis = [1, 0, 0]\n\n\
+             [[element]]\nid = \"L1\"\nkind = \"ideal_lens\"\nfocal_length = -12\ndiameter = 10\nhole = [2, 0]\nheight = 75.0\naxis = [1, 0, 0]\ngroup = \"expander\"\n\n\
+             [[element]]\nid = \"L2\"\nkind = \"ideal_lens\"\nfocal_length = 60\ndiameter = 25\nhole = [4, 0]\nheight = 75.0\naxis = [1, 0, 0]\ngroup = \"expander\"\n\n\
+             [[detector]]\nid = \"out\"\nhole = [10, 0]\nheight = 75.0\naxis = [1, 0, 0]\nsize = [20, 20]\npixels = [20, 20]\n",
+        )
+        .expect("written");
+        let mut h = window(Some(path.clone()), &dir);
+        settle(&mut h);
+        assert!(
+            h.query_by_label("expander  ·  L1, L2").is_some(),
+            "the browser lists it"
+        );
+        click(&mut h, "Move");
+        click(&mut h, "expander  ·  L1, L2");
+        h.state_mut().camera.top();
+        h.step();
+        h.step();
+        let (centre, pitch) = {
+            let app = h.state();
+            let rect = app.view.rect.expect("drawn");
+            let scene = app
+                .doc
+                .as_ref()
+                .and_then(|d| d.scene.as_ref())
+                .expect("a scene");
+            let i = app.selected.expect("L1 selected");
+            assert_eq!(scene.items[i].id, "L1");
+            let origin = scene.items[i].origin.expect("placed");
+            let (x, y) = app.camera.to_screen(
+                origin,
+                (rect.center().x as f64, rect.center().y as f64),
+                rect.height() as f64,
+            );
+            (
+                egui::pos2(x as f32, y as f32),
+                25.0 * rect.height() / app.camera.height as f32,
+            )
+        };
+        let from = centre + egui::vec2(40.0, 0.0);
+        let to = from + egui::vec2(2.1 * pitch, 0.0);
+        h.event(egui::Event::PointerMoved(from));
+        h.step();
+        h.event(egui::Event::PointerButton {
+            pos: from,
+            button: egui::PointerButton::Primary,
+            pressed: true,
+            modifiers: egui::Modifiers::NONE,
+        });
+        h.step();
+        for k in 1..=10 {
+            h.event(egui::Event::PointerMoved(
+                from + (to - from) * (k as f32 / 10.0),
+            ));
+            h.step();
+        }
+        h.event(egui::Event::PointerButton {
+            pos: to,
+            button: egui::PointerButton::Primary,
+            pressed: false,
+            modifiers: egui::Modifiers::NONE,
+        });
+        h.step();
+        assert_eq!(
+            h.state().move_tool.label.as_deref(),
+            Some("group expander: 2 items")
+        );
+        h.key_press(egui::Key::Enter);
+        h.step();
+        settle(&mut h);
+        let text = std::fs::read_to_string(&path).expect("written");
+        assert!(
+            text.contains("hole = [4, 0]") && text.contains("hole = [6, 0]"),
+            "{text}"
+        );
+        assert!(
+            text.contains("hole = [10, 0]"),
+            "the detector stays: {text}"
+        );
+        assert!(errors(&h).is_empty(), "{:?}", errors(&h));
+    }
+
+    #[test]
+    fn an_item_is_moved_and_turned_by_dragging_its_handles() {
+        // The table periscope's screen at hole (8, 0): Move on, its x arrow dragged
+        // about two pitches to the right (seen from above) puts it at hole (10, 0); its
+        // ring about z dragged a quarter turn turns its axis from +x to +y.
+        let dir = scratch("move");
+        let path = dir.join("periscope.optobench");
+        std::fs::copy(
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/table-periscope.optobench"),
+            &path,
+        )
+        .expect("copied");
+        let mut h = window(Some(path.clone()), &dir);
+        settle(&mut h);
+        click(&mut h, "Move");
+        let index = h
+            .state()
+            .doc
+            .as_ref()
+            .and_then(|d| d.scene.as_ref())
+            .and_then(|s| s.items.iter().position(|i| i.id == "screen"))
+            .expect("the screen");
+        h.state_mut().selected = Some(index);
+        h.state_mut().camera.top();
+        h.step();
+        h.step();
+        let drag = |h: &mut Harness<'static, App>, from: egui::Pos2, to: egui::Pos2| {
+            h.event(egui::Event::PointerMoved(from));
+            h.step();
+            h.event(egui::Event::PointerButton {
+                pos: from,
+                button: egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: egui::Modifiers::NONE,
+            });
+            h.step();
+            for k in 1..=10 {
+                h.event(egui::Event::PointerMoved(
+                    from + (to - from) * (k as f32 / 10.0),
+                ));
+                h.step();
+            }
+            h.event(egui::Event::PointerButton {
+                pos: to,
+                button: egui::PointerButton::Primary,
+                pressed: false,
+                modifiers: egui::Modifiers::NONE,
+            });
+            h.step();
+            settle(h);
+        };
+        let at = |h: &Harness<'static, App>| {
+            let app = h.state();
+            let rect = app.view.rect.expect("drawn");
+            let scene = app
+                .doc
+                .as_ref()
+                .and_then(|d| d.scene.as_ref())
+                .expect("a scene");
+            let origin = scene.items[index].origin.expect("placed");
+            let (x, y) = app.camera.to_screen(
+                origin,
+                (rect.center().x as f64, rect.center().y as f64),
+                rect.height() as f64,
+            );
+            (
+                egui::pos2(x as f32, y as f32),
+                25.0 * rect.height() / app.camera.height as f32,
+            )
+        };
+        let (centre, pitch) = at(&h);
+        let before = std::fs::read_to_string(&path).expect("read");
+        let start = centre + egui::vec2(40.0, 0.0);
+        drag(&mut h, start, start + egui::vec2(2.1 * pitch, 0.0));
+        // The drag is pending: the handles moved with it, the file did not.
+        assert_eq!(std::fs::read_to_string(&path).expect("read"), before);
+        assert_eq!(h.state().move_tool.pending.len(), 1);
+        // On the ring at 45° about where the screen now is, clear of the arrows, a quarter
+        // turn counter-clockwise.
+        let moved = centre + egui::vec2(2.0 * pitch, 0.0);
+        let r = 56.0 * std::f32::consts::FRAC_1_SQRT_2;
+        drag(
+            &mut h,
+            moved + egui::vec2(r, -r),
+            moved + egui::vec2(-r, -r),
+        );
+        assert_eq!(std::fs::read_to_string(&path).expect("read"), before);
+        // Enter writes both and ends Move.
+        h.key_press(egui::Key::Enter);
+        h.step();
+        settle(&mut h);
+        let text = std::fs::read_to_string(&path).expect("written");
+        assert!(text.contains("hole = [10, 0]"), "{text}");
+        assert!(text.contains("axis = [0, 1, 0]"), "{text}");
+        assert!(!h.state().move_on, "Enter ends Move");
+        // Escape drops a move: the file stays as it was, and Move ends.
+        click(&mut h, "Move");
+        let (centre, pitch) = at(&h);
+        let start = centre + egui::vec2(40.0, 0.0);
+        drag(&mut h, start, start + egui::vec2(3.1 * pitch, 0.0));
+        h.key_press(egui::Key::Escape);
+        h.step();
+        settle(&mut h);
+        assert_eq!(std::fs::read_to_string(&path).expect("read"), text);
+        assert!(!h.state().move_on && h.state().move_tool.pending.is_empty());
+        assert!(errors(&h).is_empty(), "{:?}", errors(&h));
+    }
+
+    #[test]
     fn graphs_are_drawn_in_the_window_and_read_out_under_the_pointer() {
         // A dry NA 0.1 objective focusing onto a screen: the Graph button draws the
         // chosen graph in the results strip, newest first; the pointer on a graph sets
@@ -1862,26 +3029,50 @@ mod exit {
         settle(&mut h);
         click(&mut h, "Workspace");
         click(&mut h, "Simulate");
+        // Graph asks what to draw: Spot is ticked to start with.
         click(&mut h, "Graph");
+        click(&mut h, "Draw");
         assert!(errors(&h).is_empty(), "{:?}", errors(&h));
         let titles = |h: &Harness<'static, App>| -> Vec<String> {
             h.state()
                 .doc
                 .as_ref()
-                .map(|d| d.graphs.iter().map(|(g, _)| g.title.clone()).collect())
+                .map(|d| d.graphs.iter().map(|g| g.graph.title.clone()).collect())
                 .unwrap_or_default()
         };
         assert_eq!(titles(&h), ["Spot diagram on `focus`"]);
-        if let Some(doc) = h.state_mut().doc.as_mut() {
-            doc.graph_kind = "psf-lateral"; // chosen in the Graphs list
-        }
+        // The PSF ticked and the spot unticked: the PSF is added and shown, the spot
+        // stays open to switch back to.
         click(&mut h, "Graph");
+        click(&mut h, "PSF across the peak");
+        click(&mut h, "Spot diagram");
+        click(&mut h, "Draw");
         assert_eq!(
             titles(&h),
-            ["PSF across the peak", "Spot diagram on `focus`"]
+            ["Spot diagram on `focus`", "PSF across the peak"]
         );
-        // The newest graph is first, at the left of the results strip: the pointer on its
-        // plot reads a length along x.
+        let shown = |h: &Harness<'static, App>| h.state().doc.as_ref().map_or(9, |d| d.shown_graph);
+        assert_eq!(shown(&h), 1, "only the PSF was left ticked");
+        // An edit leaves the open graphs out of date until redrawn.
+        let doc = h.state().doc.as_ref().expect("open");
+        assert!(!doc.out_of_date(&doc.graphs[1]));
+        if let Some(doc) = h.state_mut().doc.as_mut() {
+            doc.edit(
+                vec![serde_json::json!({ "op": "set", "table": "detector", "id": "focus", "key": "at", "value": 85.01 })],
+                "detector",
+            );
+        }
+        settle(&mut h);
+        let doc = h.state().doc.as_ref().expect("open");
+        assert!(doc.out_of_date(&doc.graphs[1]) && doc.out_of_date(&doc.graphs[0]));
+        click(&mut h, "Redraw");
+        let doc = h.state().doc.as_ref().expect("open");
+        assert!(
+            !doc.out_of_date(&doc.graphs[1]),
+            "the shown graph is redrawn"
+        );
+        assert!(doc.out_of_date(&doc.graphs[0]), "the other one is not");
+        // The pointer on the shown graph's plot reads a length along x.
         let strip = h
             .query_all_by_label("Graphs")
             .next()
@@ -1909,12 +3100,16 @@ mod exit {
         click(&mut h, "Layout");
         h.state_mut().open_path = path.to_string_lossy().into_owned(); // typed in the title bar
         click(&mut h, "New");
+        click(&mut h, "Planar");
         assert!(path.is_file(), "New made the file");
         for add in ["Source", "Lens", "Detector"] {
             click(&mut h, add);
+            if add == "Lens" {
+                click(&mut h, "Singlet");
+            }
         }
         click(&mut h, "D1");
-        click(&mut h, "slide z");
+        click(&mut h, "along its axis");
         click(&mut h, "Workspace");
         click(&mut h, "Simulate");
         click(&mut h, "3  Detectors & merit");
@@ -1938,7 +3133,7 @@ mod exit {
             "[[element]]",
             "[[detector]]",
             "kind = \"focus\"",
-            "name = \"D1_slide_z\"",
+            "name = \"D1_along\"",
             "value = ",
         ] {
             assert!(text.contains(expected), "`{expected}` in\n{text}");
@@ -2055,8 +3250,8 @@ mod exit {
             h.step();
         }
         settle(&mut h);
-        click(&mut h, "tilt x");
-        click(&mut h, "tilt y");
+        click(&mut h, "tilt about X");
+        click(&mut h, "tilt about Y");
         assert!(errors(&h).is_empty(), "{:?}", errors(&h));
         click(&mut h, "Align");
         click(&mut h, "Optimise");
@@ -2073,7 +3268,7 @@ mod exit {
             .filter_map(|d| d["name"].as_str())
             .collect();
         assert!(
-            names.contains(&"M2_tilt_x") && names.contains(&"M2_tilt_y"),
+            names.contains(&"M2_tilt_X") && names.contains(&"M2_tilt_Y"),
             "{names:?}"
         );
         assert!(

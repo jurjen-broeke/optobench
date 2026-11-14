@@ -688,6 +688,7 @@ pub fn read(text: &str, sidecar: &Path, lookups: &Lookups) -> Result<Read, FileE
     let embedded = crate::resolved::read(&root)?;
     let merged_library = embedded.library(lookups.library)?;
     crate::mounts::expand(&mut root, &merged_library)?;
+    crate::groups::expand(&mut root)?;
     let merged_materials = |name: &str| {
         embedded
             .material(name)

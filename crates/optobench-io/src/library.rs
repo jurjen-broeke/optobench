@@ -442,6 +442,132 @@ pub fn load(root: &Path) -> Result<Library, String> {
     Library::new(parts).map_err(|e| format!("{}: {e}", parts_directory(root).display()))
 }
 
+/// A lens's prescription from its STEP file (bare glass or mounted; see
+/// `optobench_library::prescription`), with the names of the file's products (for the
+/// part's `products`, so a sidecar recognises it).
+pub fn prescription_from_step(
+    text: &str,
+) -> Result<(optobench_library::prescription::Prescription, Vec<String>), String> {
+    let model = crate::step::read(text).map_err(|e| format!("not a STEP file we read: {e}"))?;
+    let (bodies, _) = crate::sidecar::placed_bodies(&model);
+    let list: Vec<(
+        Vec<&optobench_surfaces::brep::BrepFace>,
+        optobench_math::Transform,
+    )> = bodies
+        .iter()
+        .map(|b| (b.faces.iter().map(|f| &*f.geometry).collect(), b.placement))
+        .collect();
+    let prescription = optobench_library::prescription::prescription(&list)?;
+    let mut products: Vec<String> = bodies.iter().map(|b| b.product.clone()).collect();
+    products.sort();
+    products.dedup();
+    Ok((prescription, products))
+}
+
+/// A lens part file from a prescription: `glasses` names (or indexes) each glass body in
+/// order; air gaps are `standard-air`; `clear_aperture` from the spec sheet. Radii and
+/// thicknesses rounded to 1 µm.
+pub fn lens_part_text(
+    vendor: &str,
+    number: &str,
+    source: &str,
+    prescription: &optobench_library::prescription::Prescription,
+    glasses: &[toml::Value],
+    products: &[String],
+    clear_aperture: Option<f64>,
+) -> Result<String, String> {
+    use optobench_library::prescription::Gap;
+    if glasses.len() != prescription.glasses() {
+        return Err(format!(
+            "it has {} glass bodies: give {} glasses",
+            prescription.glasses(),
+            prescription.glasses()
+        ));
+    }
+    let micron = |x: f64| (x * 1e3).round() / 1e3;
+    let radius = |r: f64| {
+        if r.is_finite() {
+            format!("{{ radius = {} }}", micron(r))
+        } else {
+            "{ radius = \"inf\" }".to_owned()
+        }
+    };
+    let glass: Vec<String> = prescription
+        .gaps
+        .iter()
+        .map(|g| match g {
+            Gap::Glass(n) => glasses[*n].to_string(),
+            Gap::Air => "\"standard-air\"".to_owned(),
+        })
+        .collect();
+    let mut text = format!(
+        "format = \"{}\"\nkind = \"{KIND}\"\npart = {}\nvendor = {}\ntype = \"lens\"\nsource = {}\n",
+        crate::format_tag(),
+        toml::Value::String(number.to_owned()),
+        toml::Value::String(vendor.to_owned()),
+        toml::Value::String(source.to_owned()),
+    );
+    if let Some(d) = prescription.diameter {
+        text.push_str(&format!("diameter = {}\n", micron(d)));
+    }
+    if let Some(c) = clear_aperture {
+        text.push_str(&format!("clear_aperture = {}\n", micron(c)));
+    }
+    text.push_str(&format!(
+        "surfaces = [{}]\nthickness = [{}]\nglass = [{}]\n",
+        prescription
+            .radii
+            .iter()
+            .map(|r| radius(*r))
+            .collect::<Vec<_>>()
+            .join(", "),
+        prescription
+            .thickness
+            .iter()
+            .map(|t| micron(*t).to_string())
+            .collect::<Vec<_>>()
+            .join(", "),
+        glass.join(", "),
+    ));
+    let names: Vec<&String> = products
+        .iter()
+        .filter(|p| !p.eq_ignore_ascii_case(number))
+        .collect();
+    if !names.is_empty() {
+        text.push_str(&format!(
+            "products = [{}]\n",
+            names
+                .iter()
+                .map(|p| toml::Value::String((*p).clone()).to_string())
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
+    }
+    text.push_str(&format!(
+        "notes = \"Prescription read from its STEP file ({}); glasses as given\"\n",
+        prescription.kind()
+    ));
+    parse(&text).map_err(|e| e.0)?;
+    Ok(text)
+}
+
+/// Imports a part file's text into the library under `root` (see [`import`]).
+pub fn import_text(root: &Path, text: &str, replace: bool) -> Result<(Part, PathBuf), String> {
+    let scratch = std::env::temp_dir().join(format!(
+        "optobench-part-{}-{}.toml",
+        std::process::id(),
+        sha256_short(text)
+    ));
+    fs::write(&scratch, text).map_err(|e| format!("{}: {e}", scratch.display()))?;
+    let done = import(root, &scratch, replace);
+    let _ = fs::remove_file(&scratch);
+    done
+}
+
+fn sha256_short(text: &str) -> String {
+    crate::sha256::sha256_hex(text.as_bytes())[..12].to_owned()
+}
+
 /// Imports a part file into the library under `root`, unchanged. Importing the same file
 /// again is harmless; a different file for a part already there needs `replace`.
 pub fn import(root: &Path, path: &Path, replace: bool) -> Result<(Part, PathBuf), String> {

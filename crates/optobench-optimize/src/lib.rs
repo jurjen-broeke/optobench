@@ -4,7 +4,7 @@
 //!
 //! - [`lm`]: the Levenberg–Marquardt method with bounds, on any residuals.
 //! - [`Term`] and [`Merit`]: what alignment means, as residuals from a traced scene:
-//!   focus, centring, pointing, collimation, power.
+//!   focus, centring, pointing, collimation, diameter, power.
 //! - [`optimise`]: the free DOFs of a scene (neither locked nor coupled) that minimise a
 //!   merit.
 
@@ -35,6 +35,13 @@ pub enum Term {
     },
     /// The direct beam collimated: its RMS slope spread as small as possible (mrad).
     Collimation,
+    /// The direct beam's diameter at `target` (mm): 2√2 times its power-weighted RMS
+    /// radius, which is the edge diameter of an evenly filled disc and the 1/e² diameter
+    /// of a Gaussian beam (residual in mm).
+    Diameter {
+        /// The wanted diameter (mm).
+        target: f64,
+    },
     /// As much of the launched power as possible arriving directly (residual: the
     /// fraction that does not).
     Power,
@@ -54,6 +61,7 @@ impl Term {
             Term::Centring { .. } => "centring",
             Term::Pointing { .. } => "pointing",
             Term::Collimation => "collimation",
+            Term::Diameter { .. } => "diameter",
             Term::Power => "power",
             Term::Headroom => "headroom",
         }
@@ -89,6 +97,10 @@ pub fn headroom(scene: &Scene, values: &BTreeMap<String, f64>) -> Vec<f64> {
         .collect()
 }
 
+/// A beam's diameter over its power-weighted RMS radius, 2√2: for an evenly filled disc
+/// of radius a the mean of r² is a²/2; for a Gaussian of 1/e² radius w it is w²/2.
+pub const DIAMETER_PER_RMS_RADIUS: f64 = 2.0 * std::f64::consts::SQRT_2;
+
 /// The residuals of `merit` for a traced scene, term by term (unweighted). A detector the
 /// direct light misses is an error: there is nothing to align. Headroom terms are
 /// measured on the DOFs ([`headroom`]) and come out empty here.
@@ -118,6 +130,9 @@ pub fn residuals(merit: &[Merit], traced: &SceneTrace) -> Result<Vec<Vec<f64>>, 
                     1e3 * (d.direct_mean_slope.1 - target.1),
                 ],
                 Term::Collimation => vec![1e3 * d.direct_rms_slope],
+                Term::Diameter { target } => {
+                    vec![DIAMETER_PER_RMS_RADIUS * d.direct_rms_radius - target]
+                }
                 Term::Headroom => Vec::new(),
                 Term::Power => {
                     let launched = traced.ledger.launched;
@@ -172,6 +187,9 @@ pub fn optimise(
         .iter()
         .filter(|d| !d.locked && d.follows.is_none())
         .collect();
+    if scene.dofs.is_empty() {
+        return Err("nothing to move: give the items it may move a degree of freedom (a slide or tilt; in the interface: select the item, then Add under Degrees of freedom)".into());
+    }
     if free.is_empty() {
         return Err("no free degrees of freedom (every DOF is locked or coupled)".into());
     }

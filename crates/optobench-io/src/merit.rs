@@ -3,10 +3,16 @@
 //!
 //! ```toml
 //! [[merit]]
-//! kind = "centring"                 # or "focus", "pointing", "collimation", "power"
+//! kind = "centring"                 # or "focus", "pointing", "collimation", "diameter",
+//!                                   # "power"
 //! detector = "screen"
 //! target = [0, 0]                   # centring: mm in the detector's frame; pointing: mrad
 //! weight = 1.0                      # optional; residuals are mm, mrad or a fraction
+//!
+//! [[merit]]
+//! kind = "diameter"                 # the direct beam's diameter (2√2 × its RMS radius:
+//! detector = "screen"               # an even disc's edge, a Gaussian's 1/e²)
+//! target = 5.0                      # mm, required
 //!
 //! [[merit]]
 //! kind = "headroom"                 # adjusters near the middle of their ranges (no detector):
@@ -38,13 +44,15 @@ pub(crate) fn term(item: &Item) -> Result<Merit, FileError> {
             weight,
         });
     }
-    let targeted = matches!(kind, "centring" | "pointing");
+    let targeted = matches!(kind, "centring" | "pointing" | "diameter");
     let mut keys = vec!["kind", "detector", "weight"];
     if targeted {
         keys.push("target");
     }
     check_keys(item.table, &keys, &item.context)?;
-    let target = if item.table.contains_key("target") {
+    let target = if kind == "diameter" {
+        (item.positive("target")?, 0.0)
+    } else if item.table.contains_key("target") {
         item.pair("target")?
     } else {
         (0.0, 0.0)
@@ -56,10 +64,11 @@ pub(crate) fn term(item: &Item) -> Result<Merit, FileError> {
             target: (target.0 * 1e-3, target.1 * 1e-3),
         },
         "collimation" => Term::Collimation,
+        "diameter" => Term::Diameter { target: target.0 },
         "power" => Term::Power,
         other => {
             return Err(error(format!(
-                "{}: merit kind `{other}` is not known; use \"focus\", \"centring\", \"pointing\", \"collimation\", \"power\" or \"headroom\"",
+                "{}: merit kind `{other}` is not known; use \"focus\", \"centring\", \"pointing\", \"collimation\", \"diameter\", \"power\" or \"headroom\"",
                 item.context
             )));
         }

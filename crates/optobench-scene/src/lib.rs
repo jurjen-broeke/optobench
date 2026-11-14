@@ -60,6 +60,20 @@ pub struct LensSurface {
 }
 
 impl LensSurface {
+    /// The surface for a sequential system.
+    fn boxed(&self) -> Box<dyn Surface> {
+        if self.radius.is_infinite() {
+            Box::new(Plane)
+        } else if self.conic == 0.0 {
+            Box::new(Sphere::from_radius(self.radius))
+        } else {
+            Box::new(optobench_surfaces::Conic {
+                curvature: 1.0 / self.radius,
+                conic: self.conic,
+            })
+        }
+    }
+
     fn shape(&self) -> Arc<dyn Surface> {
         if self.radius.is_infinite() {
             Arc::new(Plane)
@@ -72,6 +86,45 @@ impl LensSurface {
             })
         }
     }
+}
+
+/// A lens's first-order properties at `wavelength` (µm) in `surrounding`: focal length,
+/// back focal length and principal planes from its surfaces, centre thicknesses and
+/// glasses (`optobench_trace::paraxial`), light travelling along its +z. `None` for an
+/// element that is not a lens, a lens of zero power, or a glass not defined there.
+pub fn lens_cardinal_points(
+    kind: &ElementKind,
+    surrounding: &Medium,
+    wavelength: f64,
+) -> Option<optobench_trace::CardinalPoints> {
+    let ElementKind::Lens {
+        surfaces,
+        thicknesses,
+        materials,
+        ..
+    } = kind
+    else {
+        return None;
+    };
+    let system = optobench_trace::SequentialSystem {
+        object_medium: surrounding.clone(),
+        surfaces: surfaces
+            .iter()
+            .enumerate()
+            .map(|(i, s)| optobench_trace::SequentialSurface {
+                surface: s.boxed(),
+                aperture: optobench_surfaces::Aperture::Unlimited,
+                interaction: optobench_trace::Interaction::Refract,
+                coating: Coating::Ideal,
+                thickness: thicknesses.get(i).copied().unwrap_or(0.0),
+                medium_after: materials
+                    .get(i)
+                    .cloned()
+                    .unwrap_or_else(|| surrounding.clone()),
+            })
+            .collect(),
+    };
+    system.cardinal_points(wavelength).ok().flatten()
 }
 
 /// What an element is.
@@ -561,6 +614,25 @@ pub fn hexapolar(rings: usize) -> Vec<(f64, f64)> {
     points
 }
 
+/// The points of [`hexapolar`] with the share of an evenly filled unit disc each stands
+/// for: ring k (radius k/N) the annulus from (k − ½)/N to (k + ½)/N, the last cut at the
+/// rim, the centre the disc of radius ½/N, shared among the ring's points. Weighted so,
+/// the rings' second moment is that of the disc to within 1 % at 6 rings (equal weights
+/// put too much at the rim: 15 % at 6 rings).
+pub fn hexapolar_weighted(rings: usize) -> Vec<(f64, f64, f64)> {
+    let n = rings.max(1) as f64;
+    hexapolar(rings)
+        .into_iter()
+        .map(|(u, v)| {
+            let r = (u * u + v * v).sqrt();
+            let k = (r * n).round();
+            let (inner, outer) = ((k - 0.5).max(0.0) / n, ((k + 0.5) / n).min(1.0));
+            let points = if k == 0.0 { 1.0 } else { 6.0 * k };
+            (u, v, (outer * outer - inner * inner) / points)
+        })
+        .collect()
+}
+
 impl Scene {
     fn check_ids(&self) -> Result<(), SceneError> {
         let mut ids: Vec<&str> = self
@@ -1018,33 +1090,23 @@ impl Scene {
         for (wavelength, share) in lines {
             // (position, direction, fraction of the line's power)
             let bundle: Vec<(Vec3, Vec3, f64)> = match source.kind {
-                SourceKind::Collimated { diameter } => {
-                    let points = hexapolar(source.rings);
-                    let each = 1.0 / points.len() as f64;
-                    points
-                        .into_iter()
-                        .map(|(u, v)| {
-                            (
-                                Vec3::new(u * diameter / 2.0, v * diameter / 2.0, 0.0),
-                                Vec3::Z,
-                                each,
-                            )
-                        })
-                        .collect()
-                }
+                SourceKind::Collimated { diameter } => hexapolar_weighted(source.rings)
+                    .into_iter()
+                    .map(|(u, v, w)| {
+                        (
+                            Vec3::new(u * diameter / 2.0, v * diameter / 2.0, 0.0),
+                            Vec3::Z,
+                            w,
+                        )
+                    })
+                    .collect(),
                 SourceKind::Point { half_angle } => {
-                    let points = hexapolar(source.rings);
-                    let each = 1.0 / points.len() as f64;
                     let s = half_angle.sin();
-                    points
+                    hexapolar_weighted(source.rings)
                         .into_iter()
-                        .map(|(u, v)| {
+                        .map(|(u, v, w)| {
                             let (a, b) = (u * s, v * s);
-                            (
-                                Vec3::ZERO,
-                                Vec3::new(a, b, (1.0 - a * a - b * b).sqrt()),
-                                each,
-                            )
+                            (Vec3::ZERO, Vec3::new(a, b, (1.0 - a * a - b * b).sqrt()), w)
                         })
                         .collect()
                 }

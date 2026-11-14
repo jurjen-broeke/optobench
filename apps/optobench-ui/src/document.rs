@@ -26,6 +26,14 @@ pub struct Item {
     pub mesh: Option<Mesh>,
     /// For a CAD body, its own x, y and z axes in the scene frame.
     pub body_axes: Option<[V3; 3]>,
+    /// For a layout item, where its frame sits (mm, scene frame) and its +z (optical
+    /// axis; a mirror's normal).
+    pub origin: Option<V3>,
+    /// See `origin`.
+    pub axis: Option<V3>,
+    /// For a lens: its shape, focal length, back focal length and glasses' indices, as
+    /// `view` gives them.
+    pub lens: Option<Value>,
 }
 
 /// Where a line of sight met an item.
@@ -251,6 +259,9 @@ impl Scene {
                 body_axes: item["body_axes"]
                     .as_array()
                     .and_then(|a| Some([v3(a.first()?)?, v3(a.get(1)?)?, v3(a.get(2)?)?])),
+                origin: v3(&item["origin"]),
+                axis: v3(&item["axis"]),
+                lens: item.get("lens").cloned(),
             })
             .collect();
         let sources = value["sources"]
@@ -323,11 +334,26 @@ impl Trace {
     }
 }
 
+/// A graph open in the results strip.
+pub struct OpenGraph {
+    /// The `graph` command's `of`.
+    pub kind: String,
+    /// The graph.
+    pub graph: optobench_analysis::graph::Graph,
+    /// Its zoom and pan.
+    pub view: crate::graphs::GraphView,
+    /// The design's edit count when it was drawn: older than the design when less than
+    /// `Document::edits`.
+    pub drawn_at: u64,
+}
+
 /// A command's result arriving from the background.
 #[derive(Debug)]
 pub struct Finished {
     /// The command.
     pub command: String,
+    /// For `graph`, the graph's kind (`of`).
+    pub of: Option<String>,
     /// Its result, or the error message.
     pub result: Result<Value, String>,
     /// For `view`, the scene read from the result (on the background thread: meshes are
@@ -387,10 +413,15 @@ pub struct Document {
     pub runs: Vec<Run>,
     /// The last optimisation's result, until applied or replaced.
     pub optimised: Option<Value>,
-    /// The graphs drawn so far, newest first (at most three), with their views.
-    pub graphs: Vec<(optobench_analysis::graph::Graph, crate::graphs::GraphView)>,
-    /// The graph the Graph button draws (the `graph` command's `of`).
-    pub graph_kind: &'static str,
+    /// The graphs open, one per kind, in the order first drawn.
+    pub graphs: Vec<OpenGraph>,
+    /// The one shown (index into `graphs`).
+    pub shown_graph: usize,
+    /// The kind to show when it arrives (the first of those last asked for).
+    pub show_next: Option<String>,
+    /// Edits made to the design since it was opened (graphs drawn before the last are
+    /// out of date).
+    pub edits: u64,
     /// What the next run follows (for the runs strip).
     changed: String,
     undoing: bool,
@@ -415,7 +446,9 @@ impl Document {
             trace: None,
             output: None,
             graphs: Vec::new(),
-            graph_kind: "spot",
+            shown_graph: 0,
+            show_next: None,
+            edits: 0,
             running: Vec::new(),
             messages: Vec::new(),
             undo: Vec::new(),
@@ -494,13 +527,27 @@ impl Document {
                 }
             }
             "parts" | "curves" | "materials" => Ok(json!({})),
-            "graph" => Ok(json!({ "path": path, "of": self.graph_kind })),
+            "graph" => Ok(json!({ "path": path, "of": "spot" })),
             "edit" => Ok(json!({ "path": path })),
             "import-part" | "import-curve" | "import-material" | "import-fluorophore" => {
                 Err("drop the file on the window to import it (coming with M8c)".into())
             }
             other => Err(format!("`{other}` has no button yet")),
         }
+    }
+
+    /// Draws graphs of these kinds (the `graph` command's `of`), showing the first when
+    /// it arrives.
+    pub fn draw_graphs(&mut self, kinds: &[String]) {
+        self.show_next = kinds.first().cloned();
+        for kind in kinds {
+            self.start("graph", json!({ "of": kind }));
+        }
+    }
+
+    /// Whether a graph was drawn before the design's last edit.
+    pub fn out_of_date(&self, graph: &OpenGraph) -> bool {
+        graph.drawn_at < self.edits
     }
 
     /// Runs a command in the background with `extra` parameters added to the design's.
@@ -568,6 +615,9 @@ impl Document {
         self.running.push(command.to_owned());
         let sender = self.sender.clone();
         let name = command.to_owned();
+        let of = (command == "graph")
+            .then(|| parameters["of"].as_str().map(str::to_owned))
+            .flatten();
         std::thread::spawn(move || {
             let result = optobench_commands::Registry::standard()
                 .run(&name, &parameters)
@@ -578,6 +628,7 @@ impl Document {
             };
             let _ = sender.send(Finished {
                 command: name,
+                of,
                 result,
                 scene,
             });
@@ -613,6 +664,7 @@ impl Document {
                 }),
             },
             ("edit", Ok(value)) => {
+                self.edits += 1;
                 if let (false, Some(previous)) = (self.undoing, value["previous"].as_str()) {
                     self.undo.push(previous.to_owned());
                 }
@@ -645,9 +697,28 @@ impl Document {
                         error: false,
                         text: format!("Graph: {}", graph.title),
                     });
-                    self.graphs
-                        .insert(0, (graph, crate::graphs::GraphView::default()));
-                    self.graphs.truncate(3);
+                    let kind = done.of.unwrap_or_else(|| graph.title.clone());
+                    let open = OpenGraph {
+                        kind: kind.clone(),
+                        graph,
+                        view: crate::graphs::GraphView::default(),
+                        drawn_at: self.edits,
+                    };
+                    // A kind drawn again replaces its graph, where it was.
+                    let at = match self.graphs.iter().position(|g| g.kind == kind) {
+                        Some(i) => {
+                            self.graphs[i] = open;
+                            i
+                        }
+                        None => {
+                            self.graphs.push(open);
+                            self.graphs.len() - 1
+                        }
+                    };
+                    if self.show_next.as_deref() == Some(kind.as_str()) || self.graphs.len() == 1 {
+                        self.shown_graph = at;
+                        self.show_next = None;
+                    }
                 }
                 Err(e) => self.messages.push(Message {
                     error: true,
@@ -913,7 +984,9 @@ mod tests {
             trace: None,
             output: None,
             graphs: Vec::new(),
-            graph_kind: "spot",
+            shown_graph: 0,
+            show_next: None,
+            edits: 0,
             running: Vec::new(),
             messages: Vec::new(),
             undo: Vec::new(),

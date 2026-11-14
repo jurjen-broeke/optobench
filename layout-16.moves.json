@@ -1,0 +1,94 @@
+{
+  "design": "/Users/jbe390/Documents/Rust/optobench/layout-16.optobench",
+  "dofs": [
+    {
+      "at_range_limit": false,
+      "change": -153.61456610369623,
+      "name": "PCV_slide_X",
+      "room": {
+        "advice": "room enough both ways",
+        "left": [
+          196.38543389630377,
+          203.61456610369623
+        ],
+        "range": [
+          -350.0,
+          50.0
+        ],
+        "range_after_adjusting": [
+          -196.38543389630377,
+          203.61456610369623
+        ],
+        "status": "ok",
+        "used": -0.01807283051848117
+      },
+      "start": 0.0,
+      "suggested": -153.61456610369623,
+      "unit": "mm"
+    }
+  ],
+  "format": "optobench/1",
+  "kind": "moves",
+  "merit": [
+    {
+      "detector": "D1",
+      "end": [
+        0.018924514279349842
+      ],
+      "kind": "collimation",
+      "start": [
+        80.62579995860602
+      ],
+      "unit": "mrad",
+      "weight": 1.0
+    },
+    {
+      "detector": "D1",
+      "end": [
+        0.03472457113355709
+      ],
+      "kind": "diameter",
+      "start": [
+        -0.9607938925884385
+      ],
+      "unit": "mm",
+      "weight": 1.0
+    }
+  ],
+  "moves": [
+    {
+      "dofs": [
+        "PCV_slide_X"
+      ],
+      "kind": "element",
+      "matrix": [
+        1.0,
+        0.0,
+        0.0,
+        -153.61456610369623,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0
+      ],
+      "name": "PCV",
+      "rotate_axis": [
+        0.0,
+        0.0,
+        1.0
+      ],
+      "rotate_deg": 0.0,
+      "translate_mm": [
+        -153.61456610369623,
+        0.0,
+        0.0
+      ]
+    }
+  ],
+  "next": "Set each DOF's `value` in the layout to the suggested one.",
+  "poses": []
+}

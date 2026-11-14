@@ -24,6 +24,7 @@ mod fluence;
 mod fluorophores;
 mod graph;
 mod heating;
+mod irises;
 mod materials;
 mod moves;
 mod optimize;
@@ -221,6 +222,14 @@ const STANDARD: &[Command] = &[
         effect: Effect::Write,
         summary: "check a part file and copy it into the parts library",
         handler: parts::import_part,
+    },
+    Command {
+        id: "part-from-step",
+        label: "Lens from STEP",
+        icon: "import-part",
+        effect: Effect::Write,
+        summary: "read a lens's radii, thicknesses and glasses' places from its STEP file, and with its glasses make it a library part",
+        handler: parts::part_from_step,
     },
     Command {
         id: "curves",

@@ -365,3 +365,151 @@ fn mounts_hold_adjusters_and_no_optics() {
     lens.adjusters = mount.adjusters.clone();
     fails(lens, "only a mount has adjusters");
 }
+
+mod prescriptions {
+    use super::*;
+    use crate::prescription::{Gap, prescription};
+    use optobench_math::Transform;
+
+    /// A flat ring between radii `inner` and `outer` at `z`: two loops.
+    fn ring(z: f64, inner: f64, outer: f64) -> BrepFace {
+        let mut hole = circle(inner, z);
+        hole.reverse();
+        BrepFace::new(
+            FaceSurface::Plane(frame(Vec3::new(0.0, 0.0, z), Vec3::Z)),
+            false,
+            vec![circle(outer, z), hole],
+        )
+    }
+
+    fn read(bodies: &[&[BrepFace]]) -> Result<crate::prescription::Prescription, String> {
+        let list: Vec<(Vec<&BrepFace>, Transform)> = bodies
+            .iter()
+            .map(|faces| (faces.iter().collect(), Transform::IDENTITY))
+            .collect();
+        prescription(&list)
+    }
+
+    fn close(a: &[f64], b: &[f64]) -> bool {
+        a.len() == b.len()
+            && a.iter()
+                .zip(b)
+                .all(|(x, y)| (x.is_infinite() && y.is_infinite()) || (x - y).abs() < 1e-9)
+    }
+
+    #[test]
+    fn a_cemented_doublet_shares_its_middle_surface() {
+        // R 40 (vertex 0), R −25 (vertex 8), R −200 (vertex 10.5), as in the doublet test.
+        let crown = [
+            cylinder(12.7, 1.0, 6.0),
+            cap(0.0, 40.0, 12.7),
+            cap(8.0, -25.0, 12.7),
+        ];
+        let flint = [
+            cylinder(12.7, 8.0, 10.0),
+            cap(8.0, -25.0, 12.7),
+            cap(10.5, -200.0, 12.7),
+        ];
+        let p = read(&[&flint, &crown]).expect("a doublet");
+        assert!(close(&p.radii, &[40.0, -25.0, -200.0]), "{:?}", p.radii);
+        assert!(close(&p.thickness, &[8.0, 2.5]));
+        assert_eq!(p.gaps, [Gap::Glass(0), Gap::Glass(1)]);
+        assert_eq!(p.kind(), "cemented doublet");
+        assert_eq!(p.diameter, Some(25.4));
+    }
+
+    #[test]
+    fn an_air_gap_and_a_mount_ring() {
+        // A biconvex R ±50 (vertices 0, 6), 1.5 mm of air, a plano-concave R −60 then flat
+        // (vertices 7.5, 9.5), in a housing whose ring faces go round the axis twice.
+        let first = [
+            cylinder(12.7, 1.0, 5.0),
+            cap(0.0, 50.0, 12.7),
+            cap(6.0, -50.0, 12.7),
+        ];
+        let second = [
+            cylinder(12.7, 8.0, 9.5),
+            cap(7.5, -60.0, 12.7),
+            flat(9.5, 12.7, 1.0),
+        ];
+        let housing = [
+            cylinder(15.0, -1.0, 11.0),
+            cylinder(12.8, -1.0, 11.0),
+            ring(-1.0, 12.8, 15.0),
+            ring(11.0, 12.8, 15.0),
+        ];
+        let p = read(&[&housing, &second, &first]).expect("a doublet");
+        assert_eq!(p.left_out, 1, "the housing");
+        assert!(
+            close(&p.radii, &[50.0, -50.0, -60.0, f64::INFINITY]),
+            "{:?}",
+            p.radii
+        );
+        assert!(close(&p.thickness, &[6.0, 1.5, 2.0]), "{:?}", p.thickness);
+        assert_eq!(p.gaps, [Gap::Glass(0), Gap::Air, Gap::Glass(1)]);
+        assert_eq!(p.kind(), "air-spaced doublet");
+    }
+
+    #[test]
+    fn the_more_curved_side_comes_first() {
+        // A plano-convex lens flat side first along +z (flat at 0, R −30 at 5) is listed
+        // curved side first: R 30, flat.
+        let lens = [
+            cylinder(12.7, 0.0, 2.0),
+            flat(0.0, 12.7, -1.0),
+            cap(5.0, -30.0, 12.7),
+        ];
+        let p = read(&[&lens]).expect("a lens");
+        assert!(close(&p.radii, &[30.0, f64::INFINITY]), "{:?}", p.radii);
+        assert_eq!(p.kind(), "singlet");
+        // Three cemented glasses, curved more at the end: turned round, glasses renumbered.
+        let a = [
+            cylinder(12.7, 0.5, 2.0),
+            cap(0.0, 200.0, 12.7),
+            cap(3.0, 60.0, 12.7),
+        ];
+        let b = [
+            cylinder(12.7, 3.5, 6.0),
+            cap(3.0, 60.0, 12.7),
+            cap(7.0, -40.0, 12.7),
+        ];
+        let c = [
+            cylinder(12.7, 7.5, 8.5),
+            cap(7.0, -40.0, 12.7),
+            cap(9.0, -20.0, 12.7),
+        ];
+        let p = read(&[&a, &b, &c]).expect("a triplet");
+        assert!(
+            close(&p.radii, &[20.0, 40.0, -60.0, -200.0]),
+            "{:?}",
+            p.radii
+        );
+        assert!(close(&p.thickness, &[2.0, 4.0, 3.0]));
+        assert_eq!(p.gaps, [Gap::Glass(0), Gap::Glass(1), Gap::Glass(2)]);
+        assert_eq!(p.kind(), "cemented triplet");
+    }
+
+    #[test]
+    fn what_is_not_a_lens_is_said() {
+        let housing = [
+            cylinder(15.0, 0.0, 2.0),
+            cylinder(11.5, 0.0, 2.0),
+            ring(0.0, 11.5, 15.0),
+            ring(2.0, 11.5, 15.0),
+        ];
+        let e = read(&[&housing]).expect_err("no glass");
+        assert!(e.contains("no glass body"), "{e}");
+        let a = [
+            cylinder(12.7, 1.0, 5.0),
+            cap(0.0, 50.0, 12.7),
+            cap(6.0, -50.0, 12.7),
+        ];
+        let b = [
+            cylinder(12.7, 5.0, 7.0),
+            cap(4.0, 60.0, 12.7),
+            cap(8.0, -60.0, 12.7),
+        ];
+        let e = read(&[&a, &b]).expect_err("overlap");
+        assert!(e.contains("overlap"), "{e}");
+    }
+}

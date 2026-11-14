@@ -40,7 +40,14 @@ fn choices(table: &str, key: &str) -> Option<&'static [&'static str]> {
     match (table, key) {
         ("element", "kind") => Some(&["lens", "mirror", "filter"]),
         ("source", "kind") => Some(&["collimated", "point", "gaussian"]),
-        ("merit", "kind") => Some(&["focus", "centring", "pointing", "collimation", "power"]),
+        ("merit", "kind") => Some(&[
+            "focus",
+            "centring",
+            "pointing",
+            "collimation",
+            "diameter",
+            "power",
+        ]),
         ("proxy", "kind") => Some(&["tube"]),
         _ => None,
     }
@@ -166,8 +173,12 @@ fn field(
         Value::String(s) => text(ui, drafts, path, s, 140.0).map(Value::String),
         Value::Array(items) if items.iter().all(Value::is_number) => {
             let mut changed = None;
+            let names = component_names(key, items.len());
             ui.horizontal(|ui| {
                 for (k, item) in items.iter().enumerate() {
+                    if let Some(name) = names.get(k) {
+                        ui.label(RichText::new(*name).color(DARK.text_dim).size(11.0));
+                    }
                     let component = format!("{path}/{k}");
                     if let Some(v) = field(ui, drafts, &component, table, "", item, context) {
                         let mut new = items.clone();
@@ -194,6 +205,10 @@ pub struct Context {
     pub detectors: Vec<String>,
     /// Whether the file is a sidecar (CAD).
     pub sidecar: bool,
+    /// A table layout's hole pitch (mm).
+    pub pitch: Option<f64>,
+    /// The groups items are in, and those the file declares.
+    pub groups: Vec<String>,
 }
 
 impl Context {
@@ -209,11 +224,207 @@ impl Context {
                 })
                 .unwrap_or_default(),
             sidecar: design["kind"] == "sidecar",
+            pitch: (design["layout"] == "table")
+                .then(|| design["table"]["pitch"].as_f64())
+                .flatten(),
+            groups: groups_of(design),
         }
     }
 }
 
+/// Every group of a design: those items are in and those `[[group]]` declares, sorted.
+pub fn groups_of(design: &Value) -> Vec<String> {
+    let mut groups: Vec<String> = ["element", "source", "detector", "proxy"]
+        .iter()
+        .filter_map(|t| design[*t].as_array())
+        .flatten()
+        .filter_map(|e| e["group"].as_str())
+        .chain(
+            design["group"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|g| g["id"].as_str()),
+        )
+        .map(str::to_owned)
+        .collect();
+    groups.sort();
+    groups.dedup();
+    groups
+}
+
+/// The group an entry is in: none, one of the design's, or a new one typed.
+fn group_field(
+    ui: &mut Ui,
+    drafts: &mut Drafts,
+    base: &str,
+    target: &Value,
+    entry: &Value,
+    context: &Context,
+) -> Option<Value> {
+    let current = entry["group"].as_str();
+    let mut op = target.clone();
+    let mut chosen: Option<Option<String>> = None;
+    ui.horizontal(|ui| {
+        ui.label(RichText::new("group").color(DARK.text_dim))
+            .on_hover_text("Items in a group move together: Move on any of them moves all");
+        egui::ComboBox::from_id_salt(format!("{base}/group"))
+            .selected_text(current.unwrap_or("none"))
+            .show_ui(ui, |ui| {
+                if ui.selectable_label(current.is_none(), "none").clicked() {
+                    chosen = Some(None);
+                }
+                for g in &context.groups {
+                    if ui
+                        .selectable_label(current == Some(g.as_str()), g)
+                        .clicked()
+                    {
+                        chosen = Some(Some(g.clone()));
+                    }
+                }
+            });
+        let path = format!("{base}/group/new");
+        if let Some(typed) = text(ui, drafts, &path, "", 90.0) {
+            let typed = typed.trim().to_owned();
+            if !typed.is_empty() {
+                chosen = Some(Some(typed));
+            }
+        }
+        ui.label(
+            RichText::new("or a new one")
+                .color(DARK.text_dim)
+                .size(11.0),
+        );
+    });
+    match chosen? {
+        None if current.is_some() => {
+            op["op"] = json!("unset");
+            op["key"] = json!("group");
+            Some(op)
+        }
+        Some(g) if current != Some(g.as_str()) => {
+            op["op"] = json!("set");
+            op["key"] = json!("group");
+            op["value"] = json!(g);
+            Some(op)
+        }
+        _ => None,
+    }
+}
+
+/// The names of a list's numbers, by its key: `hole` [column, row], a size [width,
+/// height], a vector [x, y, z].
+fn component_names(key: &str, count: usize) -> &'static [&'static str] {
+    match (key, count) {
+        ("hole" | "corner", 2) => &["column", "row"],
+        ("size", 2) => &["width", "height"],
+        ("pixels", 2) => &["across", "up"],
+        ("offset", 2) => &["x", "y"],
+        (_, 3) => &["x", "y", "z"],
+        _ => &[],
+    }
+}
+
+/// The unit of a key's numbers, shown after its field.
+fn unit(key: &str) -> Option<&'static str> {
+    Some(match key {
+        "at" | "height" | "diameter" | "clear_aperture" | "focal_length" | "working_distance"
+        | "pupil_distance" | "inner_diameter" | "hole_diameter" | "length" | "waist_diameter"
+        | "core_diameter" | "thickness" | "size" | "pitch" => "mm",
+        "wavelength_um" => "µm",
+        "power_w" => "W",
+        "fold" | "half_angle_deg" => "°",
+        _ => return None,
+    })
+}
+
+/// A number rounded to 1e-9, and whole when it is whole (holes stay `[4, 0]`).
+pub fn tidy(v: f64) -> Value {
+    let r = (v * 1e9).round() / 1e9;
+    if r.fract() == 0.0 && r.abs() < 1e15 {
+        json!(r as i64)
+    } else {
+        json!(r)
+    }
+}
+
+/// The position of an entry (mm, scene frame): on a table layout X, Y and Z to type,
+/// written back as its hole and height; otherwise as the scene placed it, to read.
+fn position(
+    ui: &mut Ui,
+    drafts: &mut Drafts,
+    base: &str,
+    target: &Value,
+    entry: &Value,
+    origin: Option<V3>,
+    context: &Context,
+) -> Vec<Value> {
+    let mut operations = Vec::new();
+    let table = context
+        .pitch
+        .filter(|_| entry["hole"].is_array() && entry["height"].is_number());
+    if table.is_none() && origin.is_none() {
+        return operations;
+    }
+    ui.label(RichText::new("Position").strong());
+    egui::Grid::new(format!("position-{base}"))
+        .num_columns(3)
+        .spacing([10.0, 4.0])
+        .show(ui, |ui| match table {
+            Some(pitch) => {
+                let hole = [
+                    entry["hole"][0].as_f64().unwrap_or(0.0),
+                    entry["hole"][1].as_f64().unwrap_or(0.0),
+                ];
+                let height = entry["height"].as_f64().unwrap_or(0.0);
+                for (k, label) in ["X", "Y", "Z"].into_iter().enumerate() {
+                    ui.label(RichText::new(label).color(DARK.text_dim));
+                    let current = if k < 2 { hole[k] * pitch } else { height };
+                    let path = format!("{base}/position/{k}");
+                    if let Some(v) = number(ui, drafts, &path, current) {
+                        let mut op = target.clone();
+                        op["op"] = json!("set");
+                        if k < 2 {
+                            let mut new = hole;
+                            new[k] = v / pitch;
+                            op["key"] = json!("hole");
+                            op["value"] = json!([tidy(new[0]), tidy(new[1])]);
+                        } else {
+                            op["key"] = json!("height");
+                            op["value"] = tidy(v);
+                        }
+                        operations.push(op);
+                    }
+                    ui.label(RichText::new("mm").color(DARK.text_dim).size(11.0));
+                    ui.end_row();
+                }
+            }
+            None => {
+                let p = origin.unwrap_or([0.0; 3]);
+                for (k, label) in ["X", "Y", "Z"].into_iter().enumerate() {
+                    ui.label(RichText::new(label).color(DARK.text_dim));
+                    ui.label(format!("{:.3}", p[k] + 0.0));
+                    ui.label(RichText::new("mm").color(DARK.text_dim).size(11.0));
+                    ui.end_row();
+                }
+            }
+        });
+    if table.is_some() {
+        ui.label(
+            RichText::new("X and Y move it by holes (fractions allowed), Z is its height")
+                .color(DARK.text_dim)
+                .size(11.0),
+        );
+    }
+    ui.add_space(4.0);
+    operations
+}
+
 /// The editor of one entry and its degrees of freedom; returns the operations to apply.
+///
+/// `origin` is where the scene placed it (mm), shown as its position; `lens` a lens's
+/// properties from `view`.
+#[allow(clippy::too_many_arguments)]
 pub fn entry(
     ui: &mut Ui,
     drafts: &mut Drafts,
@@ -221,6 +432,8 @@ pub fn entry(
     entry: &Value,
     index: usize,
     context: &Context,
+    origin: Option<V3>,
+    lens: Option<&Value>,
 ) -> Vec<Value> {
     let target = selector(table, entry, index);
     let base = format!(
@@ -228,11 +441,48 @@ pub fn entry(
         entry["id"].as_str().unwrap_or(&index.to_string())
     );
     let mut operations = Vec::new();
+    // Its name first.
+    if let Some(id) = entry["id"].as_str() {
+        ui.horizontal(|ui| {
+            ui.label(RichText::new("name").color(DARK.text_dim));
+            if let Some(typed) = text(ui, drafts, &format!("{base}/id"), id, 160.0) {
+                let mut op = target.clone();
+                op["op"] = json!("set");
+                op["key"] = json!("id");
+                op["value"] = json!(typed.trim());
+                operations.push(op);
+            }
+        });
+    }
+    // A lens's own editor next: its type, focal length, radii, thickness, glass, size.
+    let prescribed = table == "element" && entry["surfaces"].is_array();
+    if table == "element" && (prescribed || lens.is_some()) {
+        operations.extend(lens_editor(ui, drafts, &base, &target, entry, lens));
+    }
+    operations.extend(position(ui, drafts, &base, &target, entry, origin, context));
+    if ["element", "source", "detector", "proxy"].contains(&table) && entry["id"].is_string() {
+        operations.extend(group_field(ui, drafts, &base, &target, entry, context));
+    }
+    // On a table layout the height is the position's Z.
+    let shown_as_z = context.pitch.is_some() && entry["hole"].is_array();
     egui::Grid::new(format!("entry-{base}"))
-        .num_columns(2)
+        .num_columns(3)
         .spacing([10.0, 4.0])
         .show(ui, |ui| {
             for key in keys(entry) {
+                if (shown_as_z && key == "height") || key == "group" || key == "id" {
+                    continue;
+                }
+                let in_lens_editor = matches!(
+                    key.as_str(),
+                    "surfaces" | "thickness" | "material" | "diameter" | "clear_aperture"
+                );
+                if prescribed && in_lens_editor {
+                    continue;
+                }
+                if table == "element" && entry["library"].is_string() && key == "reversed" {
+                    continue;
+                }
                 ui.label(RichText::new(&key).color(DARK.text_dim));
                 let path = format!("{base}/{key}");
                 if let Some(value) = field(ui, drafts, &path, table, &key, &entry[&key], context) {
@@ -242,12 +492,16 @@ pub fn entry(
                     op["value"] = value;
                     operations.push(op);
                 }
+                match unit(&key) {
+                    Some(u) => ui.label(RichText::new(u).color(DARK.text_dim).size(11.0)),
+                    None => ui.label(""),
+                };
                 ui.end_row();
             }
         });
     if WITH_DOFS.contains(&table) && entry["id"].is_string() {
         ui.add_space(6.0);
-        operations.extend(dofs(ui, drafts, table, entry, &base, context.sidecar));
+        operations.extend(dofs(ui, drafts, table, entry, &base, context));
     }
     ui.add_space(4.0);
     let what = if context.sidecar && table == "element" {
@@ -267,40 +521,712 @@ pub fn entry(
     operations
 }
 
+/// The breadboard of a table layout (`[table]`): its pitch and size in holes, and the
+/// hole at its corner. A board the file does not size is fitted around the items, and
+/// can be kept as it is.
+pub fn board(ui: &mut Ui, drafts: &mut Drafts, board: &crate::board::Board) -> Vec<Value> {
+    let mut operations = Vec::new();
+    let set = |key: &str, value: Value| json!({ "op": "set", "section": "table", "key": key, "value": value });
+    ui.label(RichText::new("Breadboard").strong().size(14.0));
+    egui::Grid::new("breadboard")
+        .num_columns(3)
+        .spacing([10.0, 4.0])
+        .show(ui, |ui| {
+            ui.label(RichText::new("pitch").color(DARK.text_dim));
+            if let Some(v) = number(ui, drafts, "table/pitch", board.pitch) {
+                if v > 0.0 {
+                    operations.push(set("pitch", tidy(v)));
+                }
+            }
+            ui.label(RichText::new("mm").color(DARK.text_dim).size(11.0));
+            ui.end_row();
+            for (key, current, unit) in [
+                ("columns", board.columns, "holes along x"),
+                ("rows", board.rows, "holes along y"),
+            ] {
+                ui.label(RichText::new(key).color(DARK.text_dim));
+                if let Some(v) = number(ui, drafts, &format!("table/{key}"), current as f64) {
+                    let v = v.round().max(1.0) as i64;
+                    if board.given {
+                        operations.push(set(key, json!(v)));
+                    } else {
+                        // Sizing one side keeps the fitted size of the others.
+                        operations.push(set("columns", json!(board.columns)));
+                        operations.push(set("rows", json!(board.rows)));
+                        operations.push(set("corner", json!([board.corner.0, board.corner.1])));
+                        operations.push(set(key, json!(v)));
+                    }
+                }
+                ui.label(RichText::new(unit).color(DARK.text_dim).size(11.0));
+                ui.end_row();
+            }
+            ui.label(RichText::new("corner").color(DARK.text_dim));
+            ui.horizontal(|ui| {
+                for (k, name) in ["column", "row"].into_iter().enumerate() {
+                    ui.label(RichText::new(name).color(DARK.text_dim).size(11.0));
+                    let current = if k == 0 {
+                        board.corner.0
+                    } else {
+                        board.corner.1
+                    };
+                    if let Some(v) =
+                        number(ui, drafts, &format!("table/corner/{k}"), current as f64)
+                    {
+                        let mut corner = [board.corner.0, board.corner.1];
+                        corner[k] = v.round() as i64;
+                        if !board.given {
+                            operations.push(set("columns", json!(board.columns)));
+                            operations.push(set("rows", json!(board.rows)));
+                        }
+                        operations.push(set("corner", json!(corner)));
+                    }
+                }
+            });
+            ui.label(
+                RichText::new("the hole at its corner")
+                    .color(DARK.text_dim)
+                    .size(11.0),
+            );
+            ui.end_row();
+        });
+    let ((x0, x1), (y0, y1)) = board.extent();
+    ui.label(
+        RichText::new(format!(
+            "{:.0} × {:.0} mm, from ({x0:.1}, {y0:.1}) to ({x1:.1}, {y1:.1}) mm",
+            x1 - x0,
+            y1 - y0
+        ))
+        .color(DARK.text_dim),
+    );
+    if !board.given {
+        ui.label(
+            RichText::new("Not sized in the file: drawn around the items with two holes to spare")
+                .color(DARK.text_dim)
+                .size(11.0),
+        );
+        if ui
+            .button("Keep this size")
+            .on_hover_text("Write these columns, rows and corner into the file's [table]")
+            .clicked()
+        {
+            operations.push(set("columns", json!(board.columns)));
+            operations.push(set("rows", json!(board.rows)));
+            operations.push(set("corner", json!([board.corner.0, board.corner.1])));
+        }
+    }
+    operations
+}
+
+/// A radius as a file writes it: a number, or "inf" for flat.
+fn radius_value(r: f64) -> Value {
+    if r.is_finite() {
+        tidy((r * 1e4).round() / 1e4)
+    } else {
+        json!("inf")
+    }
+}
+
+/// A radius as written: a number, or "inf" / "-inf".
+fn radius_of(value: &Value) -> f64 {
+    match value {
+        Value::String(s) if s.starts_with('-') => f64::NEG_INFINITY,
+        Value::String(_) => f64::INFINITY,
+        v => v.as_f64().unwrap_or(f64::INFINITY),
+    }
+}
+
+/// A number field with a label and unit in a grid row; the new value when changed.
+fn row(
+    ui: &mut Ui,
+    drafts: &mut Drafts,
+    path: &str,
+    label: &str,
+    help: &str,
+    unit: &str,
+    current: f64,
+) -> Option<f64> {
+    ui.label(RichText::new(label).color(DARK.text_dim))
+        .on_hover_text(help);
+    let changed = number(ui, drafts, path, current);
+    ui.label(RichText::new(unit).color(DARK.text_dim).size(11.0));
+    ui.end_row();
+    changed
+}
+
+/// A lens's own editor, in the order a lens is chosen: its type; its focal length,
+/// radius, centre thickness and glass, kept consistent (a change to one redesigns the
+/// others: the radius follows the focal length, thickness and index; the focal length
+/// follows the radius); its diameter and clear aperture, made smaller when the lens's
+/// curvature leaves no edge; turned round by Flip. A lens of more glasses (a doublet) is
+/// edited radius by radius; a library lens shows its properties and is flipped by
+/// `reversed`.
+fn lens_editor(
+    ui: &mut Ui,
+    drafts: &mut Drafts,
+    base: &str,
+    target: &Value,
+    entry: &Value,
+    lens: Option<&Value>,
+) -> Vec<Value> {
+    use crate::lens::{Shape, Singlet};
+    let mut operations = Vec::new();
+    let set = |key: &str, value: Value| {
+        let mut op = target.clone();
+        op["op"] = json!("set");
+        op["key"] = json!(key);
+        op["value"] = value;
+        op
+    };
+    let wavelength = lens.and_then(|l| l["wavelength_um"].as_f64());
+    let shown = |key: &str| lens.and_then(|l| l[key].as_f64());
+    ui.label(RichText::new("Lens").strong());
+
+    // A library lens: what it is, turned round or not.
+    if !entry["surfaces"].is_array() {
+        egui::Grid::new(format!("lens-{base}"))
+            .num_columns(3)
+            .spacing([10.0, 4.0])
+            .show(ui, |ui| {
+                ui.label(RichText::new("type").color(DARK.text_dim));
+                ui.label(lens.and_then(|l| l["shape"].as_str()).unwrap_or("—"));
+                ui.label("");
+                ui.end_row();
+                for (label, key) in [("f", "focal_length_mm"), ("fb", "back_focal_length_mm")] {
+                    ui.label(RichText::new(label).color(DARK.text_dim));
+                    ui.label(shown(key).map_or("—".into(), |v| format!("{v:.3}")));
+                    ui.label(RichText::new("mm").color(DARK.text_dim).size(11.0));
+                    ui.end_row();
+                }
+            });
+        let reversed = entry["reversed"].as_bool().unwrap_or(false);
+        if ui
+            .button("Flip")
+            .on_hover_text("Turn the lens round")
+            .clicked()
+        {
+            operations.push(set("reversed", json!(!reversed)));
+        }
+        ui.label(
+            RichText::new("Its prescription, size and coating come from the parts library")
+                .color(DARK.text_dim)
+                .size(11.0),
+        );
+        ui.add_space(4.0);
+        return operations;
+    }
+
+    let surfaces: Vec<Value> = entry["surfaces"].as_array().cloned().unwrap_or_default();
+    let thickness: Vec<Value> = entry["thickness"].as_array().cloned().unwrap_or_default();
+    let material: Vec<Value> = entry["material"].as_array().cloned().unwrap_or_default();
+    let diameter = entry["diameter"].as_f64().unwrap_or(25.4);
+    let clear = entry["clear_aperture"].as_f64().unwrap_or(0.9 * diameter);
+    let singlet_now = surfaces.len() == 2 && material.len() == 1;
+    // The index: the glass's own number, else what the scene found at the wavelength.
+    let n = material
+        .first()
+        .and_then(Value::as_f64)
+        .or_else(|| lens.and_then(|l| l["indices"][0].as_f64()));
+    let custom_path = format!("{base}/custom");
+    let custom = !singlet_now || drafts.texts.get(&custom_path).is_some_and(|c| c == "yes");
+
+    // Writes a singlet, keeping its diameter where its curvature leaves an edge.
+    let write = |operations: &mut Vec<Value>, lens: Singlet, glass: Value| {
+        operations.push(set(
+            "surfaces",
+            json!([{ "radius": radius_value(lens.r1) }, { "radius": radius_value(lens.r2) }]),
+        ));
+        operations.push(set("thickness", json!([tidy(lens.t)])));
+        operations.push(set("material", json!([glass])));
+        let largest = lens.max_diameter();
+        if diameter > largest && largest > 0.0 {
+            operations.push(set("diameter", tidy(largest)));
+            operations.push(set(
+                "clear_aperture",
+                tidy((clear.min(0.9 * largest) * 10.0).floor() / 10.0),
+            ));
+        }
+    };
+
+    // The type.
+    let now = singlet_now.then(|| Singlet {
+        r1: radius_of(&surfaces[0]["radius"]),
+        r2: radius_of(&surfaces[1]["radius"]),
+        t: thickness.first().and_then(Value::as_f64).unwrap_or(4.0),
+        n: n.unwrap_or(1.5),
+    });
+    let (shape, flipped) = now.map_or((Shape::Biconvex, false), |l| l.shape());
+    let glass = material.first().cloned().unwrap_or(json!(1.5));
+    let mut chosen: Option<Option<Shape>> = None;
+    ui.horizontal(|ui| {
+        ui.label(RichText::new("type").color(DARK.text_dim));
+        let shown = if custom {
+            "custom (radius by radius)"
+        } else {
+            shape.name()
+        };
+        egui::ComboBox::from_id_salt(format!("{base}/type"))
+            .selected_text(shown)
+            .show_ui(ui, |ui| {
+                for s in Shape::ALL {
+                    if ui
+                        .selectable_label(!custom && s == shape, s.name())
+                        .clicked()
+                    {
+                        chosen = Some(Some(s));
+                    }
+                }
+                if ui
+                    .selectable_label(custom, "custom (radius by radius)")
+                    .clicked()
+                {
+                    chosen = Some(None);
+                }
+            });
+        if ui
+            .button("Flip")
+            .on_hover_text("Turn the lens round: its surfaces in the other order")
+            .clicked()
+        {
+            if let Some(l) = now {
+                write(&mut operations, l.flipped(), glass.clone());
+            } else {
+                let back = |v: &Value| {
+                    let r = radius_of(&v["radius"]);
+                    json!({ "radius": radius_value(if r.is_finite() { -r } else { r }) })
+                };
+                operations.push(set(
+                    "surfaces",
+                    json!(surfaces.iter().rev().map(back).collect::<Vec<_>>()),
+                ));
+                operations.push(set(
+                    "thickness",
+                    json!(thickness.iter().rev().cloned().collect::<Vec<_>>()),
+                ));
+                operations.push(set(
+                    "material",
+                    json!(material.iter().rev().cloned().collect::<Vec<_>>()),
+                ));
+            }
+        }
+    });
+    match chosen {
+        Some(None) => {
+            drafts.texts.insert(custom_path.clone(), "yes".into());
+        }
+        Some(Some(new)) => {
+            drafts.texts.remove(&custom_path);
+            // Keep the focal length (100 mm for a lens without one), the thickness, glass.
+            let base_lens = now.unwrap_or(Singlet {
+                r1: 50.0,
+                r2: -50.0,
+                t: 4.0,
+                n: n.unwrap_or(1.5),
+            });
+            let f = Some(base_lens.focal_length())
+                .filter(|f| f.is_finite())
+                .unwrap_or(100.0);
+            let f = if new == Shape::Meniscus { f.abs() } else { f };
+            match base_lens.design(
+                new,
+                f,
+                flipped && !matches!(new, Shape::Biconvex | Shape::Biconcave),
+            ) {
+                Some(l) => write(&mut operations, l, glass.clone()),
+                None => {
+                    drafts.texts.insert(
+                        format!("{base}/note"),
+                        format!("No {} of f {f:.1} mm with this thickness", new.name()),
+                    );
+                }
+            }
+        }
+        None => {}
+    }
+
+    if custom {
+        operations.extend(prescription_editor(
+            ui, drafts, base, &set, &surfaces, &thickness, &material,
+        ));
+    } else if let (Some(l), Some(n)) = (now, n) {
+        let f = l.focal_length();
+        egui::Grid::new(format!("lens-{base}")).num_columns(3).spacing([10.0, 4.0]).show(ui, |ui| {
+            // Focal length: the radius follows.
+            if let Some(v) = row(ui, drafts, &format!("{base}/f"), "f", "focal length, from the rear principal plane", "mm", (f * 1e4).round() / 1e4) {
+                match l.design(shape, v, flipped) {
+                    Some(new) => write(&mut operations, new, glass.clone()),
+                    None => {
+                        drafts.texts.insert(format!("{base}/note"), format!("No {} of f {v:.1} mm with this thickness", shape.name()));
+                    }
+                }
+            }
+            // The radius: one for plano and equi lenses (the focal length follows), two
+            // for a meniscus.
+            let curved = if l.r1.is_finite() { l.r1 } else { l.r2 };
+            match shape {
+                Shape::Meniscus => {
+                    for (k, r) in [(1, l.r1), (2, l.r2)] {
+                        if let Some(v) = row(ui, drafts, &format!("{base}/R{k}"), &format!("R{k}"), "radius of curvature, positive when its centre lies further along the light", "mm", r) {
+                            if v != 0.0 {
+                                let mut new = l;
+                                if k == 1 { new.r1 = v } else { new.r2 = v }
+                                write(&mut operations, new, glass.clone());
+                            }
+                        }
+                    }
+                }
+                _ => {
+                    if let Some(v) = row(ui, drafts, &format!("{base}/R"), "R", "radius of its curved surface (both, for an equi-convex or -concave lens)", "mm", curved.abs()) {
+                        if v > 0.0 {
+                            let sign1 = if l.r1.is_finite() { l.r1.signum() } else { 0.0 };
+                            let sign2 = if l.r2.is_finite() { l.r2.signum() } else { 0.0 };
+                            let new = Singlet {
+                                r1: if sign1 == 0.0 { f64::INFINITY } else { sign1 * v },
+                                r2: if sign2 == 0.0 { f64::INFINITY } else { sign2 * v },
+                                ..l
+                            };
+                            write(&mut operations, new, glass.clone());
+                        }
+                    }
+                }
+            }
+            // Thickness: the focal length is kept.
+            if let Some(v) = row(ui, drafts, &format!("{base}/t"), "tc", "centre thickness", "mm", l.t) {
+                if v > 0.0 {
+                    let thicker = Singlet { t: v, ..l };
+                    let new = thicker.design(shape, f, flipped).unwrap_or(thicker);
+                    write(&mut operations, new, glass.clone());
+                }
+            }
+            // The glass: a name (its index from the scene) or an index; with an index
+            // typed, the focal length is kept.
+            ui.label(RichText::new("glass").color(DARK.text_dim))
+                .on_hover_text("a material name (bundled or imported, e.g. N-BK7) or a refractive index");
+            let named = match &glass {
+                Value::String(s) => s.clone(),
+                other => other.to_string(),
+            };
+            if let Some(typed) = text(ui, drafts, &format!("{base}/glass"), &named, 90.0) {
+                let typed = typed.trim().to_owned();
+                match typed.parse::<f64>() {
+                    Ok(index) if index > 1.0 => {
+                        let other = Singlet { n: index, ..l };
+                        let new = other.design(shape, f, flipped).unwrap_or(other);
+                        write(&mut operations, new, json!(index));
+                    }
+                    Ok(_) => {}
+                    Err(_) => operations.push(set("material", json!([typed]))),
+                }
+            }
+            ui.label(
+                RichText::new(match wavelength {
+                    Some(w) => format!("n {n:.4} at {w} µm"),
+                    None => format!("n {n:.4}"),
+                })
+                .color(DARK.text_dim)
+                .size(11.0),
+            );
+            ui.end_row();
+            ui.label(RichText::new("fb").color(DARK.text_dim)).on_hover_text("back focal length, from the last surface");
+            ui.label(shown("back_focal_length_mm").map_or("—".into(), |v| format!("{v:.3}")));
+            ui.label(RichText::new("mm").color(DARK.text_dim).size(11.0));
+            ui.end_row();
+        });
+        ui.label(
+            RichText::new(match (shape, flipped) {
+                (Shape::PlanoConvex | Shape::PlanoConcave, false) => "curved side first",
+                (Shape::PlanoConvex | Shape::PlanoConcave, true) => "flat side first",
+                (Shape::Meniscus, false) => "convex side first",
+                (Shape::Meniscus, true) => "concave side first",
+                _ => "",
+            })
+            .color(DARK.text_dim)
+            .size(11.0),
+        );
+    } else {
+        ui.label(
+            RichText::new("The glass's index is not known at this wavelength: type an index, or import the material")
+                .color(DARK.warning)
+                .size(11.0),
+        );
+    }
+    if let Some(note) = drafts.texts.get(&format!("{base}/note")).cloned() {
+        ui.label(RichText::new(note).color(DARK.warning).size(11.0));
+    }
+
+    // Its size: no larger than its curvature allows.
+    let largest = now.map(|l| l.max_diameter());
+    egui::Grid::new(format!("lens-size-{base}"))
+        .num_columns(3)
+        .spacing([10.0, 4.0])
+        .show(ui, |ui| {
+            if let Some(v) = row(
+                ui,
+                drafts,
+                &format!("{base}/diameter"),
+                "diameter",
+                "mechanical diameter",
+                "mm",
+                diameter,
+            ) {
+                let v = match largest {
+                    Some(m) if v > m && m > 0.0 => {
+                        drafts.texts.insert(
+                            format!("{base}/note"),
+                            format!(
+                                "Ø kept to {m} mm: beyond it the edge would be thinner than {} mm",
+                                crate::lens::MIN_EDGE
+                            ),
+                        );
+                        m
+                    }
+                    _ => v,
+                };
+                if v > 0.0 {
+                    operations.push(set("diameter", tidy(v)));
+                    if clear > v {
+                        operations.push(set("clear_aperture", tidy(v)));
+                    }
+                }
+            }
+            if let Some(v) = row(
+                ui,
+                drafts,
+                &format!("{base}/clear"),
+                "clear aperture",
+                "the part light may pass, at most the diameter",
+                "mm",
+                clear,
+            ) {
+                if v > 0.0 {
+                    operations.push(set("clear_aperture", tidy(v.min(diameter))));
+                }
+            }
+        });
+    if let Some(m) = largest.filter(|m| *m < 1000.0) {
+        ui.label(
+            RichText::new(format!(
+                "at most Ø{m} mm for an edge of {} mm",
+                crate::lens::MIN_EDGE
+            ))
+            .color(DARK.text_dim)
+            .size(11.0),
+        );
+    }
+    if !operations.is_empty() {
+        drafts.texts.remove(&format!("{base}/note"));
+    }
+    ui.add_space(4.0);
+    operations
+}
+
+/// A lens's prescription radius by radius (R1…Rn, flat or not), with each glass's centre
+/// thickness and material between them; a cemented glass added or taken away.
+fn prescription_editor(
+    ui: &mut Ui,
+    drafts: &mut Drafts,
+    base: &str,
+    set: &dyn Fn(&str, Value) -> Value,
+    surfaces: &[Value],
+    thickness: &[Value],
+    material: &[Value],
+) -> Vec<Value> {
+    let mut operations = Vec::new();
+    egui::Grid::new(format!("prescription-{base}"))
+        .num_columns(4)
+        .spacing([8.0, 4.0])
+        .show(ui, |ui| {
+            for (k, surface) in surfaces.iter().enumerate() {
+                let r = radius_of(&surface["radius"]);
+                ui.label(RichText::new(format!("R{}", k + 1)).color(DARK.text_dim))
+                    .on_hover_text("radius of curvature, positive when its centre lies further along the light");
+                let mut flat = !r.is_finite();
+                if flat {
+                    ui.label("flat");
+                } else if let Some(v) = number(ui, drafts, &format!("{base}/R/{k}"), r) {
+                    if v != 0.0 {
+                        let mut new = surfaces.to_vec();
+                        new[k]["radius"] = radius_value(v);
+                        operations.push(set("surfaces", json!(new)));
+                    }
+                }
+                if ui.checkbox(&mut flat, "flat").changed() {
+                    let mut new = surfaces.to_vec();
+                    new[k]["radius"] = if flat { json!("inf") } else { json!(100.0) };
+                    operations.push(set("surfaces", json!(new)));
+                }
+                ui.label(RichText::new("mm").color(DARK.text_dim).size(11.0));
+                ui.end_row();
+                if k + 1 < surfaces.len() {
+                    ui.label(RichText::new(format!("tc{}", k + 1)).color(DARK.text_dim))
+                        .on_hover_text("centre thickness of this glass (or air gap)");
+                    let tk = thickness.get(k).and_then(Value::as_f64).unwrap_or(0.0);
+                    if let Some(v) = number(ui, drafts, &format!("{base}/t/{k}"), tk) {
+                        if v > 0.0 {
+                            let mut new = thickness.to_vec();
+                            new.resize(surfaces.len() - 1, json!(1.0));
+                            new[k] = tidy(v);
+                            operations.push(set("thickness", json!(new)));
+                        }
+                    }
+                    let glass = material.get(k).cloned().unwrap_or(json!(1.5));
+                    let shown = match &glass {
+                        Value::String(s) => s.clone(),
+                        other => other.to_string(),
+                    };
+                    if let Some(typed) = text(ui, drafts, &format!("{base}/glass/{k}"), &shown, 90.0) {
+                        let value = typed
+                            .trim()
+                            .parse::<f64>()
+                            .map_or_else(|_| json!(typed.trim()), |n| json!(n));
+                        let mut new = material.to_vec();
+                        new.resize(surfaces.len() - 1, json!(1.5));
+                        new[k] = value;
+                        operations.push(set("material", json!(new)));
+                    }
+                    ui.label(RichText::new("mm, glass").color(DARK.text_dim).size(11.0))
+                        .on_hover_text("a material name or an index; 1 (or standard-air) for an air gap");
+                    ui.end_row();
+                }
+            }
+        });
+    ui.horizontal(|ui| {
+        if ui
+            .small_button("Add a cemented glass")
+            .on_hover_text("One more surface after the last: a singlet becomes a cemented doublet (three radii)")
+            .clicked()
+        {
+            let mut s = surfaces.to_vec();
+            s.push(json!({ "radius": "inf" }));
+            let mut t = thickness.to_vec();
+            t.push(json!(2.0));
+            let mut m = material.to_vec();
+            m.push(material.last().cloned().unwrap_or(json!(1.5)));
+            operations.push(set("surfaces", json!(s)));
+            operations.push(set("thickness", json!(t)));
+            operations.push(set("material", json!(m)));
+        }
+        if surfaces.len() > 2
+            && ui
+                .small_button("Remove the last glass")
+                .on_hover_text("Take away the last surface and the glass before it")
+                .clicked()
+        {
+            let keep = surfaces.len() - 1;
+            operations.push(set("surfaces", json!(surfaces[..keep])));
+            operations.push(set("thickness", json!(thickness[..keep - 1])));
+            operations.push(set("material", json!(material[..keep.saturating_sub(1).min(material.len())])));
+        }
+    });
+    operations
+}
+
+/// Whether two values are the same, numbers by value (`75.0` and `75` are).
+fn same(a: &Value, b: &Value) -> bool {
+    match (a, b) {
+        (Value::Number(x), Value::Number(y)) => x.as_f64() == y.as_f64(),
+        (Value::Array(x), Value::Array(y)) => {
+            x.len() == y.len() && x.iter().zip(y).all(|(p, q)| same(p, q))
+        }
+        _ => a == b,
+    }
+}
+
+/// One item of a group as the Move tool moves it: its table, entry, index in the table
+/// and where the scene placed it (mm).
+pub type Member = (String, Value, usize, V3);
+
+/// The edits a Move of a whole group makes on a table layout, its steps in order: every
+/// member slides alike; turns turn each member's place about `anchor` (where the item
+/// the handles sit on was) and its axis. Holes and heights follow from the places (holes
+/// may come out as fractions).
+pub fn moved_group(
+    members: &[Member],
+    pitch: f64,
+    anchor: V3,
+    steps: &[(crate::moving::Handle, f64)],
+) -> Vec<Value> {
+    use crate::moving::{Handle, placed, turned};
+    let mut operations = Vec::new();
+    for (table, entry, index, origin) in members {
+        if !entry["hole"].is_array() {
+            continue;
+        }
+        // Where its frame goes: the anchor's path, with the member's offset turned along.
+        let start = [
+            origin[0] - anchor[0],
+            origin[1] - anchor[1],
+            origin[2] - anchor[2],
+        ];
+        let mut offset = start;
+        let mut at = anchor;
+        let mut axis = [
+            entry["axis"][0].as_f64().unwrap_or(1.0),
+            entry["axis"][1].as_f64().unwrap_or(0.0),
+            entry["axis"][2].as_f64().unwrap_or(0.0),
+        ];
+        for &(handle, amount) in steps {
+            match handle {
+                Handle::Slide(_) => at = placed(at, at, &[(handle, amount)]),
+                Handle::Turn(k) => {
+                    offset = turned(offset, [0.0; 3], k, amount);
+                    axis = turned(axis, [0.0; 3], k, amount);
+                }
+            }
+        }
+        let now = [at[0] + offset[0], at[1] + offset[1], at[2] + offset[2]];
+        let hole = json!([tidy(now[0] / pitch), tidy(now[1] / pitch)]);
+        let mut set = |key: &str, value: Value| {
+            if !same(&entry[key], &value) {
+                let mut op = selector(table, entry, *index);
+                op["op"] = json!("set");
+                op["key"] = json!(key);
+                op["value"] = value;
+                operations.push(op);
+            }
+        };
+        set("hole", hole);
+        set("height", tidy(now[2]));
+        if entry["axis"].is_array() {
+            set("axis", json!(axis.map(tidy)));
+        }
+    }
+    operations
+}
+
 /// The tables whose entries carry degrees of freedom.
 const WITH_DOFS: &[&str] = &["element", "source", "detector"];
 
-/// The degrees of freedom of an entry: value within the range, remove; and a line to
-/// add one.
-/// In a layout the axes are the item's own (z along its optical axis); in a sidecar they
-/// are the scene's, as the view's gizmo shows them.
+/// The degrees of freedom of an entry: each with its value and its range (both
+/// editable), removed by ×; and buttons to add one. On a table layout and in a sidecar
+/// they move along and about the scene's X, Y and Z (the board's axes), or along the
+/// item's own axis; on a planar layout along its axis and across it. Slides start with
+/// a range of two holes either way on a table, 10 mm elsewhere; tilts 5°.
 fn dofs(
     ui: &mut Ui,
     drafts: &mut Drafts,
     table: &str,
     entry: &Value,
     base: &str,
-    sidecar: bool,
+    context: &Context,
 ) -> Vec<Value> {
     let mut operations = Vec::new();
     let id = entry["id"].as_str().unwrap_or_default();
-    ui.label(RichText::new("Degrees of freedom").strong());
+    ui.label(RichText::new("Degrees of freedom").strong())
+        .on_hover_text("What the optimiser may move, and how far");
     let list = entry["dof"].as_array().cloned().unwrap_or_default();
     for dof in &list {
         let name = dof["name"].as_str().unwrap_or("?");
-        let unit = if dof["kind"] == "tilt" { "°" } else { "mm" };
+        let tilt = dof["kind"] == "tilt";
+        let unit = if tilt { "°" } else { "mm" };
+        let current = dof["value"].as_f64().unwrap_or(0.0);
+        let range = (dof["range"][0].as_f64(), dof["range"][1].as_f64());
         ui.horizontal(|ui| {
             ui.label(RichText::new(name).color(DARK.text_dim));
-            let current = dof["value"].as_f64().unwrap_or(0.0);
-            let range = (
-                dof["range"][0].as_f64().unwrap_or(f64::NEG_INFINITY),
-                dof["range"][1].as_f64().unwrap_or(f64::INFINITY),
-            );
             let path = format!("{base}/dof/{name}");
             let mut value = *drafts.numbers.get(&path).unwrap_or(&current);
             let response = ui.add(
                 egui::DragValue::new(&mut value)
-                    .range(range.0..=range.1)
+                    .range(range.0.unwrap_or(f64::NEG_INFINITY)..=range.1.unwrap_or(f64::INFINITY))
                     .speed(0.01)
                     .max_decimals(4)
                     .suffix(format!(" {unit}")),
@@ -316,18 +1242,6 @@ fn dofs(
                     }
                 }
             }
-            let kind = dof["kind"].as_str().unwrap_or("?");
-            let locked = dof["locked"].as_bool().unwrap_or(false);
-            ui.label(
-                RichText::new(format!(
-                    "{kind}, {} to {}{}",
-                    range.0,
-                    range.1,
-                    if locked { ", locked" } else { "" }
-                ))
-                .color(DARK.text_dim)
-                .size(11.0),
-            );
             if ui
                 .small_button("×")
                 .on_hover_text("Remove this degree of freedom")
@@ -336,32 +1250,170 @@ fn dofs(
                 operations.push(json!({ "op": "remove_dof", "dof": name }));
             }
         });
+        ui.horizontal(|ui| {
+            ui.add_space(12.0);
+            let axis = &dof["axis"];
+            let along = match axis {
+                Value::String(a) => a.clone(),
+                Value::Array(v) => format!(
+                    "[{}]",
+                    v.iter()
+                        .map(|x| x.to_string())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ),
+                _ => "?".into(),
+            };
+            let frame = if dof["frame"] == "scene" {
+                "scene"
+            } else {
+                "its own"
+            };
+            ui.label(
+                RichText::new(format!(
+                    "{} {along} ({frame} axes), range",
+                    if tilt { "tilt about" } else { "slide along" }
+                ))
+                .color(DARK.text_dim)
+                .size(11.0),
+            );
+            for (k, end) in [range.0, range.1].into_iter().enumerate() {
+                let path = format!("{base}/dof/{name}/range/{k}");
+                let shown = end.unwrap_or(if k == 0 { -10.0 } else { 10.0 });
+                if let Some(v) = number(ui, drafts, &path, shown) {
+                    let mut new = [range.0.unwrap_or(-10.0), range.1.unwrap_or(10.0)];
+                    new[k] = v;
+                    if new[0] <= new[1] {
+                        operations.push(json!({
+                            "op": "set", "dof": name, "key": "range",
+                            "value": [tidy(new[0]), tidy(new[1])],
+                        }));
+                    }
+                }
+            }
+            ui.label(RichText::new(unit).color(DARK.text_dim).size(11.0));
+        });
     }
-    let frame = if sidecar { "scene" } else { "local" };
-    let axes_named = if sidecar {
-        "the scene's"
+    // Buttons to add one.
+    let scene_axes = context.sidecar || context.pitch.is_some();
+    let slide = context
+        .pitch
+        .map_or(10.0, |p| tidy(2.0 * p).as_f64().unwrap_or(50.0));
+    let options: Vec<(&str, &str, Value, &str, f64, &str)> = if scene_axes {
+        vec![
+            (
+                "slide X",
+                "slide_X",
+                json!([1, 0, 0]),
+                "scene",
+                slide,
+                "along the board's X",
+            ),
+            (
+                "slide Y",
+                "slide_Y",
+                json!([0, 1, 0]),
+                "scene",
+                slide,
+                "along the board's Y",
+            ),
+            (
+                "slide Z",
+                "slide_Z",
+                json!([0, 0, 1]),
+                "scene",
+                slide,
+                "up and down",
+            ),
+            (
+                "along its axis",
+                "along",
+                json!([0, 0, 1]),
+                "local",
+                slide,
+                "along its own optical axis",
+            ),
+            (
+                "tilt about X",
+                "tilt_X",
+                json!([1, 0, 0]),
+                "scene",
+                5.0,
+                "about the board's X",
+            ),
+            (
+                "tilt about Y",
+                "tilt_Y",
+                json!([0, 1, 0]),
+                "scene",
+                5.0,
+                "about the board's Y",
+            ),
+            (
+                "tilt about Z",
+                "tilt_Z",
+                json!([0, 0, 1]),
+                "scene",
+                5.0,
+                "about the vertical",
+            ),
+        ]
     } else {
-        "its own (z along its optical axis)"
+        vec![
+            (
+                "along its axis",
+                "along",
+                json!([0, 0, 1]),
+                "local",
+                slide,
+                "along the path",
+            ),
+            (
+                "across x",
+                "slide_x",
+                json!([1, 0, 0]),
+                "local",
+                5.0,
+                "across the path, sideways",
+            ),
+            (
+                "across y",
+                "slide_y",
+                json!([0, 1, 0]),
+                "local",
+                5.0,
+                "across the path, up",
+            ),
+            (
+                "tilt x",
+                "tilt_x",
+                json!([1, 0, 0]),
+                "local",
+                5.0,
+                "about its own x",
+            ),
+            (
+                "tilt y",
+                "tilt_y",
+                json!([0, 1, 0]),
+                "local",
+                5.0,
+                "about its own y",
+            ),
+        ]
     };
     ui.horizontal_wrapped(|ui| {
         ui.label(RichText::new("Add").color(DARK.text_dim));
-        for (kind, axis, label, range) in [
-            ("slide", [1, 0, 0], "slide x", 5.0),
-            ("slide", [0, 1, 0], "slide y", 5.0),
-            ("slide", [0, 0, 1], "slide z", 5.0),
-            ("tilt", [1, 0, 0], "tilt x", 2.0),
-            ("tilt", [0, 1, 0], "tilt y", 2.0),
-        ] {
-            let short = label.replace(' ', "_");
+        for (label, short, axis, frame, range, help) in options {
             let name = format!("{id}_{short}");
             if list.iter().any(|d| d["name"] == name.as_str()) {
                 continue;
             }
+            let kind = if short.starts_with("tilt") { "tilt" } else { "slide" };
+            let unit = if kind == "tilt" { "°" } else { " mm" };
             if ui
                 .small_button(label)
-                .on_hover_text(format!(
-                    "A {kind} along or about {axis:?} in {axes_named} axes, ±{range}"
-                ))
+                .on_hover_text(format!("A {kind} {help}, ±{range}{unit} to start (edit its range after)"))
                 .clicked()
             {
                 operations.push(json!({
@@ -401,10 +1453,26 @@ pub enum New {
     Detector,
 }
 
+/// The height new items of a table layout get: the first source's, else 50 mm.
+pub fn new_height(design: &Value) -> f64 {
+    design["source"][0]["height"].as_f64().unwrap_or(50.0)
+}
+
 /// An `add` operation for a new entry of a layout, placed after what is there: on a
 /// planar layout 50 mm further along the path, on a table layout two holes further
 /// along x at the source's height.
 pub fn add(design: &Value, new: New) -> Option<Value> {
+    add_at(design, new, None, None)
+}
+
+/// As [`add`], on a table layout on the hole given (column, row) when there is one; a
+/// lens from the parts library when `library` names it.
+pub fn add_at(
+    design: &Value,
+    new: New,
+    hole: Option<(i64, i64)>,
+    library: Option<&str>,
+) -> Option<Value> {
     let planar = match design["layout"].as_str()? {
         "planar" => true,
         "table" => false,
@@ -428,10 +1496,10 @@ pub fn add(design: &Value, new: New) -> Option<Value> {
         vec![("at".into(), json!(at))]
     } else {
         let furthest = all().filter_map(|e| e["hole"][0].as_i64()).max();
-        let height = design["source"][0]["height"].as_f64().unwrap_or(50.0);
+        let hole = hole.unwrap_or((furthest.map_or(0, |x| x + 2), 0));
         vec![
-            ("hole".into(), json!([furthest.map_or(0, |x| x + 2), 0])),
-            ("height".into(), json!(height)),
+            ("hole".into(), json!([hole.0, hole.1])),
+            ("height".into(), json!(new_height(design))),
         ]
     };
     let axis = |a: [i64; 3]| -> Vec<(String, Value)> {
@@ -509,6 +1577,18 @@ pub fn add(design: &Value, new: New) -> Option<Value> {
             .concat(),
         ),
     };
+    // A library lens takes its kind, prescription, size and coating from its part.
+    let fields: Vec<(String, Value)> = match (new, library) {
+        (New::Lens, Some(key)) => [
+            vec![("library".to_owned(), json!(key))],
+            fields
+                .into_iter()
+                .filter(|(k, _)| matches!(k.as_str(), "at" | "hole" | "height" | "axis"))
+                .collect(),
+        ]
+        .concat(),
+        _ => fields,
+    };
     let id = next_id(design, prefix);
     let mut entry = vec![json!(["id", id])];
     entry.extend(fields.into_iter().map(|(k, v)| json!([k, v])));
@@ -572,6 +1652,101 @@ mod tests {
         assert_eq!(entry[0], json!(["id", "D1"]));
         // A sidecar is not a layout.
         assert!(add(&json!({ "kind": "sidecar" }), New::Lens).is_none());
+        // Placed on a hole clicked.
+        let op = add_at(&table, New::Mirror, Some((3, -2)), None).expect("an op");
+        assert!(
+            op["entry"]
+                .as_array()
+                .expect("pairs")
+                .contains(&json!(["hole", [3, -2]]))
+        );
+        // A library lens: its key, its place, nothing of its prescription.
+        let op = add_at(&table, New::Lens, Some((5, 0)), Some("example/AC-30")).expect("an op");
+        let entry = op["entry"].as_array().expect("pairs");
+        assert!(entry.contains(&json!(["library", "example/AC-30"])));
+        assert!(entry.contains(&json!(["hole", [5, 0]])));
+        assert!(!entry.iter().any(|p| p[0] == "surfaces" || p[0] == "kind"));
+    }
+
+    #[test]
+    fn moves_write_holes_heights_and_axes() {
+        use crate::moving::Handle;
+        let entry = json!({ "id": "M1", "hole": [4, 0], "height": 75.0, "axis": [-1, 1, 0] });
+        let one = [("element".to_owned(), entry, 0, [100.0, 0.0, 75.0])];
+        let ops = |steps: &[(Handle, f64)]| moved_group(&one, 25.0, one[0].3, steps);
+        let value = |ops: &[Value], key: &str| {
+            ops.iter()
+                .find(|o| o["key"] == key)
+                .map(|o| o["value"].clone())
+        };
+        let o = ops(&[(Handle::Slide(0), 50.0)]);
+        assert_eq!(value(&o, "hole"), Some(json!([6, 0])));
+        assert_eq!(o.len(), 1, "only the hole changed");
+        assert_eq!(o[0]["id"], "M1");
+        let o = ops(&[(Handle::Slide(1), -12.5)]);
+        assert_eq!(value(&o, "hole"), Some(json!([4, -0.5])), "fractions kept");
+        let o = ops(&[(Handle::Slide(2), 25.0)]);
+        assert_eq!(value(&o, "height"), Some(json!(100)));
+        // A mirror facing (−1, 1, 0) turned 90° about z faces (−1, −1, 0).
+        let o = ops(&[(Handle::Turn(2), 90.0)]);
+        assert_eq!(value(&o, "axis"), Some(json!([-1, -1, 0])));
+        // A whole move, its steps in order: two holes along x, back one, a quarter turn.
+        let o = ops(&[
+            (Handle::Slide(0), 50.0),
+            (Handle::Slide(0), -25.0),
+            (Handle::Turn(2), 90.0),
+        ]);
+        let keys: Vec<&str> = o.iter().filter_map(|x| x["key"].as_str()).collect();
+        assert_eq!(keys, ["hole", "axis"], "the height did not change");
+        assert_eq!(value(&o, "hole"), Some(json!([5, 0])));
+        // An entry not on the table is left alone.
+        let planar = [(
+            "element".to_owned(),
+            json!({ "id": "L", "at": 5 }),
+            0,
+            [5.0, 0.0, 0.0],
+        )];
+        assert!(moved_group(&planar, 25.0, planar[0].3, &[(Handle::Slide(0), 1.0)]).is_empty());
+    }
+
+    #[test]
+    fn a_group_moves_and_turns_together() {
+        use crate::moving::Handle;
+        let m = |id: &str, hole: [i64; 2]| -> Member {
+            (
+                "element".into(),
+                json!({ "id": id, "hole": hole, "height": 75.0, "axis": [1, 0, 0] }),
+                0,
+                [hole[0] as f64 * 25.0, hole[1] as f64 * 25.0, 75.0],
+            )
+        };
+        let members = [m("L1", [2, 0]), m("L2", [4, 0])];
+        // Two holes along y and 25 mm up: both alike.
+        let ops = moved_group(
+            &members,
+            25.0,
+            members[0].3,
+            &[(Handle::Slide(1), 50.0), (Handle::Slide(2), 25.0)],
+        );
+        let value = |id: &str, key: &str| {
+            ops.iter()
+                .find(|o| o["id"] == id && o["key"] == key)
+                .map(|o| o["value"].clone())
+        };
+        assert_eq!(value("L1", "hole"), Some(json!([2, 2])));
+        assert_eq!(value("L2", "hole"), Some(json!([4, 2])));
+        assert_eq!(value("L2", "height"), Some(json!(100)));
+        assert_eq!(value("L1", "axis"), None, "not turned");
+        // A quarter turn about z at L1: L2 two holes along +y from it, both facing +y.
+        let ops = moved_group(&members, 25.0, members[0].3, &[(Handle::Turn(2), 90.0)]);
+        let value = |id: &str, key: &str| {
+            ops.iter()
+                .find(|o| o["id"] == id && o["key"] == key)
+                .map(|o| o["value"].clone())
+        };
+        assert_eq!(value("L1", "hole"), None, "the anchor stays");
+        assert_eq!(value("L2", "hole"), Some(json!([2, 2])));
+        assert_eq!(value("L2", "axis"), Some(json!([0, 1, 0])));
     }
 
     #[test]

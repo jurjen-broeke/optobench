@@ -1,0 +1,151 @@
+{
+  "design": "/Users/jbe390/Documents/Rust/optobench/layout-14.optobench",
+  "dofs": [
+    {
+      "at_range_limit": false,
+      "change": -0.6397106909473999,
+      "name": "PCC_slide_x",
+      "room": {
+        "advice": "room enough both ways",
+        "left": [
+          4.3602893090526,
+          5.6397106909474
+        ],
+        "range": [
+          -5.0,
+          5.0
+        ],
+        "range_after_adjusting": [
+          -4.3602893090526,
+          5.6397106909474
+        ],
+        "status": "ok",
+        "used": -0.12794213818947997
+      },
+      "start": 0.0,
+      "suggested": -0.6397106909473999,
+      "unit": "mm"
+    },
+    {
+      "at_range_limit": false,
+      "change": 1.2794213827120582,
+      "name": "PCV_slide_x",
+      "room": {
+        "advice": "room enough both ways",
+        "left": [
+          6.279421382712059,
+          3.720578617287942
+        ],
+        "range": [
+          -5.0,
+          5.0
+        ],
+        "range_after_adjusting": [
+          -6.279421382712059,
+          3.720578617287942
+        ],
+        "status": "ok",
+        "used": 0.25588427654241164
+      },
+      "start": 0.0,
+      "suggested": 1.2794213827120582,
+      "unit": "mm"
+    }
+  ],
+  "format": "optobench/1",
+  "kind": "moves",
+  "merit": [
+    {
+      "detector": "D1",
+      "end": [
+        10.047782078440484
+      ],
+      "kind": "collimation",
+      "start": [
+        11.363544617174364
+      ],
+      "unit": "mrad",
+      "weight": 1.0
+    },
+    {
+      "detector": "D1",
+      "end": [
+        2.179999908219063
+      ],
+      "kind": "diameter",
+      "start": [
+        3.142519217230408
+      ],
+      "unit": "mm",
+      "weight": 1.0
+    }
+  ],
+  "moves": [
+    {
+      "dofs": [
+        "PCC_slide_x"
+      ],
+      "kind": "element",
+      "matrix": [
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        -0.6397106909473999,
+        0.0,
+        0.0,
+        1.0,
+        0.0
+      ],
+      "name": "PCC",
+      "rotate_axis": [
+        0.0,
+        0.0,
+        1.0
+      ],
+      "rotate_deg": 0.0,
+      "translate_mm": [
+        0.0,
+        -0.6397106909473999,
+        0.0
+      ]
+    },
+    {
+      "dofs": [
+        "PCV_slide_x"
+      ],
+      "kind": "element",
+      "matrix": [
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        1.2794213827120582,
+        0.0,
+        0.0,
+        1.0,
+        0.0
+      ],
+      "name": "PCV",
+      "rotate_axis": [
+        0.0,
+        0.0,
+        1.0
+      ],
+      "rotate_deg": 0.0,
+      "translate_mm": [
+        0.0,
+        1.2794213827120582,
+        0.0
+      ]
+    }
+  ],
+  "next": "Set each DOF's `value` in the layout to the suggested one.",
+  "poses": []
+}

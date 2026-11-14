@@ -6,11 +6,14 @@
 #![forbid(unsafe_code)]
 
 mod app;
+mod board;
 mod camera;
 mod document;
 mod editors;
 mod graphs;
 mod icons;
+mod lens;
+mod moving;
 mod render;
 mod screenshot;
 mod theme;

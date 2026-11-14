@@ -332,6 +332,10 @@ pub(crate) fn trace(parameters: &Parameters) -> Result<Value, CommandError> {
             "clear_aperture_used": f.clear_aperture_used,
         })).collect::<Vec<_>>(),
     });
+    // On a table layout: where alignment irises go on the bench.
+    if let Some(irises) = crate::irises::alignment(&source, &scene, &built, &traced) {
+        result["alignment_irises"] = irises;
+    }
     if let Some(n) = parameters.get("ray_paths") {
         let n = n.as_u64().ok_or_else(|| {
             CommandError::new(
@@ -488,6 +492,25 @@ pub(crate) fn view(parameters: &Parameters) -> Result<Value, CommandError> {
                     .map(|l| l.iter().map(|p| point(*p)).collect::<Vec<_>>())
                     .collect::<Vec<_>>(),
             });
+            // Where a layout item sits: its frame's origin and +z (optical axis, a mirror's
+            // normal), for the interface's positions and move handles.
+            let frame = match owner {
+                Owner::Element(i) => Some(scene.elements[i].frame),
+                Owner::Proxy(i) => Some(scene.proxies[i].frame),
+                Owner::Detector(i) => Some(scene.detectors[i].frame),
+                Owner::Solid(_) => None,
+            };
+            if let (Some(frame), Some(object)) = (frame, item.as_object_mut()) {
+                object.insert("origin".into(), json!(point(frame.origin())));
+                object.insert("axis".into(), json!(point(frame.axes()[2])));
+            }
+            // A lens's first-order properties, for its editor: at the first source's
+            // wavelength (d line without one).
+            if let (Owner::Element(i), Some(object)) = (owner, item.as_object_mut()) {
+                if let Some(lens) = lens_json(&scene, &scene.elements[i].kind) {
+                    object.insert("lens".into(), lens);
+                }
+            }
             // A CAD body's own axes in the scene frame: a sidecar names faces in them
             // (a mirror's `reflect`).
             if let Owner::Solid(i) = owner {
@@ -522,6 +545,74 @@ pub(crate) fn view(parameters: &Parameters) -> Result<Value, CommandError> {
         "bounds": if low.x.is_finite() { json!([point(low), point(high)]) } else { Value::Null },
         "design": design_json(&source),
     }))
+}
+
+/// The d line (µm), for lens properties when no source gives a wavelength.
+const D_LINE: f64 = 0.587_56;
+
+/// A lens element's shape and first-order properties: focal length (from the rear
+/// principal plane), back focal length (from the last vertex), the glasses' indices, all
+/// at the first source's wavelength.
+fn lens_json(scene: &optobench_scene::Scene, kind: &optobench_scene::ElementKind) -> Option<Value> {
+    let optobench_scene::ElementKind::Lens {
+        surfaces,
+        materials,
+        ..
+    } = kind
+    else {
+        return None;
+    };
+    let wavelength = scene
+        .sources
+        .first()
+        .map(|s| s.spectrum.first().map_or(s.wavelength, |l| l.0))
+        .unwrap_or(D_LINE);
+    let indices: Vec<Value> = materials
+        .iter()
+        .map(|m| {
+            m.material()
+                .refractive_index(wavelength)
+                .map_or(Value::Null, |n| json!((n * 1e6).round() / 1e6))
+        })
+        .collect();
+    let radii: Vec<f64> = surfaces.iter().map(|s| s.radius).collect();
+    let mut out = json!({
+        "wavelength_um": wavelength,
+        "indices": indices,
+        "shape": lens_shape(&radii),
+    });
+    if let Some(c) = optobench_scene::lens_cardinal_points(kind, &scene.surrounding, wavelength) {
+        out["focal_length_mm"] = json!(round(c.effective_focal_length));
+        out["back_focal_length_mm"] = json!(round(c.back_focal_length));
+    }
+    Some(out)
+}
+
+/// A lens's shape by its radii (light along +z, a radius positive when its centre lies
+/// further along): two surfaces as biconvex, plano-convex, convex-plano (the flat side
+/// first), plano-concave, concave-plano, biconcave or meniscus; three as a cemented
+/// doublet; more as a cemented group.
+pub(crate) fn lens_shape(radii: &[f64]) -> &'static str {
+    let flat = |r: f64| !r.is_finite() || r.abs() > 1e6;
+    match radii {
+        [r1, r2] => {
+            // Convex on the way in: r1 > 0; convex on the way out: r2 < 0.
+            match (flat(*r1), flat(*r2)) {
+                (true, true) => "window",
+                (false, true) if *r1 > 0.0 => "plano-convex",
+                (false, true) => "plano-concave",
+                (true, false) if *r2 < 0.0 => "convex-plano",
+                (true, false) => "concave-plano",
+                (false, false) => match (*r1 > 0.0, *r2 < 0.0) {
+                    (true, true) => "biconvex",
+                    (false, false) => "biconcave",
+                    _ => "meniscus",
+                },
+            }
+        }
+        [_, _, _] => "doublet",
+        _ => "cemented group",
+    }
 }
 
 /// `focus`: where the light that reaches a detector focuses (M9a): per ray its launch
@@ -654,6 +745,9 @@ fn design_json(source: &str) -> Value {
         "detector": list("detector"),
         "proxy": list("proxy"),
         "merit": list("merit"),
+        "group": list("group"),
+        "table": table.get("table").and_then(|v| serde_json::to_value(v).ok()),
+        "planar": table.get("planar").and_then(|v| serde_json::to_value(v).ok()),
     })
 }
 

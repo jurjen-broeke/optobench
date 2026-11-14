@@ -5,6 +5,33 @@ with the release that introduced them.
 
 ## Unreleased
 
+Nothing yet.
+
+## 0.1.0 (2026-11-14)
+
+The first numbered version: everything up to and including M16. From here each merged
+pull request raises the version (AGENTS.md, Versions).
+
+- M16 table layouts in the interface: Properties shows positions as X, Y, Z in mm (typed
+  on a table layout), with labelled vectors and units; the breadboard is drawn under
+  the items (`[table]` `columns`, `rows`, `corner`, optional) with a post from each item
+  to its hole, and its pitch and size are set in Properties; Move puts arrows and rings
+  on the selected item, snapped to the pitch or a typed step; Graph asks which graphs to
+  draw, shows one at a time with a switcher, marks those out of date and redraws them;
+  `trace` on a table layout says where to put two alignment irises on the bench.
+  New items are placed by clicking a hole (Enter: after the last item). A lens shows its
+  shape, focal length and back focal length, is designed from its focal length, and is
+  edited radius by radius; doublets and triplets come from the parts library, and a
+  lens's STEP file (`part-from-step`, or dropped on the window) becomes a library part.
+  Merit term `diameter` (a target in mm: 2√2 × the RMS radius); a 5× beam expander is
+  placed by the optimiser and checked against thick-lens theory. Groups: `group = "<id>"`
+  on items, `[[group]]` DOFs that move every member; Move moves a whole group. Merit
+  terms are added from the browser in the Layout workspace. The lens editor goes name,
+  type, f, R, tc, glass, diameter, its values kept consistent (the diameter limited by
+  the edge thickness), and Flip turns a lens round. On a table layout, degrees of
+  freedom are added along and about the board's X, Y and Z (or along an item's axis),
+  their ranges edited in Properties. `collimated` and `point` sources weight their rays
+  by area, for even beams (results with them change slightly: less weight at the rim).
 - Mounts in the parts library: a part file of `type = "mount"` keeps a mount's
   adjusters and ranges from its spec sheet; designs name it by key
   (`mount = "thorlabs/CXY1A"`), a design's own `[[mount]]` of that id taking precedence.

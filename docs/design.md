@@ -332,7 +332,7 @@ Every file optobench writes for people to keep has one extension, `.optobench`, 
 **Format tag and versions**
 
 - The first two lines of every `.optobench` file and library part are `format = "optobench/<N>"` and `kind = "<kind>"`, mirroring SolidCraft's `solidcraft/N` tag. N is a whole number starting at 1.
-- The format number is separate from the application version (semantic versioning, `optobench 0.x.y`). It goes up only when an older reader could misread a file, and every bump is listed in the changelog with the release that introduced it.
+- The format number is separate from the application version (semantic versioning, `optobench 0.x.y`; 0.1.0 from 2026-11-14). Each merged pull request raises the application version once: +0.1.0 with new features, +0.0.1 with only fixes or performance; 1.0.0 is the first releasable version, and after it every tenth feature pull request since the last major version raises the major number instead (the rules in AGENTS.md, Versions). The format number goes up only when an older reader could misread a file, and every bump is listed in the changelog with the release that introduced it.
 - A newer optobench opens every older format and saves in the current one, after writing the `.format<N>.bak` backup. An older optobench refuses a newer format, naming the release needed, and never guesses.
 - Parsing is strict. An unknown key is an error that names the closest valid key, so a typo can't be silently ignored. Additions meant to be ignorable go under an `[extensions]` table.
 - File names the tool generates use lowercase ASCII letters, digits, `.`, `-` and `_`. Vendor part numbers keep their case, and other characters become `_`.
@@ -374,6 +374,7 @@ Phase C doesn't depend on Phase B: tolerancing can start straight after M11 if i
 | M13 Live write-back | DOF bindings (parameter, joint, move), batched writes, single rebuild, read-back verification, abort on mismatch | nightly contract test green against the latest SolidCraft release for 4 weeks |
 | M14 Tolerancing | Monte Carlo over DOFs, mount and part tolerances; yield and sensitivity report | sensitivity ranking stable across seeds; runtime documented |
 | M15 GPU, tissue MC | wgpu compute for non-sequential batches; photon transport in scattering tissue (Henyey–Greenstein) replacing the diffusion approximation for fluence and heating | GPU equals CPU within statistical error; tissue fluence matches published slab benchmarks |
+| M16 Table layouts in the interface | from the user's hands-on test (2026-11-14): positions as X, Y, Z in mm, the breadboard drawn and sized, SolidCraft-style Move handles snapped to the pitch, graphs chosen several at a time and shown one at a time with an out-of-date mark, where to put alignment irises on the bench | a folded beam path built on a breadboard in the interface alone, every item's position readable and movable by its handles, with the iris advice |
 
 ## Tests and validation
 

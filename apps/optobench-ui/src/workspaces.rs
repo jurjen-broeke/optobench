@@ -54,6 +54,8 @@ pub enum Action {
     TagMirror,
     /// Write the last optimisation's suggested values into the design.
     Apply,
+    /// Move or turn the selected layout item with handles in the view.
+    Move,
 }
 
 impl Action {
@@ -78,6 +80,7 @@ impl Action {
             Action::TagLens => "Tag Lens",
             Action::TagMirror => "Tag Mirror",
             Action::Apply => "Apply",
+            Action::Move => "Move",
         }
     }
 
@@ -102,6 +105,7 @@ impl Action {
             Action::TagLens => "tag-lens",
             Action::TagMirror => "tag-mirror",
             Action::Apply => "apply",
+            Action::Move => "move",
         }
     }
 
@@ -113,7 +117,9 @@ impl Action {
             Action::Fit => "fit the scene to the view",
             Action::Top | Action::Front | Action::Right | Action::Isometric => "a standard view",
             Action::Rays => "show or hide the traced rays",
-            Action::New => "start a new planar layout at the path typed in the title bar",
+            Action::New => {
+                "start a new layout at the path typed in the title bar: planar, or a table on a breadboard"
+            }
             Action::Undo => "put the file back as it was before the last change",
             Action::Remove => "take the selected item out of the design",
             Action::AddLens => "add a biconvex singlet after the last item",
@@ -125,6 +131,9 @@ impl Action {
                 "make the selected CAD body a mirror reflecting on the face you clicked"
             }
             Action::Apply => "write the optimised values into the design's degrees of freedom",
+            Action::Move => {
+                "move or turn the selected item: drag an arrow along x, y or z, or a ring about it"
+            }
         }
     }
 }
@@ -254,6 +263,11 @@ const ADD_SECTION: Section = Section {
     ],
 };
 
+const MODIFY_SECTION: Section = Section {
+    name: "MODIFY",
+    items: &[button(Control::Action(Action::Move))],
+};
+
 const LIBRARY_SECTION: Section = Section {
     name: "LIBRARY",
     items: &[
@@ -329,6 +343,7 @@ pub const WORKSPACES: [Workspace; 3] = [
                 sections: &[
                     LAYOUT_FILE_SECTION,
                     ADD_SECTION,
+                    MODIFY_SECTION,
                     Section {
                         name: "TRACE",
                         items: &[
