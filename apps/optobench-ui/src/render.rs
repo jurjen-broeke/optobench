@@ -173,7 +173,16 @@ pub struct Frame<'a> {
     pub rays: &'a [(V3, V3, egui::Color32)],
     /// Changes when `rays` changes.
     pub rays_version: u64,
+    /// A table layout's breadboard (it changes only with the scene).
+    pub board: Option<crate::board::Board>,
+    /// Whether the breadboard is shown.
+    pub show_board: bool,
 }
+
+/// The board's plate and holes take the two style slots after the items'.
+const BOARD_SLOTS: usize = 2;
+const PLATE: [f32; 3] = [0.34, 0.36, 0.40];
+const HOLES: [f32; 3] = [0.09, 0.10, 0.11];
 
 /// The renderer.
 pub struct Renderer {
@@ -400,7 +409,7 @@ impl Renderer {
     }
 
     /// Uploads a scene's meshes and edges (when its version changed).
-    fn upload(&mut self, scene: &Scene, version: u64) {
+    fn upload(&mut self, scene: &Scene, version: u64, board: Option<&crate::board::Board>) {
         if self.scene_version == version && self.scene.is_some() {
             return;
         }
@@ -429,6 +438,25 @@ impl Renderer {
                         edges.extend((index as u32).to_le_bytes());
                     }
                 }
+            }
+        }
+        if let Some(board) = board {
+            for (slot, (positions, normals, triangles)) in board.triangles().into_iter().enumerate()
+            {
+                let index = (scene.items.len() + slot) as u32;
+                for (p, n) in positions.iter().zip(&normals) {
+                    vertices.extend(floats(&[
+                        p[0] as f32,
+                        p[1] as f32,
+                        p[2] as f32,
+                        n[0] as f32,
+                        n[1] as f32,
+                        n[2] as f32,
+                    ]));
+                    vertices.extend(index.to_le_bytes());
+                }
+                opaque.extend(triangles.iter().map(|i| i + base));
+                base += positions.len() as u32;
             }
         }
         let opaque_count = opaque.len() as u32;
@@ -463,12 +491,13 @@ impl Renderer {
             }),
             items: scene.items.len(),
         });
-        if scene.items.len() > self.styles_len {
+        let slots = scene.items.len() + BOARD_SLOTS;
+        if slots > self.styles_len {
             let (styles, bind_group) =
-                Self::styles_buffer(device, &self.layout, &self.uniforms, scene.items.len());
+                Self::styles_buffer(device, &self.layout, &self.uniforms, slots);
             self.styles = styles;
             self.bind_group = bind_group;
-            self.styles_len = scene.items.len();
+            self.styles_len = slots;
         }
         self.scene_version = version;
     }
@@ -577,11 +606,14 @@ impl Renderer {
         size: (u32, u32),
     ) -> egui::TextureId {
         let size = (size.0.clamp(1, 8192), size.1.clamp(1, 8192));
-        self.upload(scene, scene_version);
+        self.upload(scene, scene_version, frame.board.as_ref());
         self.upload_rays(frame);
 
         // Uniforms.
-        let (low, high) = scene.bounds.unwrap_or(([-100.0; 3], [100.0; 3]));
+        let (low, high) = match &frame.board {
+            Some(board) if frame.show_board => board.around(scene.bounds),
+            _ => scene.bounds.unwrap_or(([-100.0; 3], [100.0; 3])),
+        };
         let radius = 0.5
             * ((high[0] - low[0]).powi(2)
                 + (high[1] - low[1]).powi(2)
@@ -639,9 +671,12 @@ impl Renderer {
                 0.0,
             ]);
         }
-        if !styles.is_empty() {
-            queue.write_buffer(&self.styles, 0, &floats(&styles));
+        let hide_board = if frame.show_board { 0.0 } else { 1.0 };
+        for colour in [PLATE, HOLES] {
+            styles.extend([colour[0], colour[1], colour[2], 1.0]);
+            styles.extend([hide_board, 0.0, 0.0, 0.0]);
         }
+        queue.write_buffer(&self.styles, 0, &floats(&styles));
 
         let target = self.target(size);
         let (multisampled, depth, resolved, texture) = (

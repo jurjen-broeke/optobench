@@ -396,6 +396,102 @@ pub fn entry(
     operations
 }
 
+/// The breadboard of a table layout (`[table]`): its pitch and size in holes, and the
+/// hole at its corner. A board the file does not size is fitted around the items, and
+/// can be kept as it is.
+pub fn board(ui: &mut Ui, drafts: &mut Drafts, board: &crate::board::Board) -> Vec<Value> {
+    let mut operations = Vec::new();
+    let set = |key: &str, value: Value| json!({ "op": "set", "section": "table", "key": key, "value": value });
+    ui.label(RichText::new("Breadboard").strong().size(14.0));
+    egui::Grid::new("breadboard")
+        .num_columns(3)
+        .spacing([10.0, 4.0])
+        .show(ui, |ui| {
+            ui.label(RichText::new("pitch").color(DARK.text_dim));
+            if let Some(v) = number(ui, drafts, "table/pitch", board.pitch) {
+                if v > 0.0 {
+                    operations.push(set("pitch", tidy(v)));
+                }
+            }
+            ui.label(RichText::new("mm").color(DARK.text_dim).size(11.0));
+            ui.end_row();
+            for (key, current, unit) in [
+                ("columns", board.columns, "holes along x"),
+                ("rows", board.rows, "holes along y"),
+            ] {
+                ui.label(RichText::new(key).color(DARK.text_dim));
+                if let Some(v) = number(ui, drafts, &format!("table/{key}"), current as f64) {
+                    let v = v.round().max(1.0) as i64;
+                    if board.given {
+                        operations.push(set(key, json!(v)));
+                    } else {
+                        // Sizing one side keeps the fitted size of the others.
+                        operations.push(set("columns", json!(board.columns)));
+                        operations.push(set("rows", json!(board.rows)));
+                        operations.push(set("corner", json!([board.corner.0, board.corner.1])));
+                        operations.push(set(key, json!(v)));
+                    }
+                }
+                ui.label(RichText::new(unit).color(DARK.text_dim).size(11.0));
+                ui.end_row();
+            }
+            ui.label(RichText::new("corner").color(DARK.text_dim));
+            ui.horizontal(|ui| {
+                for (k, name) in ["column", "row"].into_iter().enumerate() {
+                    ui.label(RichText::new(name).color(DARK.text_dim).size(11.0));
+                    let current = if k == 0 {
+                        board.corner.0
+                    } else {
+                        board.corner.1
+                    };
+                    if let Some(v) =
+                        number(ui, drafts, &format!("table/corner/{k}"), current as f64)
+                    {
+                        let mut corner = [board.corner.0, board.corner.1];
+                        corner[k] = v.round() as i64;
+                        if !board.given {
+                            operations.push(set("columns", json!(board.columns)));
+                            operations.push(set("rows", json!(board.rows)));
+                        }
+                        operations.push(set("corner", json!(corner)));
+                    }
+                }
+            });
+            ui.label(
+                RichText::new("the hole at its corner")
+                    .color(DARK.text_dim)
+                    .size(11.0),
+            );
+            ui.end_row();
+        });
+    let ((x0, x1), (y0, y1)) = board.extent();
+    ui.label(
+        RichText::new(format!(
+            "{:.0} × {:.0} mm, from ({x0:.1}, {y0:.1}) to ({x1:.1}, {y1:.1}) mm",
+            x1 - x0,
+            y1 - y0
+        ))
+        .color(DARK.text_dim),
+    );
+    if !board.given {
+        ui.label(
+            RichText::new("Not sized in the file: drawn around the items with two holes to spare")
+                .color(DARK.text_dim)
+                .size(11.0),
+        );
+        if ui
+            .button("Keep this size")
+            .on_hover_text("Write these columns, rows and corner into the file's [table]")
+            .clicked()
+        {
+            operations.push(set("columns", json!(board.columns)));
+            operations.push(set("rows", json!(board.rows)));
+            operations.push(set("corner", json!([board.corner.0, board.corner.1])));
+        }
+    }
+    operations
+}
+
 /// The tables whose entries carry degrees of freedom.
 const WITH_DOFS: &[&str] = &["element", "source", "detector"];
 

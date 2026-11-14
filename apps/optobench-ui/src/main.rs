@@ -6,6 +6,7 @@
 #![forbid(unsafe_code)]
 
 mod app;
+mod board;
 mod camera;
 mod document;
 mod editors;

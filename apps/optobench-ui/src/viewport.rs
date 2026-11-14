@@ -25,6 +25,10 @@ pub struct Extras {
     pub picked_normal: Option<V3>,
     /// Where the view was last drawn.
     pub rect: Option<Rect>,
+    /// A table layout's breadboard, drawn under the items.
+    pub board: Option<crate::board::Board>,
+    /// Whether the breadboard is shown.
+    pub show_board: bool,
 }
 
 impl Extras {
@@ -181,7 +185,8 @@ pub fn show(
     };
     let painter = painter.with_clip_rect(rect);
     let scene: Option<&Scene> = doc.and_then(|d| d.scene.as_ref());
-    let shaded = scene.is_some_and(|s| s.items.iter().any(|i| i.mesh.is_some()))
+    let shaded = (scene.is_some_and(|s| s.items.iter().any(|i| i.mesh.is_some()))
+        || extras.board.is_some())
         && extras.renderer.is_some();
     let plane = extras.plane(camera);
 
@@ -241,6 +246,7 @@ pub fn show(
             (rect.width() * pixels).round() as u32,
             (rect.height() * pixels).round() as u32,
         );
+        let (board, show_board) = (extras.board, extras.show_board);
         if let Some(renderer) = extras.renderer.as_mut() {
             let texture = renderer.draw(
                 scene,
@@ -254,6 +260,8 @@ pub fn show(
                     accent: accent.fill,
                     rays: &segments,
                     rays_version: doc.trace_version * 2 + u64::from(show_rays),
+                    board,
+                    show_board,
                 },
                 size,
             );
@@ -325,6 +333,28 @@ pub fn show(
                 best.map(|b| b.0)
             });
             requests.push(Request::Select(picked));
+        }
+    }
+
+    // On a breadboard, a post from each item down to the board, a ring where it stands:
+    // where it is on the grid and how high.
+    if let (Some(scene), true) = (scene, extras.board.is_some() && extras.show_board) {
+        let posts = scene
+            .items
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| !hidden.get(*i).copied().unwrap_or(false))
+            .filter_map(|(i, item)| Some((Some(i), item.origin?)))
+            .chain(scene.sources.iter().map(|s| (None, s.origin)));
+        for (index, top) in posts {
+            let foot = [top[0], top[1], 0.0];
+            let colour = if index.is_some() && index == selected {
+                accent.ink
+            } else {
+                Color32::from_gray(150).gamma_multiply(0.7)
+            };
+            painter.line_segment([screen(top), screen(foot)], Stroke::new(1.0, colour));
+            painter.circle_stroke(screen(foot), 4.0, Stroke::new(1.2, colour));
         }
     }
 

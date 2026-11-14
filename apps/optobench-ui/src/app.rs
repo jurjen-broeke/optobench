@@ -29,6 +29,8 @@ pub struct App {
     selected: Option<usize>,
     hidden: Vec<bool>,
     show_rays: bool,
+    /// Whether a table layout's breadboard is drawn.
+    show_board: bool,
     fit_pending: bool,
     open_path: String,
     /// Where imported materials, parts and curves are; empty for the platform's default.
@@ -131,6 +133,7 @@ impl App {
             selected: None,
             hidden: Vec::new(),
             show_rays: true,
+            show_board: true,
             fit_pending: false,
             open_path: String::new(),
             data_directory: data_directory
@@ -904,6 +907,19 @@ impl App {
                         }
                     });
                 };
+                if crate::board::Board::of(&scene.design, &scene).is_some() {
+                    ui.horizontal(|ui| {
+                        ui.checkbox(&mut self.show_board, "")
+                            .on_hover_text("Show or hide the breadboard");
+                        swatch(ui, Color32::from_rgb(56, 61, 71));
+                        let key = ("table".to_owned(), "board".to_owned());
+                        let on = self.focus.as_ref() == Some(&key);
+                        if ui.selectable_label(on, "Breadboard").clicked() {
+                            self.focus = (!on).then_some(key);
+                            self.selected = None;
+                        }
+                    });
+                }
                 egui::CollapsingHeader::new(format!("Sources ({})", scene.sources.len()))
                     .default_open(true)
                     .show(ui, |ui| {
@@ -1156,6 +1172,11 @@ impl App {
         };
         let design = scene.design.clone();
         let context = editors::Context::of(&design);
+        if self.focus.as_ref().is_some_and(|(t, _)| t == "table") {
+            if let Some(board) = crate::board::Board::of(&design, scene) {
+                return editors::board(ui, &mut self.drafts, &board);
+            }
+        }
         // A source or merit term chosen in the browser.
         if let Some((table, key)) = self.focus.clone() {
             let found = if table == "merit" {
@@ -1625,18 +1646,27 @@ impl eframe::App for App {
             .show(ui, |ui| {
                 // Fit once the scene has arrived, with the view's own aspect.
                 if self.fit_pending {
-                    if let Some((low, high)) = self
-                        .doc
-                        .as_ref()
-                        .and_then(|d| d.scene.as_ref())
-                        .and_then(|s| s.bounds)
-                    {
+                    let scene = self.doc.as_ref().and_then(|d| d.scene.as_ref());
+                    let board = scene
+                        .and_then(|s| crate::board::Board::of(&s.design, s))
+                        .filter(|_| self.show_board);
+                    let bounds = match board {
+                        Some(board) => Some(board.around(scene.and_then(|s| s.bounds))),
+                        None => scene.and_then(|s| s.bounds),
+                    };
+                    if let Some((low, high)) = bounds {
                         let size = ui.available_size();
                         self.camera
                             .fit(low, high, (size.x / size.y.max(1.0)) as f64);
                         self.fit_pending = false;
                     }
                 }
+                self.view.board = self
+                    .doc
+                    .as_ref()
+                    .and_then(|d| d.scene.as_ref())
+                    .and_then(|s| crate::board::Board::of(&s.design, s));
+                self.view.show_board = self.show_board;
                 viewport::show(
                     ui,
                     &mut self.camera,
