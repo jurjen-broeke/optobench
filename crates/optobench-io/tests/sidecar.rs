@@ -79,6 +79,7 @@ fn step_lens_traces_like_the_same_lens_defined_inline() {
         solids: vec![],
         // As the sidecar has it by default.
         split_cutoff: Some(optobench_scene::DEFAULT_SPLIT_CUTOFF),
+        threads: 0,
         dofs: Vec::new(),
         fluorophores: Vec::new(),
         thermal: Vec::new(),

@@ -30,8 +30,22 @@ optimisation 50 s instead of about 25 minutes. Reading the STEP file and convert
 faces takes 1.4 s, once. **The exit criterion is met.**
 
 ## Further candidates (not needed for the exit criterion)
-- [ ] Rays in parallel (rayon on desktop, behind a feature so the engine still builds for
-      wasm32): a few times faster again on a multi-core machine
+- [x] Rays in parallel (2026-11-14): `NonSequentialSystem::threads` (from `Scene::threads`,
+      `[trace] threads`; default 0, every core the platform reports) traces the launched
+      rays on the standard library's scoped threads, no new dependency: chunks handed out
+      as threads come free, each ray's tree traced whole, the trees put back in the rays'
+      order and booked into the ledger in that order, so records and ledger are the same
+      bit for bit on any number of threads (`threads_give_the_same_trace_bit_for_bit`, and
+      `examples/trace_timing` compares the two traces). Fewer than 32 rays a thread use
+      fewer threads; wasm32 traces on the calling thread. Tolerancing trials, already on
+      threads, trace on one each. On the expander periscope (Intel Core i7-8750H, 6 cores,
+      12 threads, release): 0.377 s a trace on one thread, 0.065 s on 12 (5.8×); its
+      optimisation 309 s on one thread, 64 s on 12 (4.9×).
+      The optimisation's 309 s is not a regression: built from the M7a commit the same
+      design takes 300 s, 100 iterations and 787 traces, the cost the same (it stops at
+      the iteration limit with 0.09 mrad of collimation left). The 50 s above is not
+      reproduced with the design as it now stands in the local corpus; fewer traces per
+      iteration and a stopping rule for such slow tails are the next item
 - [ ] Fewer traces per optimiser iteration (forward differences, reusing the Jacobian
       across rejected steps)
 - [ ] Cache converted faces per STEP file and product; seed B-spline intersection from a

@@ -769,6 +769,7 @@ pub fn read(text: &str, sidecar: &Path, lookups: &Lookups) -> Result<Read, FileE
         )));
     }
 
+    let (split_cutoff, threads) = crate::scene_file::trace_options(&root)?;
     let mut scene = Scene {
         surrounding,
         elements: Vec::new(),
@@ -776,7 +777,8 @@ pub fn read(text: &str, sidecar: &Path, lookups: &Lookups) -> Result<Read, FileE
         proxies: Vec::new(),
         detectors: Vec::new(),
         solids: Vec::new(),
-        split_cutoff: crate::scene_file::trace_options(&root)?,
+        split_cutoff,
+        threads,
         dofs: Vec::new(),
         fluorophores: Vec::new(),
         thermal: Vec::new(),

@@ -148,6 +148,7 @@
 //! [trace]                           # optional: ray splitting at partly reflecting faces
 //! split = true                      # default true
 //! split_cutoff = 1e-6               # fraction of the total source power; default 1e-6
+//! threads = 0                       # threads to trace rays on; default 0, every core
 //!
 //! [[detector]]
 //! id = "screen"
@@ -446,20 +447,29 @@ pub(crate) fn medium(
     }
 }
 
-/// The `[trace]` table: `split = true | false` (default true) and `split_cutoff`, the
+/// The `[trace]` table: `split = true | false` (default true), `split_cutoff`, the
 /// fraction of the total source power below which a reflected part is not followed
-/// (default 1e-6). Returns the cutoff, or `None` with splitting off.
-pub(crate) fn trace_options(root: &Table) -> Result<Option<f64>, FileError> {
+/// (default 1e-6), and `threads`, the threads to trace rays on (default 0, every core).
+/// Returns the cutoff (`None` with splitting off) and the threads.
+pub(crate) fn trace_options(root: &Table) -> Result<(Option<f64>, usize), FileError> {
     let Some(value) = root.get("trace") else {
-        return Ok(Some(optobench_scene::DEFAULT_SPLIT_CUTOFF));
+        return Ok((Some(optobench_scene::DEFAULT_SPLIT_CUTOFF), 0));
     };
     let table = value
         .as_table()
         .ok_or_else(|| error("[trace] must be a table"))?;
-    check_keys(table, &["split", "split_cutoff"], "[trace]")?;
+    check_keys(table, &["split", "split_cutoff", "threads"], "[trace]")?;
     let item = Item {
         table,
         context: "[trace]".into(),
+    };
+    let threads = match table.get("threads") {
+        None => 0,
+        Some(v) => v
+            .as_integer()
+            .and_then(|n| usize::try_from(n).ok())
+            .filter(|n| *n <= 1024)
+            .ok_or_else(|| error("[trace]: `threads` must be a whole number from 0 to 1024"))?,
     };
     let split = match table.get("split") {
         None => true,
@@ -468,13 +478,13 @@ pub(crate) fn trace_options(root: &Table) -> Result<Option<f64>, FileError> {
             .ok_or_else(|| error("[trace]: `split` must be true or false"))?,
     };
     if !split {
-        return Ok(None);
+        return Ok((None, threads));
     }
     let cutoff = item.optional_number("split_cutoff", optobench_scene::DEFAULT_SPLIT_CUTOFF)?;
     if !(cutoff > 0.0 && cutoff < 1.0) {
         return Err(error("[trace]: `split_cutoff` must be between 0 and 1"));
     }
-    Ok(Some(cutoff))
+    Ok((Some(cutoff), threads))
 }
 
 /// A `[[source]]` entry, in either kind of file. `placement_keys` are the keys that
@@ -1557,6 +1567,7 @@ pub fn parse_with(text: &str, lookups: &Lookups) -> Result<Scene, FileError> {
     }
     let position = placement.keys();
 
+    let (split_cutoff, threads) = trace_options(&root)?;
     let mut scene = Scene {
         surrounding,
         elements: Vec::new(),
@@ -1564,7 +1575,8 @@ pub fn parse_with(text: &str, lookups: &Lookups) -> Result<Scene, FileError> {
         proxies: Vec::new(),
         detectors: Vec::new(),
         solids: Vec::new(),
-        split_cutoff: trace_options(&root)?,
+        split_cutoff,
+        threads,
         dofs: Vec::new(),
         fluorophores: Vec::new(),
         thermal: Vec::new(),
@@ -2247,6 +2259,11 @@ mod tests {
         assert_eq!(finer.split_cutoff, Some(1e-9));
         let bad = read(&format!("{HEADER}[trace]\nsplit_cutoff = 2\n")).expect_err("rejected");
         assert!(bad.0.contains("between 0 and 1"));
+        assert_eq!(scene.threads, 0);
+        let one = read(&format!("{HEADER}[trace]\nthreads = 1\n")).expect("valid");
+        assert_eq!(one.threads, 1);
+        let bad = read(&format!("{HEADER}[trace]\nthreads = -2\n")).expect_err("rejected");
+        assert!(bad.0.contains("whole number"));
     }
 
     #[test]

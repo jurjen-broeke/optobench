@@ -452,6 +452,9 @@ pub struct Scene {
     /// transmitted part only. The default is [`DEFAULT_SPLIT_CUTOFF`] (docs/design.md,
     /// Optical model).
     pub split_cutoff: Option<f64>,
+    /// Threads to trace rays on: 0 uses every core, 1 the calling thread (the results are
+    /// the same either way; see `NonSequentialSystem::threads`).
+    pub threads: usize,
     /// Degrees of freedom (see [`dof`]).
     pub dofs: Vec<dof::Dof>,
     /// Fluorophores in the samples (M11b).
@@ -988,6 +991,7 @@ impl Scene {
         }
         let total: f64 = self.sources.iter().map(|s| s.power).sum();
         system.split_cutoff = self.split_cutoff.map(|fraction| fraction * total);
+        system.threads = self.threads;
         system.build_index();
         Ok(Built {
             system,
