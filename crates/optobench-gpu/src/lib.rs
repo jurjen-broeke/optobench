@@ -324,8 +324,8 @@ impl Gpu {
         out.roulette = scalar(3) - scalar(4);
         // Each interaction added one unit of the fixed point.
         out.interactions = (scalar(5) / unit * SCALE).round() as u64;
-        for k in 0..layers {
-            out.absorbed_by_layer[k] = scalar(6 + k);
+        for (k, absorbed) in out.absorbed_by_layer.iter_mut().enumerate() {
+            *absorbed = scalar(6 + k);
         }
         Ok(out)
     }
