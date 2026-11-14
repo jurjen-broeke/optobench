@@ -22,8 +22,10 @@ optobench-library = { path = "crates/optobench-library" }         # L3
 optobench-analysis = { path = "crates/optobench-analysis" }       # L4
 optobench-optimize = { path = "crates/optobench-optimize" }       # L4
 optobench-field = { path = "crates/optobench-field" }             # L4
+optobench-gpu = { path = "crates/optobench-gpu" }                 # L4
 optobench-io = { path = "crates/optobench-io" }                   # L5
-optobench-bridge = { path = "crates/optobench-bridge" }           # L5
+# optobench-bridge (L5, crates/optobench-bridge): no crate depends on it until M12/M13
+# (behind gate G1); its entry comes back here with its first user.
 optobench-commands = { path = "crates/optobench-commands" }       # L5
 
 # Third-party crates. Each must pass `cargo deny check` (deny.toml) and be compatible with
@@ -35,6 +37,8 @@ eframe = { version = "0.37", default-features = false, features = ["default_font
 serde_json = { version = "1.0.154", features = ["float_roundtrip"] }  # MIT OR Apache-2.0; exact float parsing, so saved results read back bit for bit
 rustfft = "6.4"                                                   # MIT OR Apache-2.0; FFT for fields, behind optobench-field's `transform` (design.md, Field propagation)
 toml = { version = "1.2.1", default-features = false, features = ["std", "parse", "serde", "display"] }  # MIT OR Apache-2.0 (display: toml_writer, MIT OR Apache-2.0)
+wgpu = "30.0"                                                     # MIT OR Apache-2.0; GPU compute (optobench-gpu), as eframe already brings it
+pollster = "1.0"                                                  # MIT OR Apache-2.0; waits for wgpu's futures on desktop
 toml_edit = { version = "0.25", default-features = false, features = ["parse", "display"] }  # MIT OR Apache-2.0; format-preserving edits
 
 [workspace.lints.rust]

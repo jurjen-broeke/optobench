@@ -10,6 +10,7 @@
 
 mod complex;
 mod linear;
+pub mod random;
 mod root;
 mod transform;
 mod vector;

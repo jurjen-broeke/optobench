@@ -26,6 +26,7 @@ mod focus;
 mod gaussian;
 pub mod graph;
 pub mod heating;
+pub mod photon;
 mod psf;
 mod pupil;
 pub mod sample;

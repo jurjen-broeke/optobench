@@ -5,6 +5,24 @@ with the release that introduced them.
 
 ## Unreleased
 
+- M15d light by Monte Carlo: `fluence` and `heating` (and their graphs) take
+  `transport = "monte-carlo"` (`packets`, `seed`, `gpu`, `threads`), run on the GPU when
+  one is found, else on the CPU's threads; diffusion stays the default. The brain heating
+  benchmark with Monte Carlo light gives 0.58 K per 100 mW (diffusion 0.47, measured
+  1.86 ± 0.25).
+- M15b tissue Monte Carlo on the GPU: new crate `optobench-gpu` runs the photon walk as a
+  wgpu compute kernel (f32, xoshiro128**, deposits in exact 64-bit fixed point), with the
+  CPU walk when no adapter is found. It meets the published slab benchmarks and equals
+  the CPU within statistical error; about 30× one CPU core on a laptop GPU.
+- M15a tissue Monte Carlo: `optobench_analysis::photon` walks weighted photon packets
+  through a sample's layers (Henyey–Greenstein scattering, Fresnel at index steps, Russian
+  roulette), launched from the traced rays where they enter the sample, recording
+  absorbed power and fluence on the r–z grid, reflectance and transmittance. Checked
+  against an absorbing slab's multiple reflections and Chandrasekhar's semi-infinite
+  reflectance, and against the published slab benchmarks (van de Hulst's tables and
+  Giovanelli's semi-infinite reflectance, as MCML and Prahl et al. quote them) and the
+  transport equation's deep-fluence decay. The seeded generator moved to
+  `optobench_math::random`.
 - Mounts: `[[mount]]` tables describe a mount's adjusters once (kind, axis, `range` or
   `travel`, `source`); `mount = "<id>"` on an element, source or detector gives it those
   DOFs before the solve. DOFs take `travel` (the part placed in its middle) and

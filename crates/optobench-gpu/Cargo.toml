@@ -1,0 +1,23 @@
+[package]
+name = "optobench-gpu"
+description = "GPU compute (wgpu) for the batches worth it: the tissue Monte Carlo walk"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[package.metadata.optobench]
+layer = "L4"
+
+[dependencies]
+optobench-math.workspace = true
+optobench-analysis.workspace = true
+wgpu.workspace = true
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+pollster.workspace = true
+
+[lints]
+workspace = true

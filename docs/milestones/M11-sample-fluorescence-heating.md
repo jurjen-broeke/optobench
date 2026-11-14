@@ -327,7 +327,9 @@ emitter is spread through the excited volume, its photons those of the excitatio
 
       **Decided 2026-11-13: the gap is accepted for M11 and left to M15** (Monte Carlo
       light transport, and an in-vivo µa if a source turns up); M11 closes with this item
-      open. **Result (2026-11-13, commands `tests/podgorski.rs`; not met).** Their conditions as
+      open. With Monte Carlo light (M15d, 2026-11-14) the rise is 0.578 K per 100 mW at
+      250 µm, against 0.47 here: the transport is about a fifth of the gap.
+      **Result (2026-11-13, commands `tests/podgorski.rs`; not met).** Their conditions as
       above (NA 0.08 by an ideal lens, which they found heats as NA 0.8; brain a
       cylinder 6 mm by 10 mm as in Stujenske et al.; water and glass thermal values from
       Welch and van Gemert, glass from Valvano's Table 11.4 after Incropera 1990; µa

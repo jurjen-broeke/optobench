@@ -12,7 +12,8 @@ publish = false
 layer = "L5"
 
 [dependencies]
-optobench-scene.workspace = true
+# None yet: the bridge waits for M12 (live read-only) and M13 (write-back), behind gate G1.
+# M12 adds optobench-scene (the scene it re-traces) when the first real code lands.
 
 [lints]
 workspace = true
