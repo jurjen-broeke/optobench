@@ -24,7 +24,8 @@ optobench-optimize = { path = "crates/optobench-optimize" }       # L4
 optobench-field = { path = "crates/optobench-field" }             # L4
 optobench-gpu = { path = "crates/optobench-gpu" }                 # L4
 optobench-io = { path = "crates/optobench-io" }                   # L5
-optobench-bridge = { path = "crates/optobench-bridge" }           # L5
+# optobench-bridge (L5, crates/optobench-bridge): no crate depends on it until M12/M13
+# (behind gate G1); its entry comes back here with its first user.
 optobench-commands = { path = "crates/optobench-commands" }       # L5
 
 # Third-party crates. Each must pass `cargo deny check` (deny.toml) and be compatible with

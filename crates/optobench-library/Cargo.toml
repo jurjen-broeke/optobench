@@ -14,7 +14,6 @@ layer = "L3"
 [dependencies]
 optobench-math.workspace = true
 optobench-surfaces.workspace = true
-optobench-materials.workspace = true
 
 [lints]
 workspace = true

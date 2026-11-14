@@ -2096,9 +2096,6 @@ dependencies = [
 [[package]]
 name = "optobench-bridge"
 version = "0.0.1"
-dependencies = [
- "optobench-scene",
-]
 
 [[package]]
 name = "optobench-cli"
@@ -2169,7 +2166,6 @@ dependencies = [
 name = "optobench-library"
 version = "0.0.1"
 dependencies = [
- "optobench-materials",
  "optobench-math",
  "optobench-surfaces",
 ]
@@ -2177,9 +2173,6 @@ dependencies = [
 [[package]]
 name = "optobench-materials"
 version = "0.0.1"
-dependencies = [
- "optobench-math",
-]
 
 [[package]]
 name = "optobench-math"
@@ -2189,7 +2182,6 @@ version = "0.0.1"
 name = "optobench-optimize"
 version = "0.0.1"
 dependencies = [
- "optobench-analysis",
  "optobench-materials",
  "optobench-math",
  "optobench-scene",

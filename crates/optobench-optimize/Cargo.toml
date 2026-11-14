@@ -16,7 +16,6 @@ optobench-math.workspace = true
 optobench-materials.workspace = true
 optobench-trace.workspace = true
 optobench-scene.workspace = true
-optobench-analysis.workspace = true
 
 [lints]
 workspace = true
