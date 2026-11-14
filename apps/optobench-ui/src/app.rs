@@ -61,8 +61,25 @@ pub struct App {
     graph_choice: Vec<&'static str>,
     /// New's chooser is open: planar, or a table with this pitch (mm).
     new_dialog: Option<f64>,
-    /// A new item waiting for a hole to be clicked.
-    placing: Option<New>,
+    /// A new item waiting for a hole to be clicked, with the library part it is.
+    placing: Option<(New, Option<String>)>,
+    /// The Lens chooser is open: its search text and the library's lenses.
+    lens_chooser: Option<(String, Vec<Value>)>,
+    /// A lens's STEP file dropped on the window: its prescription and what is typed to
+    /// make it a library part.
+    lens_import: Option<LensImport>,
+}
+
+/// A lens's STEP file being made a library part.
+struct LensImport {
+    path: PathBuf,
+    found: Value,
+    vendor: String,
+    part: String,
+    source: String,
+    glasses: Vec<String>,
+    /// Clear aperture (mm): from the spec sheet; a STEP file does not give it.
+    clear_aperture: f64,
 }
 
 /// Where in the design file an item of the view is written: its table and the entry.
@@ -210,6 +227,8 @@ impl App {
             graph_choice: vec!["spot"],
             new_dialog: None,
             placing: None,
+            lens_chooser: None,
+            lens_import: None,
         };
         if let Some(path) = path {
             app.open(path);
@@ -301,7 +320,16 @@ impl App {
                         self.apply(vec![op]);
                     }
                 }
-                Action::AddLens => self.start_adding(New::Lens),
+                Action::AddLens => {
+                    let lenses = self
+                        .quick("parts", json!({}))
+                        .and_then(|v| v["parts"].as_array().cloned())
+                        .unwrap_or_default()
+                        .into_iter()
+                        .filter(|p| p["type"] == "lens")
+                        .collect();
+                    self.lens_chooser = Some((String::new(), lenses));
+                }
                 Action::AddMirror => self.start_adding(New::Mirror),
                 Action::AddSource => self.start_adding(New::Source),
                 Action::AddDetector => self.start_adding(New::Detector),
@@ -371,17 +399,235 @@ impl App {
     /// Adds a new item: on a table layout it waits for a hole to be clicked (or Enter),
     /// on a planar layout it goes after the last item at once.
     fn start_adding(&mut self, new: New) {
+        self.start_adding_part(new, None);
+    }
+
+    /// As `start_adding`, a lens from the parts library when `library` names it.
+    fn start_adding_part(&mut self, new: New, library: Option<String>) {
         if self.design().is_some_and(|d| d["layout"] == "table") {
             self.end_move();
-            self.placing = Some(new);
-        } else {
-            self.add(new);
+            self.placing = Some((new, library));
+        } else if let Some(op) = self
+            .design()
+            .and_then(|d| editors::add_at(d, new, None, library.as_deref()))
+        {
+            self.apply(vec![op]);
         }
     }
 
-    fn add(&mut self, new: New) {
-        if let Some(op) = self.design().and_then(|d| editors::add(d, new)) {
-            self.apply(vec![op]);
+    /// Lens: a singlet (its shape and focal length set in Properties), or a lens of the
+    /// parts library (singlets, cemented and air-spaced doublets, triplets).
+    fn lens_chooser(&mut self, ctx: &egui::Context) {
+        let Some((mut search, lenses)) = self.lens_chooser.take() else {
+            return;
+        };
+        let mut open = true;
+        let mut chosen: Option<Option<String>> = None;
+        egui::Window::new("Lens")
+            .collapsible(false)
+            .resizable(false)
+            .open(&mut open)
+            .anchor(egui::Align2::CENTER_CENTER, Vec2::ZERO)
+            .show(ctx, |ui| {
+                if ui
+                    .button("Singlet")
+                    .on_hover_text("A biconvex singlet: set its shape and focal length in Properties")
+                    .clicked()
+                {
+                    chosen = Some(None);
+                }
+                ui.separator();
+                ui.label(RichText::new("From the parts library").strong());
+                if lenses.is_empty() {
+                    ui.label(
+                        RichText::new("No lenses yet: drop a lens's STEP file (or a part file) on the window to add one")
+                            .color(DARK.text_dim),
+                    );
+                } else {
+                    ui.add(egui::TextEdit::singleline(&mut search).hint_text("search"));
+                    egui::ScrollArea::vertical().max_height(260.0).show(ui, |ui| {
+                        for p in &lenses {
+                            let key = p["key"].as_str().unwrap_or("?");
+                            if !search.is_empty()
+                                && !key.to_lowercase().contains(&search.to_lowercase())
+                            {
+                                continue;
+                            }
+                            let glass = p["glass"].as_array().cloned().unwrap_or_default();
+                            let air = glass.iter().filter(|g| *g == "standard-air").count();
+                            let what = match (glass.len() - air, air > 0) {
+                                (1, _) => "singlet".to_owned(),
+                                (2, false) => "cemented doublet".to_owned(),
+                                (2, true) => "air-spaced doublet".to_owned(),
+                                (3, false) => "cemented triplet".to_owned(),
+                                (n, _) => format!("{n} glasses"),
+                            };
+                            let size = p["diameter_mm"]
+                                .as_f64()
+                                .map_or(String::new(), |d| format!(" · Ø{d}"));
+                            if ui
+                                .button(key)
+                                .on_hover_text(p["source"].as_str().unwrap_or(""))
+                                .clicked()
+                            {
+                                chosen = Some(Some(key.to_owned()));
+                            }
+                            ui.label(
+                                RichText::new(format!("{what}{size}"))
+                                    .color(DARK.text_dim)
+                                    .size(11.0),
+                            );
+                        }
+                    });
+                }
+            });
+        match chosen {
+            Some(library) => self.start_adding_part(New::Lens, library),
+            None if open => self.lens_chooser = Some((search, lenses)),
+            None => {}
+        }
+    }
+
+    /// A lens's STEP file dropped: what was found, and the vendor, part number, spec
+    /// sheet and glasses that make it a library part.
+    fn lens_import_dialog(&mut self, ctx: &egui::Context) {
+        let Some(mut import) = self.lens_import.take() else {
+            return;
+        };
+        let mut open = true;
+        let mut done = false;
+        egui::Window::new("Lens from STEP")
+            .collapsible(false)
+            .resizable(false)
+            .open(&mut open)
+            .anchor(egui::Align2::CENTER_CENTER, Vec2::ZERO)
+            .show(ctx, |ui| {
+                let f = &import.found;
+                ui.label(
+                    RichText::new(format!(
+                        "{}, Ø{} mm{}",
+                        f["kind"].as_str().unwrap_or("?"),
+                        f["diameter_mm"].as_f64().unwrap_or(0.0),
+                        match f["left_out"].as_u64() {
+                            Some(0) | None => String::new(),
+                            Some(n) => format!(" ({n} mount bodies left out)"),
+                        }
+                    ))
+                    .strong(),
+                );
+                let show = |v: &Value| match v {
+                    Value::String(s) => s.clone(),
+                    v => v.to_string(),
+                };
+                let radii: Vec<String> = f["radii_mm"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .map(show)
+                    .collect();
+                let thickness: Vec<String> = f["thickness_mm"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .map(show)
+                    .collect();
+                let gaps: Vec<String> = f["gaps"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .map(show)
+                    .collect();
+                egui::Grid::new("lens-import")
+                    .num_columns(2)
+                    .show(ui, |ui| {
+                        for (k, r) in radii.iter().enumerate() {
+                            ui.label(RichText::new(format!("R{}", k + 1)).color(DARK.text_dim));
+                            ui.label(format!("{r} mm"));
+                            ui.end_row();
+                            if let (Some(t), Some(g)) = (thickness.get(k), gaps.get(k)) {
+                                ui.label(
+                                    RichText::new(format!("tc{}", k + 1)).color(DARK.text_dim),
+                                );
+                                ui.label(format!("{t} mm, {g}"));
+                                ui.end_row();
+                            }
+                        }
+                    });
+                ui.separator();
+                egui::Grid::new("lens-import-fields")
+                    .num_columns(2)
+                    .show(ui, |ui| {
+                        for (label, value) in [
+                            ("vendor", &mut import.vendor),
+                            ("part number", &mut import.part),
+                            ("spec sheet", &mut import.source),
+                        ] {
+                            ui.label(RichText::new(label).color(DARK.text_dim));
+                            ui.text_edit_singleline(value);
+                            ui.end_row();
+                        }
+                        ui.label(RichText::new("clear aperture").color(DARK.text_dim))
+                            .on_hover_text("from the spec sheet; a STEP file does not give it");
+                        ui.add(
+                            egui::DragValue::new(&mut import.clear_aperture)
+                                .range(0.1..=1000.0)
+                                .speed(0.1)
+                                .suffix(" mm"),
+                        );
+                        ui.end_row();
+                        for (k, glass) in import.glasses.iter_mut().enumerate() {
+                            ui.label(
+                                RichText::new(format!("glass {}", k + 1)).color(DARK.text_dim),
+                            )
+                            .on_hover_text(
+                                "a material name (bundled or imported, e.g. N-BK7) or an index",
+                            );
+                            ui.text_edit_singleline(glass);
+                            ui.end_row();
+                        }
+                    });
+                let ready = !import.vendor.trim().is_empty()
+                    && !import.part.trim().is_empty()
+                    && !import.source.trim().is_empty()
+                    && import.glasses.iter().all(|g| !g.trim().is_empty());
+                if ui
+                    .add_enabled(ready, egui::Button::new("Import"))
+                    .on_hover_text("Write the part file into the parts library")
+                    .clicked()
+                {
+                    done = true;
+                }
+            });
+        if done {
+            let glass: Vec<Value> = import
+                .glasses
+                .iter()
+                .map(|g| {
+                    g.trim()
+                        .parse::<f64>()
+                        .map_or_else(|_| json!(g.trim()), |n| json!(n))
+                })
+                .collect();
+            let made = self.quick(
+                "part-from-step",
+                json!({
+                    "path": import.path.to_string_lossy(),
+                    "vendor": import.vendor.trim(),
+                    "part": import.part.trim(),
+                    "source": import.source.trim(),
+                    "glass": glass,
+                    "clear_aperture": import.clear_aperture,
+                    "import": true,
+                }),
+            );
+            if let Some(made) = made {
+                let key = made["part"]["key"].as_str().unwrap_or("?").to_owned();
+                self.notice = Some((false, format!("Lens imported: {key}; add it with Lens")));
+                return;
+            }
+        }
+        if open {
+            self.lens_import = Some(import);
         }
     }
 
@@ -484,6 +730,25 @@ impl App {
                     self.open(path);
                 }
             }
+            "step" | "stp" => {
+                if let Some(found) = self.quick("part-from-step", json!({ "path": shown })) {
+                    let glasses = found["glasses"].as_u64().unwrap_or(1) as usize;
+                    // A start: 90 % of the diameter, as spec sheets often give it.
+                    let clear_aperture =
+                        (found["diameter_mm"].as_f64().unwrap_or(25.4) * 9.0).round() / 10.0;
+                    self.lens_import = Some(LensImport {
+                        path,
+                        found,
+                        clear_aperture,
+                        vendor: String::new(),
+                        part: name.to_uppercase(),
+                        source: format!(
+                            "{name}: radii from its STEP file, glasses from its spec sheet"
+                        ),
+                        glasses: vec![String::new(); glasses],
+                    });
+                }
+            }
             "yml" | "yaml" => {
                 if let Some(preview) =
                     self.quick("import-material", json!({ "path": shown, "name": name }))
@@ -501,7 +766,7 @@ impl App {
                 self.notice = Some((
                     true,
                     format!(
-                        "{name}.{other}: drop a design (.optobench), a part, a curve table (.xlsx, .csv, .zip) or a material (.yml)"
+                        "{name}.{other}: drop a design (.optobench), a part, a lens's STEP file, a curve table (.xlsx, .csv, .zip) or a material (.yml)"
                     ),
                 ));
             }
@@ -1954,14 +2219,15 @@ impl eframe::App for App {
                     .and_then(|d| d.scene.as_ref())
                     .and_then(|s| crate::board::Board::of(&s.design, s));
                 self.view.show_board = self.show_board;
-                self.view.placing = self.placing.and_then(|new| {
+                self.view.placing = self.placing.clone().and_then(|(new, part)| {
                     let design = self.design()?;
                     Some(viewport::Placing {
-                        what: match new {
-                            New::Lens => "Lens",
-                            New::Mirror => "Mirror",
-                            New::Source => "Source",
-                            New::Detector => "Detector",
+                        what: match (new, part) {
+                            (New::Lens, Some(key)) => key,
+                            (New::Lens, None) => "Lens".into(),
+                            (New::Mirror, _) => "Mirror".into(),
+                            (New::Source, _) => "Source".into(),
+                            (New::Detector, _) => "Detector".into(),
                         },
                         height: editors::new_height(design),
                         pitch: design["table"]["pitch"].as_f64()?,
@@ -2032,8 +2298,10 @@ impl eframe::App for App {
                 }
                 Request::MoveCancel => self.end_move(),
                 Request::Place(hole) => {
-                    if let Some(new) = self.placing.take() {
-                        if let Some(op) = self.design().and_then(|d| editors::add_at(d, new, hole))
+                    if let Some((new, part)) = self.placing.take() {
+                        if let Some(op) = self
+                            .design()
+                            .and_then(|d| editors::add_at(d, new, hole, part.as_deref()))
                         {
                             self.apply(vec![op]);
                         }
@@ -2046,6 +2314,8 @@ impl eframe::App for App {
         self.licence_dialog(&ctx);
         self.graph_dialog(&ctx);
         self.new_dialog(&ctx);
+        self.lens_chooser(&ctx);
+        self.lens_import_dialog(&ctx);
         self.screenshot(&ctx);
     }
 }
@@ -2304,8 +2574,47 @@ mod exit {
         let text = std::fs::read_to_string(&path).expect("written");
         assert!(text.contains("hole = [3, 2]"), "{text}");
         assert!(h.state().placing.is_none());
+        // A lens's STEP file dropped on the window becomes a library lens (the golden
+        // plano-convex lens), placed from Lens's chooser.
+        let step = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../crates/optobench-io/tests/step/lens.step");
+        h.state_mut().dropped(step);
+        h.step();
+        {
+            let import = h.state_mut().lens_import.as_mut().expect("the dialog");
+            assert_eq!(import.found["radii_mm"], json!([30.0, "inf"]));
+            import.vendor = "Example".into();
+            import.part = "PC-30".into();
+            import.glasses = vec!["1.5".into()];
+        }
+        click(&mut h, "Import");
+        assert!(h.state().lens_import.is_none(), "{:?}", h.state().notice);
+        click(&mut h, "Lens");
+        click(&mut h, "example/PC-30");
+        eprintln!(
+            "DEBUG placing {:?} chooser {:?} notice {:?}",
+            h.state().placing,
+            h.state().lens_chooser.as_ref().map(|c| c.1.len()),
+            h.state().notice
+        );
+        h.key_press(egui::Key::Enter);
+        h.step();
+        settle(&mut h);
+        eprintln!(
+            "DEBUG after placing {:?} messages {:?}",
+            h.state().placing,
+            h.state().doc.as_ref().map(|d| d
+                .messages
+                .iter()
+                .map(|m| m.text.clone())
+                .collect::<Vec<_>>())
+        );
+        let text = std::fs::read_to_string(&path).expect("written");
+        assert!(text.contains("library = \"example/PC-30\""), "{text}");
+        assert!(errors(&h).is_empty(), "{:?}", errors(&h));
         // Escape places nothing.
         click(&mut h, "Lens");
+        click(&mut h, "Singlet");
         h.key_press(egui::Key::Escape);
         h.step();
         settle(&mut h);
@@ -2521,6 +2830,9 @@ mod exit {
         assert!(path.is_file(), "New made the file");
         for add in ["Source", "Lens", "Detector"] {
             click(&mut h, add);
+            if add == "Lens" {
+                click(&mut h, "Singlet");
+            }
         }
         click(&mut h, "D1");
         click(&mut h, "slide z");

@@ -305,7 +305,8 @@ pub fn prescription_from_step(
 }
 
 /// A lens part file from a prescription: `glasses` names (or indexes) each glass body in
-/// order; air gaps are `standard-air`. Radii and thicknesses rounded to 1 µm.
+/// order; air gaps are `standard-air`; `clear_aperture` from the spec sheet. Radii and
+/// thicknesses rounded to 1 µm.
 pub fn lens_part_text(
     vendor: &str,
     number: &str,
@@ -313,6 +314,7 @@ pub fn lens_part_text(
     prescription: &optobench_library::prescription::Prescription,
     glasses: &[toml::Value],
     products: &[String],
+    clear_aperture: Option<f64>,
 ) -> Result<String, String> {
     use optobench_library::prescription::Gap;
     if glasses.len() != prescription.glasses() {
@@ -347,6 +349,9 @@ pub fn lens_part_text(
     );
     if let Some(d) = prescription.diameter {
         text.push_str(&format!("diameter = {}\n", micron(d)));
+    }
+    if let Some(c) = clear_aperture {
+        text.push_str(&format!("clear_aperture = {}\n", micron(c)));
     }
     text.push_str(&format!(
         "surfaces = [{}]\nthickness = [{}]\nglass = [{}]\n",

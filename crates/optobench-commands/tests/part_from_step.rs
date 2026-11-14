@@ -45,11 +45,12 @@ fn a_plano_convex_lens_is_read_curved_side_first_and_imported() {
     let _ = std::fs::remove_dir_all(&data);
     let made = run(json!({
         "path": step().to_string_lossy(), "vendor": "Example", "part": "PC-30",
-        "source": "golden lens (R 30, 5 mm)", "glass": [1.5], "import": true,
+        "source": "golden lens (R 30, 5 mm)", "glass": [1.5], "clear_aperture": 22.9, "import": true,
         "data_directory": data.to_string_lossy(),
     }))
     .expect("imported");
     let text = made["part_file"].as_str().expect("a part file");
+    assert!(text.contains("clear_aperture = 22.9"), "{text}");
     assert!(
         text.contains("surfaces = [{ radius = 30 }, { radius = \"inf\" }]"),
         "{text}"

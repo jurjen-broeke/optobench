@@ -89,11 +89,51 @@ bench for the fine alignment is an output, not part of the design.
       its ends; a run along (1, 0.3), 0.1 holes or more from every hole, gets them off the
       grid by (9, 9) and (13, 10)
 
+## M16f Placing by a click, and lenses as they are bought
+
+Asked for by the user (2026-11-14), after building a path by hand:
+
+- [x] Lens, Mirror, Source and Detector on a table layout wait for a hole: a marker
+      follows the pointer on the board (the nearest hole, at the height new items get);
+      a click places the item there, Enter after the last item as before, Escape
+      nothing. Planar layouts add at once
+- [x] A lens's own editor in Properties: its shape (biconvex, plano-convex,
+      convex-plano, plano-concave, biconcave, meniscus, doublet, …), focal length (from
+      the rear principal plane) and back focal length at the first source's wavelength
+      (`optobench_scene::lens_cardinal_points`, the paraxial trace's cardinal points);
+      a singlet designed from its focal length (the thick-lens equation, Hecht §6.2: a
+      plano lens R₁ = (n − 1) f, an equi-convex or -concave one
+      R₁ = −R₂ = (n − 1) f (1 + √(1 − t / (n f)))); the prescription radius by radius
+      (R1…Rn, flat or not) with each glass's centre thickness and material, a cemented
+      glass added or taken away
+- [x] Lenses from their STEP files (`optobench_library::prescription`,
+      `part-from-step`): the vendor's model of a bare or mounted lens gives its kind
+      (singlet, cemented or air-spaced doublet, triplet), radii in order, centre
+      thicknesses, glass or air between them and diameter; a body is glass when both its
+      optical faces cover the axis (an odd number of each face's loops go round it, so a
+      mount's rings do not); touching surfaces of one radius are cemented; the more
+      strongly curved outer surface first, as spec sheets list them. With the vendor,
+      part number, spec sheet, a glass per body and the clear aperture (a STEP file
+      gives none) it becomes a library part (air as standard-air, its STEP products kept
+      so sidecars recognise it). In the window: a lens's STEP file dropped shows what was
+      found and asks for those
+- [x] Lens opens a chooser: a singlet, or a lens of the parts library (with its kind and
+      diameter, searchable), then placed as above
+- [x] Checks: the singlet designs give back their focal lengths through the thick-lens
+      equation; the relay's lens (R ±100 mm, n 1.5, 4 mm) has f 100.67 mm and fb
+      99.33 mm; prescriptions from built bodies (a cemented doublet, an air-spaced doublet
+      in a housing, a triplet turned round, a lone housing, overlapping bodies); the
+      golden lens.step read as R 30, flat, 5 mm, Ø25.4 and imported; in the window, a
+      hole clicked, Enter and Escape, and the golden lens dropped, imported and placed
+      from the chooser. On the local corpus (not committed): AC254-030-A reads as a
+      cemented doublet, LA1951 and the mounted LA1951-ML (its tube and ring left out) as
+      the same plano-convex lens
+
 ## Next, from the same test
 
 Noted while reading the code before the user's test; not yet confirmed by it:
 
-- Click a hole to place a new item there (items are added two holes after the last)
 - A mirror's normal worked out from where the beam comes from and should go
+- An achromatic doublet designed from its focal length (needs the glasses' dispersion)
 - Add for proxies (irises as plates, tubes) and `plate` among a proxy's kinds
 - `mount = …` (and the library's mounts) set from Properties

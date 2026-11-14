@@ -12,6 +12,10 @@ with the release that introduced them.
   on the selected item, snapped to the pitch or a typed step; Graph asks which graphs to
   draw, shows one at a time with a switcher, marks those out of date and redraws them;
   `trace` on a table layout says where to put two alignment irises on the bench.
+  New items are placed by clicking a hole (Enter: after the last item). A lens shows its
+  shape, focal length and back focal length, is designed from its focal length, and is
+  edited radius by radius; doublets and triplets come from the parts library, and a
+  lens's STEP file (`part-from-step`, or dropped on the window) becomes a library part.
 - M15d light by Monte Carlo: `fluence` and `heating` (and their graphs) take
   `transport = "monte-carlo"` (`packets`, `seed`, `gpu`, `threads`), run on the GPU when
   one is found, else on the CPU's threads; diffusion stays the default. The brain heating

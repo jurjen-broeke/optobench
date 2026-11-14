@@ -97,7 +97,8 @@ pub(crate) fn import_part(parameters: &Parameters) -> Result<Value, CommandError
 /// its housing and rings are left out): the radii in order, the centre thicknesses, which
 /// gaps are glass and which air, the diameter, and what it is (singlet, cemented or
 /// air-spaced doublet, triplet). With `vendor`, `part`, `source` (its spec sheet) and
-/// `glass` (a name or index per glass body, in order) it also gives the part file, and
+/// `glass` (a name or index per glass body, in order), and optionally `clear_aperture`
+/// (mm, from the spec sheet; layouts need it), it also gives the part file, and
 /// with `import` stores it in the parts library (`replace` to overwrite). Parameter
 /// `path`; optionally those and `data_directory`.
 pub(crate) fn part_from_step(parameters: &Parameters) -> Result<Value, CommandError> {
@@ -110,6 +111,7 @@ pub(crate) fn part_from_step(parameters: &Parameters) -> Result<Value, CommandEr
             "part",
             "source",
             "glass",
+            "clear_aperture",
             "import",
             "replace",
             "data_directory",
@@ -168,6 +170,15 @@ pub(crate) fn part_from_step(parameters: &Parameters) -> Result<Value, CommandEr
                 "`glass` is a list of names or indices",
             )
         })?;
+    let clear_aperture = match parameters.get("clear_aperture") {
+        None => None,
+        Some(v) => Some(v.as_f64().filter(|c| *c > 0.0).ok_or_else(|| {
+            CommandError::new(
+                ErrorCode::InvalidParameters,
+                "`clear_aperture` is a diameter in mm",
+            )
+        })?),
+    };
     let part_file = library::lens_part_text(
         required(parameters, "vendor")?,
         required(parameters, "part")?,
@@ -175,6 +186,7 @@ pub(crate) fn part_from_step(parameters: &Parameters) -> Result<Value, CommandEr
         &prescription,
         &glasses,
         &products,
+        clear_aperture,
     )
     .map_err(|e| CommandError::new(ErrorCode::InvalidParameters, e))?;
     result["part_file"] = json!(part_file);

@@ -39,8 +39,8 @@ pub struct Extras {
 /// the hole nearest the pointer, Enter after the last item, Escape cancels.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Placing {
-    /// What is placed, for the marker (`Lens`, `Mirror`, …).
-    pub what: &'static str,
+    /// What is placed, for the marker (`Lens`, `Mirror`, a library part's key, …).
+    pub what: String,
     /// The height it gets (mm).
     pub height: f64,
     /// The hole pitch (mm).
@@ -567,7 +567,11 @@ pub fn show(
             egui::Align2::CENTER_TOP,
             format!(
                 "Click a hole to place the {} · Enter: after the last item · Esc: cancel",
-                p.what.to_lowercase()
+                if p.what.contains('/') {
+                    p.what.clone()
+                } else {
+                    p.what.to_lowercase()
+                }
             ),
             egui::FontId::proportional(13.0),
             DARK.text,

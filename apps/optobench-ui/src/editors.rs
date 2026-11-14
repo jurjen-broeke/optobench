@@ -980,11 +980,17 @@ pub fn new_height(design: &Value) -> f64 {
 /// planar layout 50 mm further along the path, on a table layout two holes further
 /// along x at the source's height.
 pub fn add(design: &Value, new: New) -> Option<Value> {
-    add_at(design, new, None)
+    add_at(design, new, None, None)
 }
 
-/// As [`add`], on a table layout on the hole given (column, row) when there is one.
-pub fn add_at(design: &Value, new: New, hole: Option<(i64, i64)>) -> Option<Value> {
+/// As [`add`], on a table layout on the hole given (column, row) when there is one; a
+/// lens from the parts library when `library` names it.
+pub fn add_at(
+    design: &Value,
+    new: New,
+    hole: Option<(i64, i64)>,
+    library: Option<&str>,
+) -> Option<Value> {
     let planar = match design["layout"].as_str()? {
         "planar" => true,
         "table" => false,
@@ -1089,6 +1095,18 @@ pub fn add_at(design: &Value, new: New, hole: Option<(i64, i64)>) -> Option<Valu
             .concat(),
         ),
     };
+    // A library lens takes its kind, prescription, size and coating from its part.
+    let fields: Vec<(String, Value)> = match (new, library) {
+        (New::Lens, Some(key)) => [
+            vec![("library".to_owned(), json!(key))],
+            fields
+                .into_iter()
+                .filter(|(k, _)| matches!(k.as_str(), "at" | "hole" | "height" | "axis"))
+                .collect(),
+        ]
+        .concat(),
+        _ => fields,
+    };
     let id = next_id(design, prefix);
     let mut entry = vec![json!(["id", id])];
     entry.extend(fields.into_iter().map(|(k, v)| json!([k, v])));
@@ -1153,13 +1171,19 @@ mod tests {
         // A sidecar is not a layout.
         assert!(add(&json!({ "kind": "sidecar" }), New::Lens).is_none());
         // Placed on a hole clicked.
-        let op = add_at(&table, New::Mirror, Some((3, -2))).expect("an op");
+        let op = add_at(&table, New::Mirror, Some((3, -2)), None).expect("an op");
         assert!(
             op["entry"]
                 .as_array()
                 .expect("pairs")
                 .contains(&json!(["hole", [3, -2]]))
         );
+        // A library lens: its key, its place, nothing of its prescription.
+        let op = add_at(&table, New::Lens, Some((5, 0)), Some("example/AC-30")).expect("an op");
+        let entry = op["entry"].as_array().expect("pairs");
+        assert!(entry.contains(&json!(["library", "example/AC-30"])));
+        assert!(entry.contains(&json!(["hole", [5, 0]])));
+        assert!(!entry.iter().any(|p| p[0] == "surfaces" || p[0] == "kind"));
     }
 
     #[test]
