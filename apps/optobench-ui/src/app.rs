@@ -104,33 +104,75 @@ fn origin_of(scene: &crate::document::Scene, id: &str) -> Option<crate::camera::
         .or_else(|| scene.sources.iter().find(|s| s.id == id).map(|s| s.origin))
 }
 
-/// The layout entry selected (an item, or a source chosen in the browser), with its
-/// place in the file, where it sits and its outline: what the Move tool moves.
-#[allow(clippy::type_complexity)]
+/// What the Move tool moves: the selected entry (an item, or a source chosen in the
+/// browser) or, when it is in a group, every member of its group.
+struct Movable {
+    /// Each member's place in the file and where it stands.
+    members: Vec<editors::Member>,
+    /// Where the selected one stands: the handles' place, turns' centre.
+    anchor: crate::camera::V3,
+    /// The members' outlines.
+    outline: Vec<Vec<crate::camera::V3>>,
+    /// Members that are scene items, and sources, by index.
+    items: Vec<usize>,
+    sources: Vec<usize>,
+    /// The group, if a group is moved.
+    group: Option<String>,
+}
+
 fn movable(
     scene: &crate::document::Scene,
     selected: Option<usize>,
     focus: Option<&(String, String)>,
-) -> Option<(
-    String,
-    Value,
-    usize,
-    crate::camera::V3,
-    Vec<Vec<crate::camera::V3>>,
-)> {
+) -> Option<Movable> {
     if scene.design["layout"] != "table" {
         return None;
     }
-    if let Some(item) = selected.and_then(|i| scene.items.get(i)) {
-        let (table, entry, index) = entry_of(&scene.design, &item.id)?;
-        return Some((table, entry, index, item.origin?, item.lines.clone()));
+    let id = match (selected.and_then(|i| scene.items.get(i)), focus) {
+        (Some(item), _) => item.id.clone(),
+        (None, Some((t, id))) if t == "source" => id.clone(),
+        _ => return None,
+    };
+    let (_, entry, _) = entry_of(&scene.design, &id)?;
+    let group = entry["group"].as_str().map(str::to_owned);
+    let ids: Vec<String> = match &group {
+        None => vec![id.clone()],
+        Some(g) => ["element", "source", "detector", "proxy"]
+            .iter()
+            .filter_map(|t| scene.design[*t].as_array())
+            .flatten()
+            .filter(|e| e["group"] == g.as_str())
+            .filter_map(|e| e["id"].as_str().map(str::to_owned))
+            .collect(),
+    };
+    let mut moving = Movable {
+        members: Vec::new(),
+        anchor: [0.0; 3],
+        outline: Vec::new(),
+        items: Vec::new(),
+        sources: Vec::new(),
+        group,
+    };
+    for member in &ids {
+        let (table, entry, index) = entry_of(&scene.design, member)?;
+        let origin = if let Some(i) = scene.items.iter().position(|it| &it.id == member) {
+            moving.items.push(i);
+            moving.outline.extend(scene.items[i].lines.iter().cloned());
+            scene.items[i].origin?
+        } else {
+            let j = scene.sources.iter().position(|s| &s.id == member)?;
+            let s = &scene.sources[j];
+            moving.sources.push(j);
+            let tip = [0, 1, 2].map(|k| s.origin[k] + s.axis[k] * 20.0);
+            moving.outline.push(vec![s.origin, tip]);
+            s.origin
+        };
+        if *member == id {
+            moving.anchor = origin;
+        }
+        moving.members.push((table, entry, index, origin));
     }
-    let (table, id) = focus.filter(|(t, _)| t == "source")?;
-    let source = scene.sources.iter().find(|s| &s.id == id)?;
-    let (_, entry, index) = entry_of(&scene.design, id)?;
-    let o = source.origin;
-    let tip = [0, 1, 2].map(|k| o[k] + source.axis[k] * 20.0);
-    Some((table.clone(), entry, index, o, vec![vec![o, tip]]))
+    Some(moving)
 }
 
 /// A few words on what operations change, for the runs strip.
@@ -1331,6 +1373,44 @@ impl App {
                         }
                     });
                 }
+                let groups = editors::groups_of(&scene.design);
+                if !groups.is_empty() {
+                    egui::CollapsingHeader::new(format!("Groups ({})", groups.len()))
+                        .default_open(true)
+                        .show(ui, |ui| {
+                            for g in &groups {
+                                let members: Vec<String> =
+                                    ["element", "source", "detector", "proxy"]
+                                        .iter()
+                                        .filter_map(|t| scene.design[*t].as_array())
+                                        .flatten()
+                                        .filter(|e| e["group"] == g.as_str())
+                                        .filter_map(|e| e["id"].as_str().map(str::to_owned))
+                                        .collect();
+                                let label = format!("{g}  ·  {}", members.join(", "));
+                                if ui
+                                    .selectable_label(false, label)
+                                    .on_hover_text(
+                                        "Select its first item; Move moves the whole group",
+                                    )
+                                    .clicked()
+                                {
+                                    if let Some(first) = members.first() {
+                                        match scene.items.iter().position(|i| &i.id == first) {
+                                            Some(i) => {
+                                                self.selected = Some(i);
+                                                self.focus = None;
+                                            }
+                                            None => {
+                                                self.selected = None;
+                                                self.focus = Some(("source".into(), first.clone()));
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        });
+                }
                 egui::CollapsingHeader::new(format!("Sources ({})", scene.sources.len()))
                     .default_open(true)
                     .show(ui, |ui| {
@@ -1372,30 +1452,76 @@ impl App {
                             row(ui, self, i, scene.items[i].id.clone());
                         }
                     });
+                // What the optimiser aligns for: always listed, terms added here.
                 let merit = scene.design["merit"]
                     .as_array()
                     .cloned()
                     .unwrap_or_default();
-                if !merit.is_empty() {
-                    egui::CollapsingHeader::new(format!("Merit ({})", merit.len())).show(
-                        ui,
-                        |ui| {
-                            for (i, term) in merit.iter().enumerate() {
-                                let key = ("merit".to_owned(), i.to_string());
-                                let on = self.focus.as_ref() == Some(&key);
-                                let label = format!(
-                                    "{} · {}",
-                                    term["kind"].as_str().unwrap_or("?"),
-                                    term["detector"].as_str().unwrap_or("?")
+                let first_detector = scene.design["detector"][0]["id"]
+                    .as_str()
+                    .map(str::to_owned);
+                egui::CollapsingHeader::new(format!("Merit ({})", merit.len()))
+                    .default_open(true)
+                    .show(ui, |ui| {
+                        for (i, term) in merit.iter().enumerate() {
+                            let key = ("merit".to_owned(), i.to_string());
+                            let on = self.focus.as_ref() == Some(&key);
+                            let target = match &term["target"] {
+                                Value::Null => String::new(),
+                                t => format!(" → {t}"),
+                            };
+                            let label = format!(
+                                "{} · {}{target}",
+                                term["kind"].as_str().unwrap_or("?"),
+                                term["detector"].as_str().unwrap_or("")
+                            );
+                            if ui.selectable_label(on, label).clicked() {
+                                self.focus = (!on).then_some(key);
+                                self.selected = None;
+                            }
+                        }
+                        ui.menu_button("Add a term", |ui| {
+                            let Some(detector) = &first_detector else {
+                                ui.label(
+                                    RichText::new("Add a detector first: terms are measured on one")
+                                        .color(DARK.text_dim),
                                 );
-                                if ui.selectable_label(on, label).clicked() {
-                                    self.focus = (!on).then_some(key);
+                                return;
+                            };
+                            for (kind, help) in [
+                                ("centring", "the beam on the detector's centre (mm)"),
+                                ("pointing", "the beam along the detector's axis (mrad)"),
+                                ("collimation", "the beam collimated: no spread of directions (mrad)"),
+                                ("diameter", "the beam this wide (mm; target 5 to start)"),
+                                ("focus", "the smallest spot (mm)"),
+                                ("power", "as much light as possible arriving"),
+                                ("headroom", "adjusters near the middle of their ranges (small weight)"),
+                            ] {
+                                if ui.button(kind).on_hover_text(help).clicked() {
+                                    let mut entry = vec![json!(["kind", kind])];
+                                    if kind != "headroom" {
+                                        entry.push(json!(["detector", detector]));
+                                    }
+                                    if kind == "diameter" {
+                                        entry.push(json!(["target", 5.0]));
+                                    }
+                                    self.apply(vec![json!({
+                                        "op": "add", "table": "merit", "entry": entry,
+                                    })]);
+                                    self.focus = Some(("merit".into(), merit.len().to_string()));
                                     self.selected = None;
+                                    ui.close();
                                 }
                             }
-                        },
-                    );
-                }
+                        });
+                        if !merit.is_empty() && scene.dofs.is_empty() {
+                            ui.label(
+                                RichText::new("Optimise needs degrees of freedom: add a slide or tilt to an item")
+                                    .color(DARK.text_dim)
+                                    .size(11.0),
+                            );
+                        }
+                    });
                 if !scene.dofs.is_empty() {
                     egui::CollapsingHeader::new(format!(
                         "Degrees of freedom ({})",
@@ -2250,17 +2376,19 @@ impl eframe::App for App {
                     let mut tool = self.move_tool.clone();
                     let scene = self.doc.as_ref().and_then(|d| d.scene.as_ref());
                     tool.pitch = scene.and_then(|s| s.design["table"]["pitch"].as_f64());
-                    tool.target = scene
-                        .and_then(|s| movable(s, self.selected, self.focus.as_ref()))
-                        .map(|(_, _, _, origin, outline)| (origin, outline));
-                    // Which post follows the move: the selected item's, or the source's.
-                    tool.item = self.selected;
-                    tool.source = match (self.selected, &self.focus, scene) {
-                        (None, Some((t, id)), Some(s)) if t == "source" => {
-                            s.sources.iter().position(|x| &x.id == id)
-                        }
-                        _ => None,
-                    };
+                    let moving = scene.and_then(|s| movable(s, self.selected, self.focus.as_ref()));
+                    tool.target = moving.as_ref().map(|m| (m.anchor, m.outline.clone()));
+                    // The posts that follow the move: every member's.
+                    tool.items = moving.as_ref().map_or_else(Vec::new, |m| m.items.clone());
+                    tool.sources = moving.as_ref().map_or_else(Vec::new, |m| m.sources.clone());
+                    tool.posts = moving
+                        .as_ref()
+                        .map_or_else(Vec::new, |m| m.members.iter().map(|x| x.3).collect());
+                    tool.label = moving.as_ref().and_then(|m| {
+                        m.group
+                            .as_ref()
+                            .map(|g| format!("group {g}: {} items", m.members.len()))
+                    });
                     if tool.target.is_none() {
                         tool.pending.clear();
                     }
@@ -2301,9 +2429,8 @@ impl eframe::App for App {
                         .and_then(|d| d.scene.as_ref())
                         .and_then(|s| {
                             let pitch = s.design["table"]["pitch"].as_f64()?;
-                            let (table, entry, index, _, _) =
-                                movable(s, self.selected, self.focus.as_ref())?;
-                            editors::moved_all(&table, &entry, index, pitch, &steps)
+                            let m = movable(s, self.selected, self.focus.as_ref())?;
+                            Some(editors::moved_group(&m.members, pitch, m.anchor, &steps))
                         })
                         .unwrap_or_default();
                     self.apply(operations);
@@ -2604,24 +2731,9 @@ mod exit {
         assert!(h.state().lens_import.is_none(), "{:?}", h.state().notice);
         click(&mut h, "Lens");
         click(&mut h, "example/PC-30");
-        eprintln!(
-            "DEBUG placing {:?} chooser {:?} notice {:?}",
-            h.state().placing,
-            h.state().lens_chooser.as_ref().map(|c| c.1.len()),
-            h.state().notice
-        );
         h.key_press(egui::Key::Enter);
         h.step();
         settle(&mut h);
-        eprintln!(
-            "DEBUG after placing {:?} messages {:?}",
-            h.state().placing,
-            h.state().doc.as_ref().map(|d| d
-                .messages
-                .iter()
-                .map(|m| m.text.clone())
-                .collect::<Vec<_>>())
-        );
         let text = std::fs::read_to_string(&path).expect("written");
         assert!(text.contains("library = \"example/PC-30\""), "{text}");
         assert!(errors(&h).is_empty(), "{:?}", errors(&h));
@@ -2639,6 +2751,155 @@ mod exit {
             h.query_by_label("Keep this size").is_some(),
             "the board's Properties"
         );
+    }
+
+    #[test]
+    fn merit_and_lens_types_are_set_in_the_layout_workspace() {
+        // A table layout: a source, a singlet, a detector. A collimation term added from
+        // the browser; the singlet (biconvex R ±50, n 1.5, 4 mm: f 50.67 mm) made
+        // plano-concave keeps |f| and becomes R −25.3 then flat; Flip puts the flat first.
+        let dir = scratch("merit-lens");
+        let path = dir.join("bench.optobench");
+        let mut h = window(None, &dir);
+        click(&mut h, "Workspace");
+        click(&mut h, "Layout");
+        h.state_mut().open_path = path.to_string_lossy().into_owned();
+        click(&mut h, "New");
+        click(&mut h, "Table");
+        for add in ["Source", "Lens", "Detector"] {
+            click(&mut h, add);
+            if add == "Lens" {
+                click(&mut h, "Singlet");
+            }
+            h.key_press(egui::Key::Enter);
+            h.step();
+            settle(&mut h);
+        }
+        click(&mut h, "Add a term");
+        click(&mut h, "collimation");
+        let text = std::fs::read_to_string(&path).expect("written");
+        assert!(
+            text.contains("kind = \"collimation\"\ndetector = \"D1\""),
+            "{text}"
+        );
+        click(&mut h, "L1  ·  lens");
+        // The lens's type: the first list in its Properties.
+        h.query_all_by_role(egui::accesskit::Role::ComboBox)
+            .next()
+            .expect("the type list")
+            .click();
+        h.step();
+        h.step();
+        click(&mut h, "plano-concave");
+        let text = std::fs::read_to_string(&path).expect("written");
+        let f = 1.0 / (0.5 * (2.0 / 50.0 - 0.5 * 4.0 / (1.5 * 2500.0)));
+        let r = format!("{:.4}", -0.5 * f);
+        assert!(
+            text.contains(&format!(
+                "surfaces = [{{ radius = {r} }}, {{ radius = \"inf\" }}]"
+            )),
+            "{r}: {text}"
+        );
+        click(&mut h, "Flip");
+        let text = std::fs::read_to_string(&path).expect("written");
+        let flipped = format!("{:.4}", 0.5 * f);
+        assert!(
+            text.contains(&format!(
+                "surfaces = [{{ radius = \"inf\" }}, {{ radius = {flipped} }}]"
+            )),
+            "{text}"
+        );
+        assert!(errors(&h).is_empty(), "{:?}", errors(&h));
+    }
+
+    #[test]
+    fn a_group_moves_as_one() {
+        // Two lenses in the group `expander`, a detector outside it: Move on L1, its x
+        // arrow dragged two holes, Enter: both lenses move two holes, the detector not.
+        let dir = scratch("group");
+        let path = dir.join("expander.optobench");
+        std::fs::write(
+            &path,
+            "format = \"optobench/1\"\nkind = \"layout\"\nlayout = \"table\"\n\n[table]\npitch = 25.0\n\n\
+             [[source]]\nid = \"laser\"\nkind = \"collimated\"\nwavelength_um = 0.633\npower_w = 0.001\ndiameter = 1.0\nhole = [0, 0]\nheight = 75.0\naxis = [1, 0, 0]\n\n\
+             [[element]]\nid = \"L1\"\nkind = \"ideal_lens\"\nfocal_length = -12\ndiameter = 10\nhole = [2, 0]\nheight = 75.0\naxis = [1, 0, 0]\ngroup = \"expander\"\n\n\
+             [[element]]\nid = \"L2\"\nkind = \"ideal_lens\"\nfocal_length = 60\ndiameter = 25\nhole = [4, 0]\nheight = 75.0\naxis = [1, 0, 0]\ngroup = \"expander\"\n\n\
+             [[detector]]\nid = \"out\"\nhole = [10, 0]\nheight = 75.0\naxis = [1, 0, 0]\nsize = [20, 20]\npixels = [20, 20]\n",
+        )
+        .expect("written");
+        let mut h = window(Some(path.clone()), &dir);
+        settle(&mut h);
+        assert!(
+            h.query_by_label("expander  ·  L1, L2").is_some(),
+            "the browser lists it"
+        );
+        click(&mut h, "Move");
+        click(&mut h, "expander  ·  L1, L2");
+        h.state_mut().camera.top();
+        h.step();
+        h.step();
+        let (centre, pitch) = {
+            let app = h.state();
+            let rect = app.view.rect.expect("drawn");
+            let scene = app
+                .doc
+                .as_ref()
+                .and_then(|d| d.scene.as_ref())
+                .expect("a scene");
+            let i = app.selected.expect("L1 selected");
+            assert_eq!(scene.items[i].id, "L1");
+            let origin = scene.items[i].origin.expect("placed");
+            let (x, y) = app.camera.to_screen(
+                origin,
+                (rect.center().x as f64, rect.center().y as f64),
+                rect.height() as f64,
+            );
+            (
+                egui::pos2(x as f32, y as f32),
+                25.0 * rect.height() / app.camera.height as f32,
+            )
+        };
+        let from = centre + egui::vec2(40.0, 0.0);
+        let to = from + egui::vec2(2.1 * pitch, 0.0);
+        h.event(egui::Event::PointerMoved(from));
+        h.step();
+        h.event(egui::Event::PointerButton {
+            pos: from,
+            button: egui::PointerButton::Primary,
+            pressed: true,
+            modifiers: egui::Modifiers::NONE,
+        });
+        h.step();
+        for k in 1..=10 {
+            h.event(egui::Event::PointerMoved(
+                from + (to - from) * (k as f32 / 10.0),
+            ));
+            h.step();
+        }
+        h.event(egui::Event::PointerButton {
+            pos: to,
+            button: egui::PointerButton::Primary,
+            pressed: false,
+            modifiers: egui::Modifiers::NONE,
+        });
+        h.step();
+        assert_eq!(
+            h.state().move_tool.label.as_deref(),
+            Some("group expander: 2 items")
+        );
+        h.key_press(egui::Key::Enter);
+        h.step();
+        settle(&mut h);
+        let text = std::fs::read_to_string(&path).expect("written");
+        assert!(
+            text.contains("hole = [4, 0]") && text.contains("hole = [6, 0]"),
+            "{text}"
+        );
+        assert!(
+            text.contains("hole = [10, 0]"),
+            "the detector stays: {text}"
+        );
+        assert!(errors(&h).is_empty(), "{:?}", errors(&h));
     }
 
     #[test]

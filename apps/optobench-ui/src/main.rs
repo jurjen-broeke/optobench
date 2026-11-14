@@ -12,6 +12,7 @@ mod document;
 mod editors;
 mod graphs;
 mod icons;
+mod lens;
 mod moving;
 mod render;
 mod screenshot;

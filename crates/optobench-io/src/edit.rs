@@ -27,7 +27,7 @@ fn error(message: impl Into<String>) -> EditError {
 }
 
 /// The tables whose entries are edited by id.
-const WITH_ID: &[&str] = &["element", "source", "detector", "proxy"];
+const WITH_ID: &[&str] = &["element", "source", "detector", "proxy", "group"];
 /// The tables whose entries are edited by index.
 const BY_INDEX: &[&str] = &["merit"];
 

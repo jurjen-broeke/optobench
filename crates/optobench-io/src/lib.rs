@@ -11,6 +11,7 @@ pub mod curves;
 pub mod edit;
 pub mod fpbase;
 pub mod graph;
+mod groups;
 pub mod library;
 pub mod merit;
 pub mod mesh;

@@ -745,6 +745,7 @@ fn design_json(source: &str) -> Value {
         "detector": list("detector"),
         "proxy": list("proxy"),
         "merit": list("merit"),
+        "group": list("group"),
         "table": table.get("table").and_then(|v| serde_json::to_value(v).ok()),
         "planar": table.get("planar").and_then(|v| serde_json::to_value(v).ok()),
     })

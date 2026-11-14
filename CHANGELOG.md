@@ -16,6 +16,12 @@ with the release that introduced them.
   shape, focal length and back focal length, is designed from its focal length, and is
   edited radius by radius; doublets and triplets come from the parts library, and a
   lens's STEP file (`part-from-step`, or dropped on the window) becomes a library part.
+  Merit term `diameter` (a target in mm: 2√2 × the RMS radius); a 5× beam expander is
+  placed by the optimiser and checked against thick-lens theory. Groups: `group = "<id>"`
+  on items, `[[group]]` DOFs that move every member; Move moves a whole group. Merit
+  terms are added from the browser in the Layout workspace. The lens editor goes name,
+  type, f, R, tc, glass, diameter, its values kept consistent (the diameter limited by
+  the edge thickness), and Flip turns a lens round.
 - M15d light by Monte Carlo: `fluence` and `heating` (and their graphs) take
   `transport = "monte-carlo"` (`packets`, `seed`, `gpu`, `threads`), run on the GPU when
   one is found, else on the CPU's threads; diffusion stays the default. The brain heating

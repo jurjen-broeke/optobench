@@ -489,13 +489,13 @@ pub fn show(
                     .map(|(j, s)| ((None, Some(j)), s.origin)),
             );
         // The item being moved has its post drawn where the move takes it.
-        let moved = extras
-            .moving
-            .as_ref()
-            .filter(|t| t.target.is_some())
-            .map(|t| (t.item, t.source));
+        let moved = extras.moving.as_ref().filter(|t| t.target.is_some());
         for ((index, source), top) in posts {
-            if moved.is_some_and(|m| m == (index, source) && (index, source) != (None, None)) {
+            let moving = moved.is_some_and(|t| {
+                index.is_some_and(|i| t.items.contains(&i))
+                    || source.is_some_and(|j| t.sources.contains(&j))
+            });
+            if moving {
                 continue;
             }
             let foot = [top[0], top[1], 0.0];
@@ -722,6 +722,9 @@ fn move_panel(
         return None;
     }
     let mut request = None;
+    if let Some(label) = &tool.label {
+        child.label(egui::RichText::new(label).size(11.0).color(DARK.text));
+    }
     let text = if tool.pending.is_empty() {
         egui::RichText::new("Drag an arrow to slide, a ring to turn").color(DARK.text_dim)
     } else {

@@ -1,0 +1,120 @@
+{
+  "design": "/Users/jbe390/Documents/Rust/optobench/layout-14.optobench",
+  "dofs": [
+    {
+      "at_range_limit": false,
+      "change": -4.999569541515276,
+      "name": "PCV_slide_x",
+      "room": {
+        "advice": "room enough both ways",
+        "left": [
+          5.000430458484724,
+          4.999569541515276
+        ],
+        "range": [
+          -5.0,
+          5.0
+        ],
+        "range_after_adjusting": [
+          -5.000430458484724,
+          4.999569541515276
+        ],
+        "status": "ok",
+        "used": 0.0000860916969448094
+      },
+      "start": 5.0,
+      "suggested": 0.000430458484724047,
+      "unit": "mm"
+    },
+    {
+      "at_range_limit": false,
+      "change": -4.9996852247672585,
+      "name": "PCV_slide_y",
+      "room": {
+        "advice": "room enough both ways",
+        "left": [
+          5.0003147752327415,
+          4.9996852247672585
+        ],
+        "range": [
+          -5.0,
+          5.0
+        ],
+        "range_after_adjusting": [
+          -5.0003147752327415,
+          4.9996852247672585
+        ],
+        "status": "ok",
+        "used": 0.00006295504654837018
+      },
+      "start": 5.0,
+      "suggested": 0.0003147752327418509,
+      "unit": "mm"
+    }
+  ],
+  "format": "optobench/1",
+  "kind": "moves",
+  "merit": [
+    {
+      "detector": "D1",
+      "end": [
+        15.37106557537855
+      ],
+      "kind": "collimation",
+      "start": [
+        19.454311225376117
+      ],
+      "unit": "mrad",
+      "weight": 1.0
+    },
+    {
+      "detector": "D1",
+      "end": [
+        -1.1841867697685298
+      ],
+      "kind": "diameter",
+      "start": [
+        -2.3618457564865634
+      ],
+      "unit": "mm",
+      "weight": 1.0
+    }
+  ],
+  "moves": [
+    {
+      "dofs": [
+        "PCV_slide_x",
+        "PCV_slide_y"
+      ],
+      "kind": "element",
+      "matrix": [
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.000430458484724047,
+        0.0,
+        0.0,
+        1.0,
+        0.0003147752327418509
+      ],
+      "name": "PCV",
+      "rotate_axis": [
+        0.0,
+        0.0,
+        1.0
+      ],
+      "rotate_deg": 0.0,
+      "translate_mm": [
+        0.0,
+        0.000430458484724047,
+        0.0003147752327418509
+      ]
+    }
+  ],
+  "next": "Set each DOF's `value` in the layout to the suggested one.",
+  "poses": []
+}

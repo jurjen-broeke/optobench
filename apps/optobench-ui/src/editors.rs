@@ -207,6 +207,8 @@ pub struct Context {
     pub sidecar: bool,
     /// A table layout's hole pitch (mm).
     pub pitch: Option<f64>,
+    /// The groups items are in, and those the file declares.
+    pub groups: Vec<String>,
 }
 
 impl Context {
@@ -225,7 +227,88 @@ impl Context {
             pitch: (design["layout"] == "table")
                 .then(|| design["table"]["pitch"].as_f64())
                 .flatten(),
+            groups: groups_of(design),
         }
+    }
+}
+
+/// Every group of a design: those items are in and those `[[group]]` declares, sorted.
+pub fn groups_of(design: &Value) -> Vec<String> {
+    let mut groups: Vec<String> = ["element", "source", "detector", "proxy"]
+        .iter()
+        .filter_map(|t| design[*t].as_array())
+        .flatten()
+        .filter_map(|e| e["group"].as_str())
+        .chain(
+            design["group"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|g| g["id"].as_str()),
+        )
+        .map(str::to_owned)
+        .collect();
+    groups.sort();
+    groups.dedup();
+    groups
+}
+
+/// The group an entry is in: none, one of the design's, or a new one typed.
+fn group_field(
+    ui: &mut Ui,
+    drafts: &mut Drafts,
+    base: &str,
+    target: &Value,
+    entry: &Value,
+    context: &Context,
+) -> Option<Value> {
+    let current = entry["group"].as_str();
+    let mut op = target.clone();
+    let mut chosen: Option<Option<String>> = None;
+    ui.horizontal(|ui| {
+        ui.label(RichText::new("group").color(DARK.text_dim))
+            .on_hover_text("Items in a group move together: Move on any of them moves all");
+        egui::ComboBox::from_id_salt(format!("{base}/group"))
+            .selected_text(current.unwrap_or("none"))
+            .show_ui(ui, |ui| {
+                if ui.selectable_label(current.is_none(), "none").clicked() {
+                    chosen = Some(None);
+                }
+                for g in &context.groups {
+                    if ui
+                        .selectable_label(current == Some(g.as_str()), g)
+                        .clicked()
+                    {
+                        chosen = Some(Some(g.clone()));
+                    }
+                }
+            });
+        let path = format!("{base}/group/new");
+        if let Some(typed) = text(ui, drafts, &path, "", 90.0) {
+            let typed = typed.trim().to_owned();
+            if !typed.is_empty() {
+                chosen = Some(Some(typed));
+            }
+        }
+        ui.label(
+            RichText::new("or a new one")
+                .color(DARK.text_dim)
+                .size(11.0),
+        );
+    });
+    match chosen? {
+        None if current.is_some() => {
+            op["op"] = json!("unset");
+            op["key"] = json!("group");
+            Some(op)
+        }
+        Some(g) if current != Some(g.as_str()) => {
+            op["op"] = json!("set");
+            op["key"] = json!("group");
+            op["value"] = json!(g);
+            Some(op)
+        }
+        _ => None,
     }
 }
 
@@ -357,11 +440,28 @@ pub fn entry(
         "{table}/{}",
         entry["id"].as_str().unwrap_or(&index.to_string())
     );
-    let mut operations = position(ui, drafts, &base, &target, entry, origin, context);
-    // A lens's prescription has its own editor.
+    let mut operations = Vec::new();
+    // Its name first.
+    if let Some(id) = entry["id"].as_str() {
+        ui.horizontal(|ui| {
+            ui.label(RichText::new("name").color(DARK.text_dim));
+            if let Some(typed) = text(ui, drafts, &format!("{base}/id"), id, 160.0) {
+                let mut op = target.clone();
+                op["op"] = json!("set");
+                op["key"] = json!("id");
+                op["value"] = json!(typed.trim());
+                operations.push(op);
+            }
+        });
+    }
+    // A lens's own editor next: its type, focal length, radii, thickness, glass, size.
     let prescribed = table == "element" && entry["surfaces"].is_array();
     if table == "element" && (prescribed || lens.is_some()) {
         operations.extend(lens_editor(ui, drafts, &base, &target, entry, lens));
+    }
+    operations.extend(position(ui, drafts, &base, &target, entry, origin, context));
+    if ["element", "source", "detector", "proxy"].contains(&table) && entry["id"].is_string() {
+        operations.extend(group_field(ui, drafts, &base, &target, entry, context));
     }
     // On a table layout the height is the position's Z.
     let shown_as_z = context.pitch.is_some() && entry["hole"].is_array();
@@ -370,10 +470,17 @@ pub fn entry(
         .spacing([10.0, 4.0])
         .show(ui, |ui| {
             for key in keys(entry) {
-                if shown_as_z && key == "height" {
+                if (shown_as_z && key == "height") || key == "group" || key == "id" {
                     continue;
                 }
-                if prescribed && matches!(key.as_str(), "surfaces" | "thickness" | "material") {
+                let in_lens_editor = matches!(
+                    key.as_str(),
+                    "surfaces" | "thickness" | "material" | "diameter" | "clear_aperture"
+                );
+                if prescribed && in_lens_editor {
+                    continue;
+                }
+                if table == "element" && entry["library"].is_string() && key == "reversed" {
                     continue;
                 }
                 ui.label(RichText::new(&key).color(DARK.text_dim));
@@ -510,100 +617,6 @@ pub fn board(ui: &mut Ui, drafts: &mut Drafts, board: &crate::board::Board) -> V
     operations
 }
 
-/// The edit a Move makes to a table layout's entry: a slide along x or y moves its hole
-/// by `amount / pitch` (fractions kept), along z its height; a turn about a scene axis
-/// turns its `axis` (degrees). `None` when the entry is not placed on the table.
-pub fn moved(
-    table: &str,
-    entry: &Value,
-    index: usize,
-    pitch: f64,
-    handle: crate::moving::Handle,
-    amount: f64,
-) -> Option<Value> {
-    let hole = [entry["hole"][0].as_f64()?, entry["hole"][1].as_f64()?];
-    let mut op = selector(table, entry, index);
-    op["op"] = json!("set");
-    match handle {
-        crate::moving::Handle::Slide(k @ (0 | 1)) => {
-            let mut new = hole;
-            new[k] += amount / pitch;
-            op["key"] = json!("hole");
-            op["value"] = json!([tidy(new[0]), tidy(new[1])]);
-        }
-        crate::moving::Handle::Slide(_) => {
-            op["key"] = json!("height");
-            op["value"] = tidy(entry["height"].as_f64()? + amount);
-        }
-        crate::moving::Handle::Turn(k) => {
-            let a = &entry["axis"];
-            let axis = [a[0].as_f64()?, a[1].as_f64()?, a[2].as_f64()?];
-            let turned = crate::moving::turned(axis, [0.0; 3], k, amount);
-            op["key"] = json!("axis");
-            op["value"] = json!(turned.map(tidy));
-        }
-    }
-    Some(op)
-}
-
-/// The edits a whole Move makes, its steps in order: the entry's hole, height and axis
-/// where they changed. `None` when the entry is not placed on the table.
-pub fn moved_all(
-    table: &str,
-    entry: &Value,
-    index: usize,
-    pitch: f64,
-    steps: &[(crate::moving::Handle, f64)],
-) -> Option<Vec<Value>> {
-    let mut now = entry.clone();
-    for &(handle, amount) in steps {
-        let op = moved(table, &now, index, pitch, handle, amount)?;
-        let key = op["key"].as_str()?.to_owned();
-        now[key] = op["value"].clone();
-    }
-    let mut operations = Vec::new();
-    for key in ["hole", "height", "axis"] {
-        if now[key] != entry[key] {
-            let mut op = selector(table, entry, index);
-            op["op"] = json!("set");
-            op["key"] = json!(key);
-            op["value"] = now[key].clone();
-            operations.push(op);
-        }
-    }
-    Some(operations)
-}
-
-/// The singlet shapes a lens can be designed as from its focal length.
-pub const SINGLETS: &[&str] = &["biconvex", "plano-convex", "plano-concave", "biconcave"];
-
-/// The radii (light along +z; infinite for flat) of a singlet of `shape` with focal
-/// length `f`, glass index `n` and centre thickness `t` (mm), from the thick-lens
-/// equation 1/f = (n − 1) (1/R₁ − 1/R₂ + (n − 1) t / (n R₁ R₂)) (E. Hecht, Optics, §6.2):
-/// a plano lens, curved side first, has R₁ = (n − 1) f whatever its thickness; an
-/// equi-convex or equi-concave one R₁ = −R₂ = (n − 1) f (1 + √(1 − t / (n f))). Convex
-/// shapes take |f|, concave ones −|f|. `None` when no such lens exists (too thick).
-pub fn singlet_radii(shape: &str, f: f64, n: f64, t: f64) -> Option<[f64; 2]> {
-    if !(n > 1.0 && f.is_finite() && f != 0.0 && t >= 0.0) {
-        return None;
-    }
-    let f = match shape {
-        "biconvex" | "plano-convex" => f.abs(),
-        "biconcave" | "plano-concave" => -f.abs(),
-        _ => return None,
-    };
-    match shape {
-        "plano-convex" | "plano-concave" => Some([(n - 1.0) * f, f64::INFINITY]),
-        _ => {
-            let root = 1.0 - t / (n * f);
-            (root >= 0.0).then(|| {
-                let r = (n - 1.0) * f * (1.0 + root.sqrt());
-                [r, -r]
-            })
-        }
-    }
-}
-
 /// A radius as a file writes it: a number, or "inf" for flat.
 fn radius_value(r: f64) -> Value {
     if r.is_finite() {
@@ -622,10 +635,31 @@ fn radius_of(value: &Value) -> f64 {
     }
 }
 
-/// A lens's own editor: its shape, focal length and back focal length (from the scene);
-/// a singlet designed from its focal length; and its prescription, radius by radius,
-/// with each glass's centre thickness and material between them, glasses added (a
-/// cemented doublet: three radii) or taken away.
+/// A number field with a label and unit in a grid row; the new value when changed.
+fn row(
+    ui: &mut Ui,
+    drafts: &mut Drafts,
+    path: &str,
+    label: &str,
+    help: &str,
+    unit: &str,
+    current: f64,
+) -> Option<f64> {
+    ui.label(RichText::new(label).color(DARK.text_dim))
+        .on_hover_text(help);
+    let changed = number(ui, drafts, path, current);
+    ui.label(RichText::new(unit).color(DARK.text_dim).size(11.0));
+    ui.end_row();
+    changed
+}
+
+/// A lens's own editor, in the order a lens is chosen: its type; its focal length,
+/// radius, centre thickness and glass, kept consistent (a change to one redesigns the
+/// others: the radius follows the focal length, thickness and index; the focal length
+/// follows the radius); its diameter and clear aperture, made smaller when the lens's
+/// curvature leaves no edge; turned round by Flip. A lens of more glasses (a doublet) is
+/// edited radius by radius; a library lens shows its properties and is flipped by
+/// `reversed`.
 fn lens_editor(
     ui: &mut Ui,
     drafts: &mut Drafts,
@@ -634,6 +668,7 @@ fn lens_editor(
     entry: &Value,
     lens: Option<&Value>,
 ) -> Vec<Value> {
+    use crate::lens::{Shape, Singlet};
     let mut operations = Vec::new();
     let set = |key: &str, value: Value| {
         let mut op = target.clone();
@@ -642,118 +677,360 @@ fn lens_editor(
         op["value"] = value;
         op
     };
-    ui.label(RichText::new("Lens").strong());
     let wavelength = lens.and_then(|l| l["wavelength_um"].as_f64());
-    egui::Grid::new(format!("lens-{base}"))
-        .num_columns(3)
-        .spacing([10.0, 4.0])
-        .show(ui, |ui| {
-            let shape = lens.and_then(|l| l["shape"].as_str()).unwrap_or("—");
-            ui.label(RichText::new("shape").color(DARK.text_dim));
-            ui.label(shape);
-            ui.label("");
-            ui.end_row();
-            for (label, key, help) in [
-                (
-                    "f",
-                    "focal_length_mm",
-                    "focal length, from the rear principal plane",
-                ),
-                (
-                    "fb",
-                    "back_focal_length_mm",
-                    "back focal length, from the last surface",
-                ),
-            ] {
-                ui.label(RichText::new(label).color(DARK.text_dim))
-                    .on_hover_text(help);
-                match lens.and_then(|l| l[key].as_f64()) {
-                    Some(v) => ui.label(format!("{v:.3}")),
-                    None => ui.label("—"),
-                };
-                ui.label(RichText::new("mm").color(DARK.text_dim).size(11.0));
-                ui.end_row();
-            }
-        });
-    if let Some(w) = wavelength {
-        ui.label(
-            RichText::new(format!("at {w} µm, the first source's wavelength"))
-                .color(DARK.text_dim)
-                .size(11.0),
-        );
-    }
+    let shown = |key: &str| lens.and_then(|l| l[key].as_f64());
+    ui.label(RichText::new("Lens").strong());
+
+    // A library lens: what it is, turned round or not.
     if !entry["surfaces"].is_array() {
+        egui::Grid::new(format!("lens-{base}"))
+            .num_columns(3)
+            .spacing([10.0, 4.0])
+            .show(ui, |ui| {
+                ui.label(RichText::new("type").color(DARK.text_dim));
+                ui.label(lens.and_then(|l| l["shape"].as_str()).unwrap_or("—"));
+                ui.label("");
+                ui.end_row();
+                for (label, key) in [("f", "focal_length_mm"), ("fb", "back_focal_length_mm")] {
+                    ui.label(RichText::new(label).color(DARK.text_dim));
+                    ui.label(shown(key).map_or("—".into(), |v| format!("{v:.3}")));
+                    ui.label(RichText::new("mm").color(DARK.text_dim).size(11.0));
+                    ui.end_row();
+                }
+            });
+        let reversed = entry["reversed"].as_bool().unwrap_or(false);
+        if ui
+            .button("Flip")
+            .on_hover_text("Turn the lens round")
+            .clicked()
+        {
+            operations.push(set("reversed", json!(!reversed)));
+        }
         ui.label(
-            RichText::new("Its prescription comes from the parts library")
+            RichText::new("Its prescription, size and coating come from the parts library")
                 .color(DARK.text_dim)
                 .size(11.0),
         );
         ui.add_space(4.0);
         return operations;
     }
+
     let surfaces: Vec<Value> = entry["surfaces"].as_array().cloned().unwrap_or_default();
     let thickness: Vec<Value> = entry["thickness"].as_array().cloned().unwrap_or_default();
     let material: Vec<Value> = entry["material"].as_array().cloned().unwrap_or_default();
+    let diameter = entry["diameter"].as_f64().unwrap_or(25.4);
+    let clear = entry["clear_aperture"].as_f64().unwrap_or(0.9 * diameter);
+    let singlet_now = surfaces.len() == 2 && material.len() == 1;
+    // The index: the glass's own number, else what the scene found at the wavelength.
+    let n = material
+        .first()
+        .and_then(Value::as_f64)
+        .or_else(|| lens.and_then(|l| l["indices"][0].as_f64()));
+    let custom_path = format!("{base}/custom");
+    let custom = !singlet_now || drafts.texts.get(&custom_path).is_some_and(|c| c == "yes");
 
-    // Designed from its focal length: a singlet of the first glass and thickness.
-    let n = lens.and_then(|l| l["indices"][0].as_f64());
-    let t = thickness.first().and_then(Value::as_f64).unwrap_or(4.0);
+    // Writes a singlet, keeping its diameter where its curvature leaves an edge.
+    let write = |operations: &mut Vec<Value>, lens: Singlet, glass: Value| {
+        operations.push(set(
+            "surfaces",
+            json!([{ "radius": radius_value(lens.r1) }, { "radius": radius_value(lens.r2) }]),
+        ));
+        operations.push(set("thickness", json!([tidy(lens.t)])));
+        operations.push(set("material", json!([glass])));
+        let largest = lens.max_diameter();
+        if diameter > largest && largest > 0.0 {
+            operations.push(set("diameter", tidy(largest)));
+            operations.push(set(
+                "clear_aperture",
+                tidy((clear.min(0.9 * largest) * 10.0).floor() / 10.0),
+            ));
+        }
+    };
+
+    // The type.
+    let now = singlet_now.then(|| Singlet {
+        r1: radius_of(&surfaces[0]["radius"]),
+        r2: radius_of(&surfaces[1]["radius"]),
+        t: thickness.first().and_then(Value::as_f64).unwrap_or(4.0),
+        n: n.unwrap_or(1.5),
+    });
+    let (shape, flipped) = now.map_or((Shape::Biconvex, false), |l| l.shape());
+    let glass = material.first().cloned().unwrap_or(json!(1.5));
+    let mut chosen: Option<Option<Shape>> = None;
     ui.horizontal(|ui| {
-        ui.label(RichText::new("design").color(DARK.text_dim));
-        let shape_path = format!("{base}/design/shape");
-        let mut shape = drafts.texts.get(&shape_path).cloned().unwrap_or_else(|| {
-            let now = lens.and_then(|l| l["shape"].as_str()).unwrap_or("biconvex");
-            if SINGLETS.contains(&now) {
-                now
-            } else {
-                "biconvex"
-            }
-            .to_owned()
-        });
-        egui::ComboBox::from_id_salt(&shape_path)
-            .selected_text(shape.clone())
+        ui.label(RichText::new("type").color(DARK.text_dim));
+        let shown = if custom {
+            "custom (radius by radius)"
+        } else {
+            shape.name()
+        };
+        egui::ComboBox::from_id_salt(format!("{base}/type"))
+            .selected_text(shown)
             .show_ui(ui, |ui| {
-                for option in SINGLETS {
-                    ui.selectable_value(&mut shape, (*option).to_owned(), *option);
+                for s in Shape::ALL {
+                    if ui
+                        .selectable_label(!custom && s == shape, s.name())
+                        .clicked()
+                    {
+                        chosen = Some(Some(s));
+                    }
+                }
+                if ui
+                    .selectable_label(custom, "custom (radius by radius)")
+                    .clicked()
+                {
+                    chosen = Some(None);
                 }
             });
-        drafts.texts.insert(shape_path, shape.clone());
-        let f_path = format!("{base}/design/f");
-        let current = lens
-            .and_then(|l| l["focal_length_mm"].as_f64())
-            .map_or(100.0, |f| (f * 100.0).round() / 100.0);
-        let mut f = *drafts.numbers.get(&f_path).unwrap_or(&current);
-        let response = ui.add(egui::DragValue::new(&mut f).speed(0.5).suffix(" mm"));
-        if response.changed() {
-            drafts.numbers.insert(f_path.clone(), f);
-        }
-        let radii = n.and_then(|n| singlet_radii(&shape, f, n, t));
         if ui
-            .add_enabled(radii.is_some(), egui::Button::new("Set"))
-            .on_hover_text(match n {
-                Some(n) => format!(
-                    "Radii for a {shape} of this focal length, n = {n} and {t} mm thick (one glass)"
-                ),
-                None => "The glass's index is not known at this wavelength".to_owned(),
-            })
+            .button("Flip")
+            .on_hover_text("Turn the lens round: its surfaces in the other order")
             .clicked()
         {
-            if let Some([r1, r2]) = radii {
+            if let Some(l) = now {
+                write(&mut operations, l.flipped(), glass.clone());
+            } else {
+                let back = |v: &Value| {
+                    let r = radius_of(&v["radius"]);
+                    json!({ "radius": radius_value(if r.is_finite() { -r } else { r }) })
+                };
                 operations.push(set(
                     "surfaces",
-                    json!([{ "radius": radius_value(r1) }, { "radius": radius_value(r2) }]),
+                    json!(surfaces.iter().rev().map(back).collect::<Vec<_>>()),
                 ));
-                operations.push(set("thickness", json!([t])));
+                operations.push(set(
+                    "thickness",
+                    json!(thickness.iter().rev().cloned().collect::<Vec<_>>()),
+                ));
                 operations.push(set(
                     "material",
-                    json!([material.first().cloned().unwrap_or(json!(1.5))]),
+                    json!(material.iter().rev().cloned().collect::<Vec<_>>()),
                 ));
-                drafts.numbers.remove(&f_path);
             }
         }
     });
+    match chosen {
+        Some(None) => {
+            drafts.texts.insert(custom_path.clone(), "yes".into());
+        }
+        Some(Some(new)) => {
+            drafts.texts.remove(&custom_path);
+            // Keep the focal length (100 mm for a lens without one), the thickness, glass.
+            let base_lens = now.unwrap_or(Singlet {
+                r1: 50.0,
+                r2: -50.0,
+                t: 4.0,
+                n: n.unwrap_or(1.5),
+            });
+            let f = Some(base_lens.focal_length())
+                .filter(|f| f.is_finite())
+                .unwrap_or(100.0);
+            let f = if new == Shape::Meniscus { f.abs() } else { f };
+            match base_lens.design(
+                new,
+                f,
+                flipped && !matches!(new, Shape::Biconvex | Shape::Biconcave),
+            ) {
+                Some(l) => write(&mut operations, l, glass.clone()),
+                None => {
+                    drafts.texts.insert(
+                        format!("{base}/note"),
+                        format!("No {} of f {f:.1} mm with this thickness", new.name()),
+                    );
+                }
+            }
+        }
+        None => {}
+    }
 
-    // The prescription, surface by surface.
+    if custom {
+        operations.extend(prescription_editor(
+            ui, drafts, base, &set, &surfaces, &thickness, &material,
+        ));
+    } else if let (Some(l), Some(n)) = (now, n) {
+        let f = l.focal_length();
+        egui::Grid::new(format!("lens-{base}")).num_columns(3).spacing([10.0, 4.0]).show(ui, |ui| {
+            // Focal length: the radius follows.
+            if let Some(v) = row(ui, drafts, &format!("{base}/f"), "f", "focal length, from the rear principal plane", "mm", (f * 1e4).round() / 1e4) {
+                match l.design(shape, v, flipped) {
+                    Some(new) => write(&mut operations, new, glass.clone()),
+                    None => {
+                        drafts.texts.insert(format!("{base}/note"), format!("No {} of f {v:.1} mm with this thickness", shape.name()));
+                    }
+                }
+            }
+            // The radius: one for plano and equi lenses (the focal length follows), two
+            // for a meniscus.
+            let curved = if l.r1.is_finite() { l.r1 } else { l.r2 };
+            match shape {
+                Shape::Meniscus => {
+                    for (k, r) in [(1, l.r1), (2, l.r2)] {
+                        if let Some(v) = row(ui, drafts, &format!("{base}/R{k}"), &format!("R{k}"), "radius of curvature, positive when its centre lies further along the light", "mm", r) {
+                            if v != 0.0 {
+                                let mut new = l;
+                                if k == 1 { new.r1 = v } else { new.r2 = v }
+                                write(&mut operations, new, glass.clone());
+                            }
+                        }
+                    }
+                }
+                _ => {
+                    if let Some(v) = row(ui, drafts, &format!("{base}/R"), "R", "radius of its curved surface (both, for an equi-convex or -concave lens)", "mm", curved.abs()) {
+                        if v > 0.0 {
+                            let sign1 = if l.r1.is_finite() { l.r1.signum() } else { 0.0 };
+                            let sign2 = if l.r2.is_finite() { l.r2.signum() } else { 0.0 };
+                            let new = Singlet {
+                                r1: if sign1 == 0.0 { f64::INFINITY } else { sign1 * v },
+                                r2: if sign2 == 0.0 { f64::INFINITY } else { sign2 * v },
+                                ..l
+                            };
+                            write(&mut operations, new, glass.clone());
+                        }
+                    }
+                }
+            }
+            // Thickness: the focal length is kept.
+            if let Some(v) = row(ui, drafts, &format!("{base}/t"), "tc", "centre thickness", "mm", l.t) {
+                if v > 0.0 {
+                    let thicker = Singlet { t: v, ..l };
+                    let new = thicker.design(shape, f, flipped).unwrap_or(thicker);
+                    write(&mut operations, new, glass.clone());
+                }
+            }
+            // The glass: a name (its index from the scene) or an index; with an index
+            // typed, the focal length is kept.
+            ui.label(RichText::new("glass").color(DARK.text_dim))
+                .on_hover_text("a material name (bundled or imported, e.g. N-BK7) or a refractive index");
+            let named = match &glass {
+                Value::String(s) => s.clone(),
+                other => other.to_string(),
+            };
+            if let Some(typed) = text(ui, drafts, &format!("{base}/glass"), &named, 90.0) {
+                let typed = typed.trim().to_owned();
+                match typed.parse::<f64>() {
+                    Ok(index) if index > 1.0 => {
+                        let other = Singlet { n: index, ..l };
+                        let new = other.design(shape, f, flipped).unwrap_or(other);
+                        write(&mut operations, new, json!(index));
+                    }
+                    Ok(_) => {}
+                    Err(_) => operations.push(set("material", json!([typed]))),
+                }
+            }
+            ui.label(
+                RichText::new(match wavelength {
+                    Some(w) => format!("n {n:.4} at {w} µm"),
+                    None => format!("n {n:.4}"),
+                })
+                .color(DARK.text_dim)
+                .size(11.0),
+            );
+            ui.end_row();
+            ui.label(RichText::new("fb").color(DARK.text_dim)).on_hover_text("back focal length, from the last surface");
+            ui.label(shown("back_focal_length_mm").map_or("—".into(), |v| format!("{v:.3}")));
+            ui.label(RichText::new("mm").color(DARK.text_dim).size(11.0));
+            ui.end_row();
+        });
+        ui.label(
+            RichText::new(match (shape, flipped) {
+                (Shape::PlanoConvex | Shape::PlanoConcave, false) => "curved side first",
+                (Shape::PlanoConvex | Shape::PlanoConcave, true) => "flat side first",
+                (Shape::Meniscus, false) => "convex side first",
+                (Shape::Meniscus, true) => "concave side first",
+                _ => "",
+            })
+            .color(DARK.text_dim)
+            .size(11.0),
+        );
+    } else {
+        ui.label(
+            RichText::new("The glass's index is not known at this wavelength: type an index, or import the material")
+                .color(DARK.warning)
+                .size(11.0),
+        );
+    }
+    if let Some(note) = drafts.texts.get(&format!("{base}/note")).cloned() {
+        ui.label(RichText::new(note).color(DARK.warning).size(11.0));
+    }
+
+    // Its size: no larger than its curvature allows.
+    let largest = now.map(|l| l.max_diameter());
+    egui::Grid::new(format!("lens-size-{base}"))
+        .num_columns(3)
+        .spacing([10.0, 4.0])
+        .show(ui, |ui| {
+            if let Some(v) = row(
+                ui,
+                drafts,
+                &format!("{base}/diameter"),
+                "diameter",
+                "mechanical diameter",
+                "mm",
+                diameter,
+            ) {
+                let v = match largest {
+                    Some(m) if v > m && m > 0.0 => {
+                        drafts.texts.insert(
+                            format!("{base}/note"),
+                            format!(
+                                "Ø kept to {m} mm: beyond it the edge would be thinner than {} mm",
+                                crate::lens::MIN_EDGE
+                            ),
+                        );
+                        m
+                    }
+                    _ => v,
+                };
+                if v > 0.0 {
+                    operations.push(set("diameter", tidy(v)));
+                    if clear > v {
+                        operations.push(set("clear_aperture", tidy(v)));
+                    }
+                }
+            }
+            if let Some(v) = row(
+                ui,
+                drafts,
+                &format!("{base}/clear"),
+                "clear aperture",
+                "the part light may pass, at most the diameter",
+                "mm",
+                clear,
+            ) {
+                if v > 0.0 {
+                    operations.push(set("clear_aperture", tidy(v.min(diameter))));
+                }
+            }
+        });
+    if let Some(m) = largest.filter(|m| *m < 1000.0) {
+        ui.label(
+            RichText::new(format!(
+                "at most Ø{m} mm for an edge of {} mm",
+                crate::lens::MIN_EDGE
+            ))
+            .color(DARK.text_dim)
+            .size(11.0),
+        );
+    }
+    if !operations.is_empty() {
+        drafts.texts.remove(&format!("{base}/note"));
+    }
+    ui.add_space(4.0);
+    operations
+}
+
+/// A lens's prescription radius by radius (R1…Rn, flat or not), with each glass's centre
+/// thickness and material between them; a cemented glass added or taken away.
+fn prescription_editor(
+    ui: &mut Ui,
+    drafts: &mut Drafts,
+    base: &str,
+    set: &dyn Fn(&str, Value) -> Value,
+    surfaces: &[Value],
+    thickness: &[Value],
+    material: &[Value],
+) -> Vec<Value> {
+    let mut operations = Vec::new();
     egui::Grid::new(format!("prescription-{base}"))
         .num_columns(4)
         .spacing([8.0, 4.0])
@@ -767,13 +1044,13 @@ fn lens_editor(
                     ui.label("flat");
                 } else if let Some(v) = number(ui, drafts, &format!("{base}/R/{k}"), r) {
                     if v != 0.0 {
-                        let mut new = surfaces.clone();
+                        let mut new = surfaces.to_vec();
                         new[k]["radius"] = radius_value(v);
                         operations.push(set("surfaces", json!(new)));
                     }
                 }
                 if ui.checkbox(&mut flat, "flat").changed() {
-                    let mut new = surfaces.clone();
+                    let mut new = surfaces.to_vec();
                     new[k]["radius"] = if flat { json!("inf") } else { json!(100.0) };
                     operations.push(set("surfaces", json!(new)));
                 }
@@ -781,11 +1058,11 @@ fn lens_editor(
                 ui.end_row();
                 if k + 1 < surfaces.len() {
                     ui.label(RichText::new(format!("tc{}", k + 1)).color(DARK.text_dim))
-                        .on_hover_text("centre thickness of this glass");
+                        .on_hover_text("centre thickness of this glass (or air gap)");
                     let tk = thickness.get(k).and_then(Value::as_f64).unwrap_or(0.0);
                     if let Some(v) = number(ui, drafts, &format!("{base}/t/{k}"), tk) {
                         if v > 0.0 {
-                            let mut new = thickness.clone();
+                            let mut new = thickness.to_vec();
                             new.resize(surfaces.len() - 1, json!(1.0));
                             new[k] = tidy(v);
                             operations.push(set("thickness", json!(new)));
@@ -801,13 +1078,13 @@ fn lens_editor(
                             .trim()
                             .parse::<f64>()
                             .map_or_else(|_| json!(typed.trim()), |n| json!(n));
-                        let mut new = material.clone();
+                        let mut new = material.to_vec();
                         new.resize(surfaces.len() - 1, json!(1.5));
                         new[k] = value;
                         operations.push(set("material", json!(new)));
                     }
                     ui.label(RichText::new("mm, glass").color(DARK.text_dim).size(11.0))
-                        .on_hover_text("the glass: a material name (bundled or imported) or an index");
+                        .on_hover_text("a material name or an index; 1 (or standard-air) for an air gap");
                     ui.end_row();
                 }
             }
@@ -818,11 +1095,11 @@ fn lens_editor(
             .on_hover_text("One more surface after the last: a singlet becomes a cemented doublet (three radii)")
             .clicked()
         {
-            let mut s = surfaces.clone();
+            let mut s = surfaces.to_vec();
             s.push(json!({ "radius": "inf" }));
-            let mut t = thickness.clone();
+            let mut t = thickness.to_vec();
             t.push(json!(2.0));
-            let mut m = material.clone();
+            let mut m = material.to_vec();
             m.push(material.last().cloned().unwrap_or(json!(1.5)));
             operations.push(set("surfaces", json!(s)));
             operations.push(set("thickness", json!(t)));
@@ -840,7 +1117,79 @@ fn lens_editor(
             operations.push(set("material", json!(material[..keep.saturating_sub(1).min(material.len())])));
         }
     });
-    ui.add_space(4.0);
+    operations
+}
+
+/// Whether two values are the same, numbers by value (`75.0` and `75` are).
+fn same(a: &Value, b: &Value) -> bool {
+    match (a, b) {
+        (Value::Number(x), Value::Number(y)) => x.as_f64() == y.as_f64(),
+        (Value::Array(x), Value::Array(y)) => {
+            x.len() == y.len() && x.iter().zip(y).all(|(p, q)| same(p, q))
+        }
+        _ => a == b,
+    }
+}
+
+/// One item of a group as the Move tool moves it: its table, entry, index in the table
+/// and where the scene placed it (mm).
+pub type Member = (String, Value, usize, V3);
+
+/// The edits a Move of a whole group makes on a table layout, its steps in order: every
+/// member slides alike; turns turn each member's place about `anchor` (where the item
+/// the handles sit on was) and its axis. Holes and heights follow from the places (holes
+/// may come out as fractions).
+pub fn moved_group(
+    members: &[Member],
+    pitch: f64,
+    anchor: V3,
+    steps: &[(crate::moving::Handle, f64)],
+) -> Vec<Value> {
+    use crate::moving::{Handle, placed, turned};
+    let mut operations = Vec::new();
+    for (table, entry, index, origin) in members {
+        if !entry["hole"].is_array() {
+            continue;
+        }
+        // Where its frame goes: the anchor's path, with the member's offset turned along.
+        let start = [
+            origin[0] - anchor[0],
+            origin[1] - anchor[1],
+            origin[2] - anchor[2],
+        ];
+        let mut offset = start;
+        let mut at = anchor;
+        let mut axis = [
+            entry["axis"][0].as_f64().unwrap_or(1.0),
+            entry["axis"][1].as_f64().unwrap_or(0.0),
+            entry["axis"][2].as_f64().unwrap_or(0.0),
+        ];
+        for &(handle, amount) in steps {
+            match handle {
+                Handle::Slide(_) => at = placed(at, at, &[(handle, amount)]),
+                Handle::Turn(k) => {
+                    offset = turned(offset, [0.0; 3], k, amount);
+                    axis = turned(axis, [0.0; 3], k, amount);
+                }
+            }
+        }
+        let now = [at[0] + offset[0], at[1] + offset[1], at[2] + offset[2]];
+        let hole = json!([tidy(now[0] / pitch), tidy(now[1] / pitch)]);
+        let mut set = |key: &str, value: Value| {
+            if !same(&entry[key], &value) {
+                let mut op = selector(table, entry, *index);
+                op["op"] = json!("set");
+                op["key"] = json!(key);
+                op["value"] = value;
+                operations.push(op);
+            }
+        };
+        set("hole", hole);
+        set("height", tidy(now[2]));
+        if entry["axis"].is_array() {
+            set("axis", json!(axis.map(tidy)));
+        }
+    }
     operations
 }
 
@@ -1197,61 +1546,81 @@ mod tests {
     fn moves_write_holes_heights_and_axes() {
         use crate::moving::Handle;
         let entry = json!({ "id": "M1", "hole": [4, 0], "height": 75.0, "axis": [-1, 1, 0] });
-        let op = moved("element", &entry, 0, 25.0, Handle::Slide(0), 50.0).expect("an op");
-        assert_eq!(op["key"], "hole");
-        assert_eq!(op["value"], json!([6, 0]));
-        let op = moved("element", &entry, 0, 25.0, Handle::Slide(1), -12.5).expect("an op");
-        assert_eq!(op["value"], json!([4, -0.5]));
-        let op = moved("element", &entry, 0, 25.0, Handle::Slide(2), 25.0).expect("an op");
-        assert_eq!(
-            (op["key"].as_str(), op["value"].as_f64()),
-            (Some("height"), Some(100.0))
-        );
+        let one = [("element".to_owned(), entry, 0, [100.0, 0.0, 75.0])];
+        let ops = |steps: &[(Handle, f64)]| moved_group(&one, 25.0, one[0].3, steps);
+        let value = |ops: &[Value], key: &str| {
+            ops.iter()
+                .find(|o| o["key"] == key)
+                .map(|o| o["value"].clone())
+        };
+        let o = ops(&[(Handle::Slide(0), 50.0)]);
+        assert_eq!(value(&o, "hole"), Some(json!([6, 0])));
+        assert_eq!(o.len(), 1, "only the hole changed");
+        assert_eq!(o[0]["id"], "M1");
+        let o = ops(&[(Handle::Slide(1), -12.5)]);
+        assert_eq!(value(&o, "hole"), Some(json!([4, -0.5])), "fractions kept");
+        let o = ops(&[(Handle::Slide(2), 25.0)]);
+        assert_eq!(value(&o, "height"), Some(json!(100)));
         // A mirror facing (−1, 1, 0) turned 90° about z faces (−1, −1, 0).
-        let op = moved("element", &entry, 0, 25.0, Handle::Turn(2), 90.0).expect("an op");
-        assert_eq!(op["key"], "axis");
-        assert_eq!(op["value"], json!([-1, -1, 0]));
-        assert_eq!(op["id"], "M1");
-        assert!(
-            moved(
-                "element",
-                &json!({ "id": "L", "at": 5 }),
-                0,
-                25.0,
-                Handle::Slide(0),
-                1.0
-            )
-            .is_none()
-        );
+        let o = ops(&[(Handle::Turn(2), 90.0)]);
+        assert_eq!(value(&o, "axis"), Some(json!([-1, -1, 0])));
+        // A whole move, its steps in order: two holes along x, back one, a quarter turn.
+        let o = ops(&[
+            (Handle::Slide(0), 50.0),
+            (Handle::Slide(0), -25.0),
+            (Handle::Turn(2), 90.0),
+        ]);
+        let keys: Vec<&str> = o.iter().filter_map(|x| x["key"].as_str()).collect();
+        assert_eq!(keys, ["hole", "axis"], "the height did not change");
+        assert_eq!(value(&o, "hole"), Some(json!([5, 0])));
+        // An entry not on the table is left alone.
+        let planar = [(
+            "element".to_owned(),
+            json!({ "id": "L", "at": 5 }),
+            0,
+            [5.0, 0.0, 0.0],
+        )];
+        assert!(moved_group(&planar, 25.0, planar[0].3, &[(Handle::Slide(0), 1.0)]).is_empty());
     }
 
     #[test]
-    fn singlets_have_the_focal_length_asked_for() {
-        // Each design traced back through the thick-lens equation gives the f asked for.
-        let f_of = |[r1, r2]: [f64; 2], n: f64, t: f64| {
-            let c1 = 1.0 / r1;
-            let c2 = 1.0 / r2;
-            1.0 / ((n - 1.0) * (c1 - c2 + (n - 1.0) * t * c1 * c2 / n))
+    fn a_group_moves_and_turns_together() {
+        use crate::moving::Handle;
+        let m = |id: &str, hole: [i64; 2]| -> Member {
+            (
+                "element".into(),
+                json!({ "id": id, "hole": hole, "height": 75.0, "axis": [1, 0, 0] }),
+                0,
+                [hole[0] as f64 * 25.0, hole[1] as f64 * 25.0, 75.0],
+            )
         };
-        for (shape, f) in [
-            ("biconvex", 100.0),
-            ("plano-convex", 50.0),
-            ("plano-concave", -75.0),
-            ("biconcave", -40.0),
-        ] {
-            let r = singlet_radii(shape, f, 1.5168, 4.0).expect(shape);
-            assert!((f_of(r, 1.5168, 4.0) - f).abs() < 1e-9, "{shape}: {r:?}");
-        }
-        // The relay's lens: R ±100 mm, n 1.5, 4 mm: f 100.67 mm.
-        let r = singlet_radii("biconvex", 100.671_140_939_597_3, 1.5, 4.0).expect("lens");
-        assert!(
-            (r[0] - 100.0).abs() < 1e-6 && (r[1] + 100.0).abs() < 1e-6,
-            "{r:?}"
+        let members = [m("L1", [2, 0]), m("L2", [4, 0])];
+        // Two holes along y and 25 mm up: both alike.
+        let ops = moved_group(
+            &members,
+            25.0,
+            members[0].3,
+            &[(Handle::Slide(1), 50.0), (Handle::Slide(2), 25.0)],
         );
-        // Concave shapes take −|f|; too thick a lens for its focal length has none.
-        assert!(singlet_radii("biconcave", 40.0, 1.5, 4.0).expect("lens")[0] < 0.0);
-        assert!(singlet_radii("biconvex", 2.0, 1.5, 4.0).is_none());
-        assert!(singlet_radii("meniscus", 100.0, 1.5, 4.0).is_none());
+        let value = |id: &str, key: &str| {
+            ops.iter()
+                .find(|o| o["id"] == id && o["key"] == key)
+                .map(|o| o["value"].clone())
+        };
+        assert_eq!(value("L1", "hole"), Some(json!([2, 2])));
+        assert_eq!(value("L2", "hole"), Some(json!([4, 2])));
+        assert_eq!(value("L2", "height"), Some(json!(100)));
+        assert_eq!(value("L1", "axis"), None, "not turned");
+        // A quarter turn about z at L1: L2 two holes along +y from it, both facing +y.
+        let ops = moved_group(&members, 25.0, members[0].3, &[(Handle::Turn(2), 90.0)]);
+        let value = |id: &str, key: &str| {
+            ops.iter()
+                .find(|o| o["id"] == id && o["key"] == key)
+                .map(|o| o["value"].clone())
+        };
+        assert_eq!(value("L1", "hole"), None, "the anchor stays");
+        assert_eq!(value("L2", "hole"), Some(json!([2, 2])));
+        assert_eq!(value("L2", "axis"), Some(json!([0, 1, 0])));
     }
 
     #[test]

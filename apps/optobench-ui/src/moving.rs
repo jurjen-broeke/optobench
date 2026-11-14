@@ -57,10 +57,14 @@ pub struct MoveTool {
     pub drag: Option<Drag>,
     /// The drags done, in order, not yet written.
     pub pending: Vec<(Handle, f64)>,
-    /// The scene item being moved (its post follows the move), if an item.
-    pub item: Option<usize>,
-    /// The source being moved (its post follows the move), if a source.
-    pub source: Option<usize>,
+    /// The scene items being moved (their posts follow the move).
+    pub items: Vec<usize>,
+    /// The sources being moved (their posts follow the move), by index.
+    pub sources: Vec<usize>,
+    /// Where each item being moved stands (mm): their posts.
+    pub posts: Vec<V3>,
+    /// What is moved, when it is a group: its name and size.
+    pub label: Option<String>,
 }
 
 impl Default for MoveTool {
@@ -72,8 +76,10 @@ impl Default for MoveTool {
             pitch: None,
             drag: None,
             pending: Vec::new(),
-            item: None,
-            source: None,
+            items: Vec::new(),
+            sources: Vec::new(),
+            posts: Vec::new(),
+            label: None,
         }
     }
 }
@@ -293,9 +299,16 @@ impl MoveTool {
         };
         let now = placed(*origin, *origin, &steps);
         if posts {
-            let foot = [now[0], now[1], 0.0];
-            painter.line_segment([screen(now), screen(foot)], Stroke::new(1.0, accent));
-            painter.circle_stroke(screen(foot), 4.0, Stroke::new(1.4, accent));
+            for p in self
+                .posts
+                .iter()
+                .chain(self.posts.is_empty().then_some(origin))
+            {
+                let top = placed(*p, *origin, &steps);
+                let foot = [top[0], top[1], 0.0];
+                painter.line_segment([screen(top), screen(foot)], Stroke::new(1.0, accent));
+                painter.circle_stroke(screen(foot), 4.0, Stroke::new(1.4, accent));
+            }
         }
         if !steps.is_empty() {
             for line in outline {

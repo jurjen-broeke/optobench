@@ -129,6 +129,72 @@ Asked for by the user (2026-11-14), after building a path by hand:
       cemented doublet, LA1951 and the mounted LA1951-ML (its tube and ring left out) as
       the same plano-convex lens
 
+## M16g A beam expander, and groups
+
+Asked for by the user (2026-11-14): a 5× expander from an f −12 mm plano-concave and an
+f 60 mm plano-convex lens, placed by the optimiser for a 1 mm coherent beam leaving
+collimated and 5 mm across; and groups of items that move together.
+
+- [x] Merit term `diameter` with a `target` (mm): 2√2 times the direct beam's
+      power-weighted RMS radius, the edge diameter of an evenly filled disc and the 1/e²
+      diameter of a Gaussian beam (exact for `gaussian` sources, whose rays carry
+      Gaussian weights: 1.003 mm for a 1 mm waist after 100 mm; a `collimated` source's
+      rings reach its edge with equal weights and read √((N + 1)/N) high, 8 % at the
+      default 6 rings); among the merit terms in the window
+- [x] The expander checked (commands `tests/expander.rs`): with thick plano lenses
+      (Hecht §6.2: R₁ = (n − 1) f, back focal length f − t/n), afocal when L1's rear
+      focal point meets L2's front one, L2's first vertex 68.681 mm along; a thin pencil
+      collimates there to 1 µm. A 1 mm laser beam (Gaussian, collimation and a 5 mm
+      target) converges in 13 iterations to 4.99 mm across and 0.11 mrad, 0.35 mm
+      shorter than paraxial: the R −6.2 mm surface's spherical aberration, growing as the
+      beam's radius squared (0.013, 0.08, 0.33 mm for 0.2, 0.5, 1 mm). Note: a Gaussian
+      beam's rays carry its divergence, so the spread they minimise is the beam's far-
+      field divergence (second moments obey the same ABCD law); for beams that diverge
+      fast (waists of 0.2 mm or less here) the best spacing leaves the geometric one, as
+      Gaussian-beam optics says it should
+- [x] Groups (`optobench_io::groups`): an item (element, source, detector, proxy) joins
+      one with `group = "<id>"`; an optional `[[group]]` gives it DOFs in the scene's
+      frame (slides; tilts about a `pivot` every member turns about), each the first
+      DOF-carrying member's, the others following it one to one; proxies move with Move
+      only. Checked: a group's slide moves both lenses 3 mm and nothing else; a quarter
+      turn about (75, 0, 75) takes L1 from x 50 to (75, −25) and L2 from x 100 to
+      (75, 25); a tilt without a pivot, a group DOF with a frame, a group of proxies
+      only, and unknown keys refused
+- [x] In the window: Properties sets an item's group (none, one of the design's, or a
+      new one typed); the browser lists the groups with their members (a click selects
+      the first); Move on any member moves the whole group (every post follows, the
+      panel names the group), its turns about the selected item; a window test drags a
+      group of two lenses two holes along and leaves the detector where it was
+
+## M16h Merit in the Layout workspace; the lens editor in the order a lens is chosen
+
+From the user's test (2026-11-14): merit terms could be set only in Simulate; setting a
+lens's parameters reset others instead of adjusting them; plano lenses needed one flat
+side and one radius; a lens could not be turned round. The order asked for: name, type,
+focal length with radius, thickness and index, then the diameter.
+
+- [x] The browser always lists the Merit, with Add a term (centring, pointing,
+      collimation, diameter with a 5 mm target, focus, power, headroom; each explained);
+      a term opens in Properties; a note when there are terms but no degrees of freedom
+- [x] Properties: the name first; for a lens its type (biconvex, plano-convex,
+      plano-concave, biconcave, meniscus, or custom radius by radius for doublets and
+      more), then f, R (one for plano and equi lenses, R1 and R2 for a meniscus), tc and
+      the glass (a name, its index from the scene, or an index), fb, then the diameter
+      and clear aperture
+- [x] Linked (`lens.rs`, the thick-lens relations of Hecht §6.2): f redesigns R (keeping
+      the type, thickness and glass); R gives f; a new tc or index keeps f and redesigns
+      R; a new type keeps |f| (its sign from the type); a meniscus keeps its convex
+      radius and bends the other. The diameter is kept where the edge stays 0.5 mm thick
+      and both surfaces reach the rim: a redesign that leaves no edge makes it smaller,
+      with a note; the clear aperture stays within it
+- [x] Flip turns a lens round (its surfaces in the other order; a library lens by
+      `reversed`); the type says which side comes first
+- [x] Checks: every type gives back its focal length either way round; a plano lens has
+      R = (n − 1) f; the relay's lens (R ±100, n 1.5, 4 mm) has f 100.6711 mm and its
+      radii back from it; the largest diameter keeps a 0.5 mm edge; in the window, a
+      collimation term added from the browser, a biconvex singlet made plano-concave
+      (R −25.3 mm, flat) and flipped
+
 ## Next, from the same test
 
 Noted while reading the code before the user's test; not yet confirmed by it:
