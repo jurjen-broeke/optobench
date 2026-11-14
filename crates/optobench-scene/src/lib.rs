@@ -60,6 +60,20 @@ pub struct LensSurface {
 }
 
 impl LensSurface {
+    /// The surface for a sequential system.
+    fn boxed(&self) -> Box<dyn Surface> {
+        if self.radius.is_infinite() {
+            Box::new(Plane)
+        } else if self.conic == 0.0 {
+            Box::new(Sphere::from_radius(self.radius))
+        } else {
+            Box::new(optobench_surfaces::Conic {
+                curvature: 1.0 / self.radius,
+                conic: self.conic,
+            })
+        }
+    }
+
     fn shape(&self) -> Arc<dyn Surface> {
         if self.radius.is_infinite() {
             Arc::new(Plane)
@@ -72,6 +86,45 @@ impl LensSurface {
             })
         }
     }
+}
+
+/// A lens's first-order properties at `wavelength` (µm) in `surrounding`: focal length,
+/// back focal length and principal planes from its surfaces, centre thicknesses and
+/// glasses (`optobench_trace::paraxial`), light travelling along its +z. `None` for an
+/// element that is not a lens, a lens of zero power, or a glass not defined there.
+pub fn lens_cardinal_points(
+    kind: &ElementKind,
+    surrounding: &Medium,
+    wavelength: f64,
+) -> Option<optobench_trace::CardinalPoints> {
+    let ElementKind::Lens {
+        surfaces,
+        thicknesses,
+        materials,
+        ..
+    } = kind
+    else {
+        return None;
+    };
+    let system = optobench_trace::SequentialSystem {
+        object_medium: surrounding.clone(),
+        surfaces: surfaces
+            .iter()
+            .enumerate()
+            .map(|(i, s)| optobench_trace::SequentialSurface {
+                surface: s.boxed(),
+                aperture: optobench_surfaces::Aperture::Unlimited,
+                interaction: optobench_trace::Interaction::Refract,
+                coating: Coating::Ideal,
+                thickness: thicknesses.get(i).copied().unwrap_or(0.0),
+                medium_after: materials
+                    .get(i)
+                    .cloned()
+                    .unwrap_or_else(|| surrounding.clone()),
+            })
+            .collect(),
+    };
+    system.cardinal_points(wavelength).ok().flatten()
 }
 
 /// What an element is.

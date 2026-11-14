@@ -690,10 +690,20 @@ pub enum New {
     Detector,
 }
 
+/// The height new items of a table layout get: the first source's, else 50 mm.
+pub fn new_height(design: &Value) -> f64 {
+    design["source"][0]["height"].as_f64().unwrap_or(50.0)
+}
+
 /// An `add` operation for a new entry of a layout, placed after what is there: on a
 /// planar layout 50 mm further along the path, on a table layout two holes further
 /// along x at the source's height.
 pub fn add(design: &Value, new: New) -> Option<Value> {
+    add_at(design, new, None)
+}
+
+/// As [`add`], on a table layout on the hole given (column, row) when there is one.
+pub fn add_at(design: &Value, new: New, hole: Option<(i64, i64)>) -> Option<Value> {
     let planar = match design["layout"].as_str()? {
         "planar" => true,
         "table" => false,
@@ -717,10 +727,10 @@ pub fn add(design: &Value, new: New) -> Option<Value> {
         vec![("at".into(), json!(at))]
     } else {
         let furthest = all().filter_map(|e| e["hole"][0].as_i64()).max();
-        let height = design["source"][0]["height"].as_f64().unwrap_or(50.0);
+        let hole = hole.unwrap_or((furthest.map_or(0, |x| x + 2), 0));
         vec![
-            ("hole".into(), json!([furthest.map_or(0, |x| x + 2), 0])),
-            ("height".into(), json!(height)),
+            ("hole".into(), json!([hole.0, hole.1])),
+            ("height".into(), json!(new_height(design))),
         ]
     };
     let axis = |a: [i64; 3]| -> Vec<(String, Value)> {
@@ -861,6 +871,14 @@ mod tests {
         assert_eq!(entry[0], json!(["id", "D1"]));
         // A sidecar is not a layout.
         assert!(add(&json!({ "kind": "sidecar" }), New::Lens).is_none());
+        // Placed on a hole clicked.
+        let op = add_at(&table, New::Mirror, Some((3, -2))).expect("an op");
+        assert!(
+            op["entry"]
+                .as_array()
+                .expect("pairs")
+                .contains(&json!(["hole", [3, -2]]))
+        );
     }
 
     #[test]

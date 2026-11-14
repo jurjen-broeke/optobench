@@ -61,6 +61,8 @@ pub struct App {
     graph_choice: Vec<&'static str>,
     /// New's chooser is open: planar, or a table with this pitch (mm).
     new_dialog: Option<f64>,
+    /// A new item waiting for a hole to be clicked.
+    placing: Option<New>,
 }
 
 /// Where in the design file an item of the view is written: its table and the entry.
@@ -207,6 +209,7 @@ impl App {
             graph_dialog: false,
             graph_choice: vec!["spot"],
             new_dialog: None,
+            placing: None,
         };
         if let Some(path) = path {
             app.open(path);
@@ -298,10 +301,10 @@ impl App {
                         self.apply(vec![op]);
                     }
                 }
-                Action::AddLens => self.add(New::Lens),
-                Action::AddMirror => self.add(New::Mirror),
-                Action::AddSource => self.add(New::Source),
-                Action::AddDetector => self.add(New::Detector),
+                Action::AddLens => self.start_adding(New::Lens),
+                Action::AddMirror => self.start_adding(New::Mirror),
+                Action::AddSource => self.start_adding(New::Source),
+                Action::AddDetector => self.start_adding(New::Detector),
                 Action::TagLens | Action::TagMirror => {
                     if let Ok(op) = self.tagging(action == Action::TagMirror) {
                         self.apply(vec![op]);
@@ -363,6 +366,17 @@ impl App {
             .as_ref()
             .and_then(|d| d.scene.as_ref())
             .map(|s| &s.design)
+    }
+
+    /// Adds a new item: on a table layout it waits for a hole to be clicked (or Enter),
+    /// on a planar layout it goes after the last item at once.
+    fn start_adding(&mut self, new: New) {
+        if self.design().is_some_and(|d| d["layout"] == "table") {
+            self.end_move();
+            self.placing = Some(new);
+        } else {
+            self.add(new);
+        }
     }
 
     fn add(&mut self, new: New) {
@@ -1920,6 +1934,19 @@ impl eframe::App for App {
                     .and_then(|d| d.scene.as_ref())
                     .and_then(|s| crate::board::Board::of(&s.design, s));
                 self.view.show_board = self.show_board;
+                self.view.placing = self.placing.and_then(|new| {
+                    let design = self.design()?;
+                    Some(viewport::Placing {
+                        what: match new {
+                            New::Lens => "Lens",
+                            New::Mirror => "Mirror",
+                            New::Source => "Source",
+                            New::Detector => "Detector",
+                        },
+                        height: editors::new_height(design),
+                        pitch: design["table"]["pitch"].as_f64()?,
+                    })
+                });
                 self.view.moving = self.move_on.then(|| {
                     let mut tool = self.move_tool.clone();
                     let scene = self.doc.as_ref().and_then(|d| d.scene.as_ref());
@@ -1984,6 +2011,15 @@ impl eframe::App for App {
                     self.end_move();
                 }
                 Request::MoveCancel => self.end_move(),
+                Request::Place(hole) => {
+                    if let Some(new) = self.placing.take() {
+                        if let Some(op) = self.design().and_then(|d| editors::add_at(d, new, hole))
+                        {
+                            self.apply(vec![op]);
+                        }
+                    }
+                }
+                Request::PlaceCancel => self.placing = None,
             }
         }
         self.confirm_dialog(&ctx);
@@ -2214,7 +2250,46 @@ mod exit {
             text.contains("layout = \"table\"") && text.contains("pitch = 25.4"),
             "{text}"
         );
+        // Source waits for a hole; Enter puts it where Add always did (hole (0, 0)).
         click(&mut h, "Source");
+        h.key_press(egui::Key::Enter);
+        h.step();
+        settle(&mut h);
+        let text = std::fs::read_to_string(&path).expect("written");
+        assert!(text.contains("hole = [0, 0]"), "{text}");
+        // Mirror: a click on the board over hole (3, 2) puts it there.
+        click(&mut h, "Mirror");
+        let at = {
+            let app = h.state();
+            let rect = app.view.rect.expect("drawn");
+            let (x, y) = app.camera.to_screen(
+                [3.0 * 25.4, 2.0 * 25.4, 0.0],
+                (rect.center().x as f64, rect.center().y as f64),
+                rect.height() as f64,
+            );
+            egui::pos2(x as f32, y as f32)
+        };
+        h.event(egui::Event::PointerMoved(at));
+        h.step();
+        for pressed in [true, false] {
+            h.event(egui::Event::PointerButton {
+                pos: at,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: egui::Modifiers::NONE,
+            });
+            h.step();
+        }
+        settle(&mut h);
+        let text = std::fs::read_to_string(&path).expect("written");
+        assert!(text.contains("hole = [3, 2]"), "{text}");
+        assert!(h.state().placing.is_none());
+        // Escape places nothing.
+        click(&mut h, "Lens");
+        h.key_press(egui::Key::Escape);
+        h.step();
+        settle(&mut h);
+        assert_eq!(std::fs::read_to_string(&path).expect("read"), text);
         assert!(errors(&h).is_empty(), "{:?}", errors(&h));
         // The board is listed, and its Properties give the pitch.
         click(&mut h, "Breadboard");

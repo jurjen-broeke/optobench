@@ -31,6 +31,20 @@ pub struct Extras {
     pub show_board: bool,
     /// The Move tool, when it is on.
     pub moving: Option<crate::moving::MoveTool>,
+    /// A new item waiting for a hole to be clicked.
+    pub placing: Option<Placing>,
+}
+
+/// A new item waiting to be placed on a table layout: a click on the board puts it on
+/// the hole nearest the pointer, Enter after the last item, Escape cancels.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Placing {
+    /// What is placed, for the marker (`Lens`, `Mirror`, …).
+    pub what: &'static str,
+    /// The height it gets (mm).
+    pub height: f64,
+    /// The hole pitch (mm).
+    pub pitch: f64,
 }
 
 impl Extras {
@@ -87,6 +101,10 @@ pub enum Request {
     MoveApply(Vec<(crate::moving::Handle, f64)>),
     /// Drop the pending move and end the tool.
     MoveCancel,
+    /// Place the new item on this hole (column, row), or after the last item.
+    Place(Option<(i64, i64)>),
+    /// Do not place the new item.
+    PlaceCancel,
 }
 
 /// The colour of an item by its role.
@@ -234,6 +252,46 @@ pub fn show(
     }
     let handle_dragged = extras.moving.as_ref().is_some_and(|t| t.drag.is_some());
 
+    // Placing a new item: the hole under the pointer, on the table's surface.
+    let placing = extras.placing.clone();
+    let hole_at = |p: Pos2| -> Option<(i64, i64)> {
+        let placing = placing.as_ref()?;
+        let (o, d) = camera.ray((p.x as f64, p.y as f64), centre, high);
+        if d[2].abs() < 1e-9 {
+            return None;
+        }
+        // In perspective the line starts at the eye; in orthographic it is a whole line
+        // (its origin lies on a plane through the target, maybe below the table).
+        let t = -o[2] / d[2];
+        (t > 0.0 || !camera.perspective).then(|| {
+            (
+                ((o[0] + d[0] * t) / placing.pitch).round() as i64,
+                ((o[1] + d[1] * t) / placing.pitch).round() as i64,
+            )
+        })
+    };
+    let placed_hole = response.hover_pos().and_then(hole_at);
+    if placing.is_some() {
+        if response.clicked() {
+            if let Some(hole) = response.interact_pointer_pos().and_then(hole_at) {
+                requests.push(Request::Place(Some(hole)));
+            }
+        }
+        if !ui.ctx().egui_wants_keyboard_input() {
+            let (enter, escape) = ui.input(|i| {
+                (
+                    i.key_pressed(egui::Key::Enter),
+                    i.key_pressed(egui::Key::Escape),
+                )
+            });
+            if enter {
+                requests.push(Request::Place(None));
+            } else if escape {
+                requests.push(Request::PlaceCancel);
+            }
+        }
+    }
+
     // Pointer: orbit, pan, zoom.
     if response.dragged_by(egui::PointerButton::Primary) && !handle_dragged {
         let d = response.drag_delta();
@@ -299,7 +357,7 @@ pub fn show(
             pick_mesh(scene, hidden, plane, o, d)
         };
         extras.hovered = response.hover_pos().and_then(pick).map(|p| p.0);
-        if response.clicked() {
+        if response.clicked() && placing.is_none() {
             let picked = response.interact_pointer_pos().and_then(pick);
             extras.picked_normal = picked.map(|p| p.1.normal);
             requests.push(Request::Select(picked.map(|p| p.0)));
@@ -391,7 +449,7 @@ pub fn show(
             }
         }
         // Click without triangles: select the nearest outline within 6 px.
-        if response.clicked() && !meshes {
+        if response.clicked() && !meshes && placing.is_none() {
             let picked = response.interact_pointer_pos().and_then(|p| {
                 let scene = scene?;
                 let mut best: Option<(usize, f32)> = None;
@@ -486,6 +544,34 @@ pub fn show(
                 colour,
             );
         }
+    }
+
+    if let (Some(p), Some(hole)) = (&placing, placed_hole) {
+        let (x, y) = (hole.0 as f64 * p.pitch, hole.1 as f64 * p.pitch);
+        let colour = accent.ink;
+        let (foot, top) = (screen([x, y, 0.0]), screen([x, y, p.height]));
+        painter.line_segment([foot, top], Stroke::new(1.4, colour));
+        painter.circle_stroke(foot, 6.0, Stroke::new(2.0, colour));
+        painter.circle_filled(top, 5.0, colour);
+        painter.text(
+            top + Vec2::new(10.0, -8.0),
+            egui::Align2::LEFT_BOTTOM,
+            format!("{} at hole ({}, {})", p.what, hole.0, hole.1),
+            egui::FontId::proportional(13.0),
+            Color32::WHITE,
+        );
+    }
+    if let Some(p) = &placing {
+        painter.text(
+            rect.center_top() + Vec2::new(0.0, 16.0),
+            egui::Align2::CENTER_TOP,
+            format!(
+                "Click a hole to place the {} · Enter: after the last item · Esc: cancel",
+                p.what.to_lowercase()
+            ),
+            egui::FontId::proportional(13.0),
+            DARK.text,
+        );
     }
 
     if let Some(tool) = &extras.moving {
