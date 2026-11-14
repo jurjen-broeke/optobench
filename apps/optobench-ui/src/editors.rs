@@ -528,6 +528,34 @@ pub fn moved(
     Some(op)
 }
 
+/// The edits a whole Move makes, its steps in order: the entry's hole, height and axis
+/// where they changed. `None` when the entry is not placed on the table.
+pub fn moved_all(
+    table: &str,
+    entry: &Value,
+    index: usize,
+    pitch: f64,
+    steps: &[(crate::moving::Handle, f64)],
+) -> Option<Vec<Value>> {
+    let mut now = entry.clone();
+    for &(handle, amount) in steps {
+        let op = moved(table, &now, index, pitch, handle, amount)?;
+        let key = op["key"].as_str()?.to_owned();
+        now[key] = op["value"].clone();
+    }
+    let mut operations = Vec::new();
+    for key in ["hole", "height", "axis"] {
+        if now[key] != entry[key] {
+            let mut op = selector(table, entry, index);
+            op["op"] = json!("set");
+            op["key"] = json!(key);
+            op["value"] = now[key].clone();
+            operations.push(op);
+        }
+    }
+    Some(operations)
+}
+
 /// The tables whose entries carry degrees of freedom.
 const WITH_DOFS: &[&str] = &["element", "source", "detector"];
 

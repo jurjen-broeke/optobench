@@ -82,9 +82,11 @@ pub enum Request {
     Select(Option<usize>),
     /// Fit the view to the scene.
     Fit,
-    /// Move the selected item by a dragged handle: mm along, or degrees about, a scene
-    /// axis.
-    Move(crate::moving::Handle, f64),
+    /// Write the Move tool's pending move (slides in mm along, turns in degrees about,
+    /// scene axes, in order) and end the tool.
+    MoveApply(Vec<(crate::moving::Handle, f64)>),
+    /// Drop the pending move and end the tool.
+    MoveCancel,
 }
 
 /// The colour of an item by its role.
@@ -204,8 +206,22 @@ pub fn show(
         if response.drag_stopped() {
             if let Some(drag) = tool.drag.take() {
                 if drag.amount != 0.0 {
-                    requests.push(Request::Move(drag.handle, drag.amount));
+                    tool.pending.push((drag.handle, drag.amount));
                 }
+            }
+        }
+        // Enter writes the move and ends the tool, Escape drops it (not while typing).
+        if tool.drag.is_none() && !ui.ctx().egui_wants_keyboard_input() {
+            let (enter, escape) = ui.input(|i| {
+                (
+                    i.key_pressed(egui::Key::Enter),
+                    i.key_pressed(egui::Key::Escape),
+                )
+            });
+            if enter {
+                requests.push(Request::MoveApply(tool.pending.clone()));
+            } else if escape {
+                requests.push(Request::MoveCancel);
             }
         }
         if tool.drag.is_none() {
@@ -406,9 +422,24 @@ pub fn show(
             .iter()
             .enumerate()
             .filter(|(i, _)| !hidden.get(*i).copied().unwrap_or(false))
-            .filter_map(|(i, item)| Some((Some(i), item.origin?)))
-            .chain(scene.sources.iter().map(|s| (None, s.origin)));
-        for (index, top) in posts {
+            .filter_map(|(i, item)| Some(((Some(i), None), item.origin?)))
+            .chain(
+                scene
+                    .sources
+                    .iter()
+                    .enumerate()
+                    .map(|(j, s)| ((None, Some(j)), s.origin)),
+            );
+        // The item being moved has its post drawn where the move takes it.
+        let moved = extras
+            .moving
+            .as_ref()
+            .filter(|t| t.target.is_some())
+            .map(|t| (t.item, t.source));
+        for ((index, source), top) in posts {
+            if moved.is_some_and(|m| m == (index, source) && (index, source) != (None, None)) {
+                continue;
+            }
             let foot = [top[0], top[1], 0.0];
             let colour = if index.is_some() && index == selected {
                 accent.ink
@@ -458,7 +489,8 @@ pub fn show(
     }
 
     if let Some(tool) = &extras.moving {
-        tool.paint(&painter, camera, rect, accent.ink);
+        let posts = extras.board.is_some() && extras.show_board;
+        tool.paint(&painter, camera, rect, accent.ink, posts);
     }
 
     // Sources on top: where the light starts and where it goes.
@@ -477,7 +509,9 @@ pub fn show(
 
     gizmo(&painter, rect, camera);
     if let Some(tool) = extras.moving.as_mut() {
-        move_panel(ui, rect, tool);
+        if let Some(request) = move_panel(ui, rect, tool) {
+            requests.push(request);
+        }
     }
     if toolbar(ui, rect, camera, extras, scene, doc.is_some()) {
         requests.push(Request::Fit);
@@ -531,10 +565,14 @@ fn gizmo(painter: &egui::Painter, rect: Rect, camera: &Camera) {
 
 /// The Move tool's settings, floating at the view's top left: the steps moves and turns
 /// snap to.
-fn move_panel(ui: &mut egui::Ui, rect: Rect, tool: &mut crate::moving::MoveTool) {
+fn move_panel(
+    ui: &mut egui::Ui,
+    rect: Rect,
+    tool: &mut crate::moving::MoveTool,
+) -> Option<Request> {
     let panel = Rect::from_min_size(
         rect.left_top() + Vec2::new(12.0, 12.0),
-        Vec2::new(250.0, 92.0),
+        Vec2::new(270.0, 150.0),
     );
     ui.painter().rect_filled(
         panel,
@@ -591,7 +629,32 @@ fn move_panel(ui: &mut egui::Ui, rect: Rect, tool: &mut crate::moving::MoveTool)
                 .color(DARK.text_dim)
                 .size(11.0),
         );
+        return None;
     }
+    let mut request = None;
+    let text = if tool.pending.is_empty() {
+        egui::RichText::new("Drag an arrow to slide, a ring to turn").color(DARK.text_dim)
+    } else {
+        egui::RichText::new(crate::moving::describe(&tool.pending))
+    };
+    child.add(egui::Label::new(text.size(11.0)).truncate());
+    child.horizontal(|ui| {
+        if ui
+            .add_enabled(!tool.pending.is_empty(), egui::Button::new("Apply"))
+            .on_hover_text("Write the move into the design and end Move (Enter)")
+            .clicked()
+        {
+            request = Some(Request::MoveApply(tool.pending.clone()));
+        }
+        if ui
+            .button("Cancel")
+            .on_hover_text("Drop the move and end Move (Escape)")
+            .clicked()
+        {
+            request = Some(Request::MoveCancel);
+        }
+    });
+    request
 }
 
 /// The floating view toolbar; true when Fit was pressed.

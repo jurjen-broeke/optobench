@@ -313,8 +313,10 @@ impl App {
                     }
                 }
                 Action::Move => {
+                    // Pressed again, Move ends as Escape does: the pending move is dropped.
                     self.move_on = !self.move_on;
                     self.move_tool.drag = None;
+                    self.move_tool.pending.clear();
                     // The pitch is the step to start with on a table.
                     if let Some(pitch) = self.design().and_then(|d| d["table"]["pitch"].as_f64()) {
                         if self.move_tool.pitch != Some(pitch) {
@@ -598,6 +600,13 @@ impl App {
             self.new_dialog = None;
             self.new_layout(table);
         }
+    }
+
+    /// Ends the Move tool, dropping what is pending (written already when applied).
+    fn end_move(&mut self) {
+        self.move_on = false;
+        self.move_tool.drag = None;
+        self.move_tool.pending.clear();
     }
 
     /// Starts a new layout: planar, or a table with this pitch (mm).
@@ -1918,6 +1927,17 @@ impl eframe::App for App {
                     tool.target = scene
                         .and_then(|s| movable(s, self.selected, self.focus.as_ref()))
                         .map(|(_, _, _, origin, outline)| (origin, outline));
+                    // Which post follows the move: the selected item's, or the source's.
+                    tool.item = self.selected;
+                    tool.source = match (self.selected, &self.focus, scene) {
+                        (None, Some((t, id)), Some(s)) if t == "source" => {
+                            s.sources.iter().position(|x| &x.id == id)
+                        }
+                        _ => None,
+                    };
+                    if tool.target.is_none() {
+                        tool.pending.clear();
+                    }
                     tool
                 });
                 viewport::show(
@@ -1939,15 +1959,17 @@ impl eframe::App for App {
         for request in requests {
             match request {
                 Request::Select(index) => {
-                    // While moving, a click beside the handles keeps what is selected.
-                    if !(self.move_on && index.is_none()) {
+                    // While moving, a click beside the handles keeps what is selected, and
+                    // nothing else is selected while a move is pending.
+                    let pending = self.move_on && !self.move_tool.pending.is_empty();
+                    if !(self.move_on && index.is_none()) && !pending {
                         self.selected = index;
                         self.focus = None;
                     }
                 }
                 Request::Fit => self.fit_pending = true,
-                Request::Move(handle, amount) => {
-                    let found = self
+                Request::MoveApply(steps) => {
+                    let operations = self
                         .doc
                         .as_ref()
                         .and_then(|d| d.scene.as_ref())
@@ -1955,12 +1977,13 @@ impl eframe::App for App {
                             let pitch = s.design["table"]["pitch"].as_f64()?;
                             let (table, entry, index, _, _) =
                                 movable(s, self.selected, self.focus.as_ref())?;
-                            editors::moved(&table, &entry, index, pitch, handle, amount)
-                        });
-                    if let Some(op) = found {
-                        self.apply(vec![op]);
-                    }
+                            editors::moved_all(&table, &entry, index, pitch, &steps)
+                        })
+                        .unwrap_or_default();
+                    self.apply(operations);
+                    self.end_move();
                 }
+                Request::MoveCancel => self.end_move(),
             }
         }
         self.confirm_dialog(&ctx);
@@ -2272,20 +2295,40 @@ mod exit {
             )
         };
         let (centre, pitch) = at(&h);
+        let before = std::fs::read_to_string(&path).expect("read");
         let start = centre + egui::vec2(40.0, 0.0);
         drag(&mut h, start, start + egui::vec2(2.1 * pitch, 0.0));
-        let text = std::fs::read_to_string(&path).expect("written");
-        assert!(text.contains("hole = [10, 0]"), "{text}");
-        let (centre, _) = at(&h);
-        // On the ring at 45°, clear of the arrows, a quarter turn counter-clockwise.
+        // The drag is pending: the handles moved with it, the file did not.
+        assert_eq!(std::fs::read_to_string(&path).expect("read"), before);
+        assert_eq!(h.state().move_tool.pending.len(), 1);
+        // On the ring at 45° about where the screen now is, clear of the arrows, a quarter
+        // turn counter-clockwise.
+        let moved = centre + egui::vec2(2.0 * pitch, 0.0);
         let r = 56.0 * std::f32::consts::FRAC_1_SQRT_2;
         drag(
             &mut h,
-            centre + egui::vec2(r, -r),
-            centre + egui::vec2(-r, -r),
+            moved + egui::vec2(r, -r),
+            moved + egui::vec2(-r, -r),
         );
+        assert_eq!(std::fs::read_to_string(&path).expect("read"), before);
+        // Enter writes both and ends Move.
+        h.key_press(egui::Key::Enter);
+        h.step();
+        settle(&mut h);
         let text = std::fs::read_to_string(&path).expect("written");
+        assert!(text.contains("hole = [10, 0]"), "{text}");
         assert!(text.contains("axis = [0, 1, 0]"), "{text}");
+        assert!(!h.state().move_on, "Enter ends Move");
+        // Escape drops a move: the file stays as it was, and Move ends.
+        click(&mut h, "Move");
+        let (centre, pitch) = at(&h);
+        let start = centre + egui::vec2(40.0, 0.0);
+        drag(&mut h, start, start + egui::vec2(3.1 * pitch, 0.0));
+        h.key_press(egui::Key::Escape);
+        h.step();
+        settle(&mut h);
+        assert_eq!(std::fs::read_to_string(&path).expect("read"), text);
+        assert!(!h.state().move_on && h.state().move_tool.pending.is_empty());
         assert!(errors(&h).is_empty(), "{:?}", errors(&h));
     }
 

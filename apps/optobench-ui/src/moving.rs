@@ -1,8 +1,9 @@
 //! The Move tool (M16), as SolidCraft's: with an item selected, three arrows along the
 //! scene's x, y and z and three rings about them, drawn at the item. Dragging an arrow
 //! slides the item along it, dragging a ring turns it about it; the amount snaps to a
-//! step (a hole pitch, or what is typed) and is previewed as the item's outline where it
-//! will go. Letting go asks the app to write the move (`Request::Move`).
+//! step (a hole pitch, or what is typed). Drags add up into a pending move, shown as the
+//! item's outline, handles and post where it will go; Enter writes it and ends the tool
+//! (`Request::MoveApply`), Escape drops it (`Request::MoveCancel`).
 
 use egui::{Color32, Pos2, Rect, Stroke, Vec2};
 
@@ -54,6 +55,12 @@ pub struct MoveTool {
     pub pitch: Option<f64>,
     /// The drag under way.
     pub drag: Option<Drag>,
+    /// The drags done, in order, not yet written.
+    pub pending: Vec<(Handle, f64)>,
+    /// The scene item being moved (its post follows the move), if an item.
+    pub item: Option<usize>,
+    /// The source being moved (its post follows the move), if a source.
+    pub source: Option<usize>,
 }
 
 impl Default for MoveTool {
@@ -64,8 +71,39 @@ impl Default for MoveTool {
             target: None,
             pitch: None,
             drag: None,
+            pending: Vec::new(),
+            item: None,
+            source: None,
         }
     }
+}
+
+/// `p` moved by `steps` in order, the item starting at `origin`: slides move both, turns
+/// turn `p` about where the item is then.
+pub fn placed(p: V3, origin: V3, steps: &[(Handle, f64)]) -> V3 {
+    let (mut p, mut o) = (p, origin);
+    for &(handle, amount) in steps {
+        match handle {
+            Handle::Slide(k) => {
+                p = add(p, unit(k), amount);
+                o = add(o, unit(k), amount);
+            }
+            Handle::Turn(k) => p = turned(p, o, k, amount),
+        }
+    }
+    p
+}
+
+/// What steps come to, in words: `X +50.00 mm, about Z +90.0°`.
+pub fn describe(steps: &[(Handle, f64)]) -> String {
+    steps
+        .iter()
+        .map(|&(handle, amount)| match handle {
+            Handle::Slide(k) => format!("{} {amount:+.2} mm", ["X", "Y", "Z"][k]),
+            Handle::Turn(k) => format!("about {} {amount:+.1}°", ["X", "Y", "Z"][k]),
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 fn unit(k: usize) -> V3 {
@@ -154,10 +192,25 @@ fn segment_distance(p: Pos2, a: Pos2, b: Pos2) -> f32 {
 }
 
 impl MoveTool {
+    /// Where the item is after the pending move (the handles' place while not dragging).
+    pub fn moved_origin(&self) -> Option<V3> {
+        let (origin, _) = self.target.as_ref()?;
+        Some(placed(*origin, *origin, &self.pending))
+    }
+
+    /// The pending steps and the drag under way.
+    pub fn steps(&self) -> Vec<(Handle, f64)> {
+        let mut steps = self.pending.clone();
+        if let Some(d) = self.drag.filter(|d| d.amount != 0.0) {
+            steps.push((d.handle, d.amount));
+        }
+        steps
+    }
+
     /// The handle under `pointer`, arrows first.
     pub fn handle_at(&self, pointer: Pos2, camera: &Camera, rect: Rect) -> Option<Handle> {
-        let (origin, _) = self.target.as_ref()?;
-        let h = handles(*origin, camera, rect);
+        let origin = self.moved_origin()?;
+        let h = handles(origin, camera, rect);
         let arrow = (0..3)
             .map(|k| (k, segment_distance(pointer, h.centre, h.arrows[k].0)))
             .filter(|(_, d)| *d <= REACH)
@@ -187,10 +240,10 @@ impl MoveTool {
         camera: &Camera,
         rect: Rect,
     ) -> f64 {
-        let Some((origin, _)) = self.target.as_ref() else {
+        let Some(origin) = self.moved_origin() else {
             return 0.0;
         };
-        let h = handles(*origin, camera, rect);
+        let h = handles(origin, camera, rect);
         match handle {
             Handle::Slide(k) => {
                 let (tip, length) = h.arrows[k];
@@ -218,12 +271,45 @@ impl MoveTool {
         }
     }
 
-    /// Draws the handles, and during a drag the item where it will go and the amount.
-    pub fn paint(&self, painter: &egui::Painter, camera: &Camera, rect: Rect, accent: Color32) {
+    /// Draws the item where the move takes it (its outline, and with `posts` its post and
+    /// the ring where it stands), the handles there, and during a drag the amount.
+    pub fn paint(
+        &self,
+        painter: &egui::Painter,
+        camera: &Camera,
+        rect: Rect,
+        accent: Color32,
+        posts: bool,
+    ) {
         let Some((origin, outline)) = self.target.as_ref() else {
             return;
         };
-        let h = handles(*origin, camera, rect);
+        let steps = self.steps();
+        let centre = (rect.center().x as f64, rect.center().y as f64);
+        let high = rect.height() as f64;
+        let screen = |p: V3| {
+            let (x, y) = camera.to_screen(p, centre, high);
+            Pos2::new(x as f32, y as f32)
+        };
+        let now = placed(*origin, *origin, &steps);
+        if posts {
+            let foot = [now[0], now[1], 0.0];
+            painter.line_segment([screen(now), screen(foot)], Stroke::new(1.0, accent));
+            painter.circle_stroke(screen(foot), 4.0, Stroke::new(1.4, accent));
+        }
+        if !steps.is_empty() {
+            for line in outline {
+                if line.len() > 1 {
+                    painter.add(egui::Shape::line(
+                        line.iter()
+                            .map(|&p| screen(placed(p, *origin, &steps)))
+                            .collect(),
+                        Stroke::new(1.6, accent),
+                    ));
+                }
+            }
+        }
+        let h = handles(now, camera, rect);
         let taken = self.drag.map(|d| d.handle);
         for k in 0..3 {
             let colour = AXIS_COLOURS[k];
@@ -250,36 +336,15 @@ impl MoveTool {
             );
         }
         painter.circle_filled(h.centre, 3.5, accent);
-        let Some(drag) = self.drag else { return };
-        let centre = (rect.center().x as f64, rect.center().y as f64);
-        let high = rect.height() as f64;
-        let screen = |p: V3| {
-            let (x, y) = camera.to_screen(p, centre, high);
-            Pos2::new(x as f32, y as f32)
-        };
-        let place = |p: V3| match drag.handle {
-            Handle::Slide(k) => add(p, unit(k), drag.amount),
-            Handle::Turn(k) => turned(p, *origin, k, drag.amount),
-        };
-        for line in outline {
-            if line.len() > 1 {
-                painter.add(egui::Shape::line(
-                    line.iter().map(|&p| screen(place(p))).collect(),
-                    Stroke::new(1.6, accent),
-                ));
-            }
+        if let Some(drag) = self.drag.filter(|d| d.amount != 0.0) {
+            painter.text(
+                h.centre + Vec2::new(14.0, -14.0),
+                egui::Align2::LEFT_BOTTOM,
+                describe(&[(drag.handle, drag.amount)]),
+                egui::FontId::proportional(13.0),
+                Color32::WHITE,
+            );
         }
-        let label = match drag.handle {
-            Handle::Slide(k) => format!("{} {:+.2} mm", ["X", "Y", "Z"][k], drag.amount),
-            Handle::Turn(k) => format!("about {} {:+.1}°", ["X", "Y", "Z"][k], drag.amount),
-        };
-        painter.text(
-            screen(place(*origin)) + Vec2::new(14.0, -14.0),
-            egui::Align2::LEFT_BOTTOM,
-            label,
-            egui::FontId::proportional(13.0),
-            Color32::WHITE,
-        );
     }
 }
 
@@ -301,6 +366,19 @@ mod tests {
         assert_eq!(snapped(38.0, 25.0), 50.0);
         assert_eq!(snapped(-7.6, 15.0), -15.0);
         assert_eq!(snapped(3.3, 0.0), 3.3);
+    }
+
+    #[test]
+    fn steps_add_up_slides_moving_the_centre_of_later_turns() {
+        // Slid 10 along x, then a quarter turn about z: a point 1 along x from the item
+        // ends 1 along y from where the item went.
+        let steps = [(Handle::Slide(0), 10.0), (Handle::Turn(2), 90.0)];
+        let p = placed([1.0, 0.0, 0.0], [0.0; 3], &steps);
+        assert!(
+            (p[0] - 10.0).abs() < 1e-12 && (p[1] - 1.0).abs() < 1e-12,
+            "{p:?}"
+        );
+        assert_eq!(describe(&steps), "X +10.00 mm, about Z +90.0°");
     }
 
     #[test]

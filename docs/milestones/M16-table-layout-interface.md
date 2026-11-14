@@ -55,12 +55,18 @@ Decided with the user (2026-11-14):
       selected, arrows along the scene's x, y and z and rings about them at the item; a
       drag that starts on a handle moves the item instead of turning the view
 - [x] Snapped to a step: one pitch to start (Pitch sets it again), or typed; turns to
-      15° or what is typed; 0 for none. The item's outline is previewed where it will go,
-      with the amount; letting go writes its hole, height or axis (one edit, undone by
-      Undo)
-- [x] Checks: moves write holes (fractions kept), heights and turned axes; in the
-      window, the periscope's screen dragged by its x arrow lands two holes along, and a
-      quarter turn of its z ring turns its axis from +x to +y
+      15° or what is typed; 0 for none
+- [x] Drags add up into a pending move (asked for by the user, 2026-11-14): the item's
+      outline, its handles, and its post with the ring where it stands all go where the
+      move takes it, while dragging and after; the panel lists the steps. Enter (or
+      Apply) writes the whole move as one edit (Undo puts it back) and ends Move;
+      Escape (or Cancel, or Move pressed again) drops it and ends Move. While a move is
+      pending the selection stays on the item
+- [x] Checks: moves write holes (fractions kept), heights and turned axes, a whole move
+      only the keys it changed; in the window, the periscope's screen dragged two holes
+      along x and a quarter turn about z (its ring taken where the slide left it) leaves
+      the file as it was until Enter writes hole (10, 0) and axis +y and ends Move; a
+      move dropped by Escape leaves the file unchanged
 
 ## M16e Alignment irises
 
