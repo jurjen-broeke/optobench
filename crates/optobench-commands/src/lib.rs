@@ -224,6 +224,14 @@ const STANDARD: &[Command] = &[
         handler: parts::import_part,
     },
     Command {
+        id: "part-from-step",
+        label: "Lens from STEP",
+        icon: "import-part",
+        effect: Effect::Write,
+        summary: "read a lens's radii, thicknesses and glasses' places from its STEP file, and with its glasses make it a library part",
+        handler: parts::part_from_step,
+    },
+    Command {
         id: "curves",
         label: "Curves",
         icon: "curve",

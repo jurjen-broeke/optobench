@@ -19,6 +19,8 @@
 use optobench_math::Vec3;
 use optobench_surfaces::brep::{BrepFace, FaceSurface};
 
+pub mod prescription;
+
 /// Differences between a part and its STEP geometry above this are reported (mm).
 pub const CHECK_TOLERANCE: f64 = 0.05;
 

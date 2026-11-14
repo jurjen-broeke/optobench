@@ -93,6 +93,101 @@ pub(crate) fn import_part(parameters: &Parameters) -> Result<Value, CommandError
     Ok(json!({ "stored": true, "part": part_json(&part, Some(&file)) }))
 }
 
+/// `part-from-step`: a lens's prescription read from its STEP file (bare glass, or mounted:
+/// its housing and rings are left out): the radii in order, the centre thicknesses, which
+/// gaps are glass and which air, the diameter, and what it is (singlet, cemented or
+/// air-spaced doublet, triplet). With `vendor`, `part`, `source` (its spec sheet) and
+/// `glass` (a name or index per glass body, in order) it also gives the part file, and
+/// with `import` stores it in the parts library (`replace` to overwrite). Parameter
+/// `path`; optionally those and `data_directory`.
+pub(crate) fn part_from_step(parameters: &Parameters) -> Result<Value, CommandError> {
+    use optobench_library::prescription::Gap;
+    check_keys(
+        parameters,
+        &[
+            "path",
+            "vendor",
+            "part",
+            "source",
+            "glass",
+            "import",
+            "replace",
+            "data_directory",
+        ],
+    )?;
+    let path = Path::new(required(parameters, "path")?);
+    let failed =
+        |e: String| CommandError::new(ErrorCode::Failed, format!("{}: {e}", path.display()));
+    let text = std::fs::read_to_string(path).map_err(|e| failed(e.to_string()))?;
+    let (prescription, products) = library::prescription_from_step(&text).map_err(failed)?;
+    let micron = |x: f64| (x * 1e3).round() / 1e3;
+    let mut result = json!({
+        "kind": prescription.kind(),
+        "radii_mm": prescription.radii.iter().map(|r| length(micron(*r))).collect::<Vec<_>>(),
+        "thickness_mm": prescription.thickness.iter().map(|t| micron(*t)).collect::<Vec<_>>(),
+        "gaps": prescription.gaps.iter().map(|g| match g {
+            Gap::Glass(n) => json!(format!("glass {}", n + 1)),
+            Gap::Air => json!("air"),
+        }).collect::<Vec<_>>(),
+        "glasses": prescription.glasses(),
+        "diameter_mm": prescription.diameter.map(micron),
+        "left_out": prescription.left_out,
+        "products": products,
+    });
+    let given = ["vendor", "part", "source", "glass"]
+        .iter()
+        .filter(|k| parameters.contains_key(**k))
+        .count();
+    if given == 0 {
+        return Ok(result);
+    }
+    if given < 4 {
+        return Err(CommandError::new(
+            ErrorCode::InvalidParameters,
+            "a part file needs `vendor`, `part`, `source` (its spec sheet) and `glass` (one per glass body)",
+        ));
+    }
+    let glasses: Vec<toml::Value> = parameters["glass"]
+        .as_array()
+        .ok_or_else(|| {
+            CommandError::new(
+                ErrorCode::InvalidParameters,
+                "`glass` is a list of names or indices",
+            )
+        })?
+        .iter()
+        .map(|g| match g {
+            Value::String(s) => Ok(toml::Value::String(s.clone())),
+            Value::Number(n) => n.as_f64().map(toml::Value::Float).ok_or(()),
+            _ => Err(()),
+        })
+        .collect::<Result<_, ()>>()
+        .map_err(|()| {
+            CommandError::new(
+                ErrorCode::InvalidParameters,
+                "`glass` is a list of names or indices",
+            )
+        })?;
+    let part_file = library::lens_part_text(
+        required(parameters, "vendor")?,
+        required(parameters, "part")?,
+        required(parameters, "source")?,
+        &prescription,
+        &glasses,
+        &products,
+    )
+    .map_err(|e| CommandError::new(ErrorCode::InvalidParameters, e))?;
+    result["part_file"] = json!(part_file);
+    if flag(parameters, "import")? {
+        let root = data_directory(parameters)?;
+        let (part, file) = library::import_text(&root, &part_file, flag(parameters, "replace")?)
+            .map_err(|e| CommandError::new(ErrorCode::Failed, e))?;
+        result["stored"] = json!(true);
+        result["part"] = part_json(&part, Some(&file));
+    }
+    Ok(result)
+}
+
 /// `parts`: every part in the parts library.
 pub(crate) fn parts(parameters: &Parameters) -> Result<Value, CommandError> {
     check_keys(parameters, &["data_directory"])?;
