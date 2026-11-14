@@ -705,6 +705,12 @@ fn library_part(item: &Item, library: &Library) -> Result<Option<Part>, FileErro
             item.context
         ))
     })?;
+    if !part.part_type.is_optic() {
+        return Err(error(format!(
+            "{}: part `{key}` is a mount; give it with `mount = \"{key}\"`",
+            item.context
+        )));
+    }
     let reversed = match item.table.get("reversed") {
         None => false,
         Some(Value::Boolean(b)) => *b,
@@ -725,8 +731,8 @@ fn library_part(item: &Item, library: &Library) -> Result<Option<Part>, FileErro
 /// A round part's diameter; layouts place round parts only.
 fn round_diameter(part: &Part, context: &str) -> Result<f64, FileError> {
     match part.outline {
-        Outline::Round { diameter } => Ok(diameter),
-        Outline::Rectangular { .. } => Err(error(format!(
+        Some(Outline::Round { diameter }) => Ok(diameter),
+        _ => Err(error(format!(
             "{context}: part `{}` is rectangular; layouts place round parts only",
             part.key()
         ))),
@@ -1440,10 +1446,10 @@ pub fn parse_with(text: &str, lookups: &Lookups) -> Result<Scene, FileError> {
     let mut root: Table = text
         .parse()
         .map_err(|e: toml::de::Error| error(format!("not valid TOML: {e}")))?;
-    crate::mounts::expand(&mut root)?;
     // Embedded values (`[resolved]`) first, then the user's own data.
     let embedded = crate::resolved::read(&root)?;
     let merged_library = embedded.library(lookups.library)?;
+    crate::mounts::expand(&mut root, &merged_library)?;
     let merged_materials = |name: &str| {
         embedded
             .material(name)

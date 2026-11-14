@@ -4,7 +4,7 @@ use std::path::Path;
 
 use optobench_io::library;
 use optobench_io::sidecar::PartMatch;
-use optobench_library::{Glass, Outline, Part};
+use optobench_library::{AdjusterKind, Glass, Outline, Part, PartType, Reach};
 use serde_json::{Value, json};
 
 use crate::materials::{data_directory, flag, required};
@@ -21,8 +21,54 @@ pub(crate) fn length(value: f64) -> Value {
     }
 }
 
+/// A mount's adjusters as JSON (mm for slides, degrees for tilts).
+fn adjusters_json(part: &Part) -> Value {
+    json!(
+        part.adjusters
+            .iter()
+            .map(|a| {
+                let mut value = json!({
+                    "name": a.name,
+                    "kind": a.kind.as_str(),
+                    "axis": [a.axis.x, a.axis.y, a.axis.z],
+                    "unit": match a.kind {
+                        AdjusterKind::Slide => "mm",
+                        AdjusterKind::Tilt => "deg",
+                    },
+                });
+                if let Some(p) = a.pivot {
+                    value["pivot"] = json!([p.x, p.y, p.z]);
+                }
+                match a.reach {
+                    Reach::Unlimited => value["range"] = Value::Null,
+                    Reach::Range { low, high } => value["range"] = json!([low, high]),
+                    Reach::Travel(travel) => {
+                        value["range"] = json!([-0.5 * travel, 0.5 * travel]);
+                        value["travel"] = json!(travel);
+                    }
+                }
+                value
+            })
+            .collect::<Vec<_>>()
+    )
+}
+
 /// A part as JSON.
 pub(crate) fn part_json(part: &Part, file: Option<&Path>) -> Value {
+    if part.part_type == PartType::Mount {
+        let mut value = json!({
+            "key": part.key(),
+            "part": part.number,
+            "vendor": part.vendor,
+            "type": part.part_type.as_str(),
+            "source": part.source,
+            "adjusters": adjusters_json(part),
+        });
+        if let Some(file) = file {
+            value["file"] = json!(file.to_string_lossy());
+        }
+        return value;
+    }
     let mut value = json!({
         "key": part.key(),
         "part": part.number,
@@ -38,8 +84,11 @@ pub(crate) fn part_json(part: &Part, file: Option<&Path>) -> Value {
         "products": part.products,
     });
     match part.outline {
-        Outline::Round { diameter } => value["diameter_mm"] = json!(diameter),
-        Outline::Rectangular { width, height } => value["size_mm"] = json!([width, height]),
+        Some(Outline::Round { diameter }) => value["diameter_mm"] = json!(diameter),
+        Some(Outline::Rectangular { width, height }) => {
+            value["size_mm"] = json!([width, height]);
+        }
+        None => {}
     }
     if let Some(file) = file {
         value["file"] = json!(file.to_string_lossy());

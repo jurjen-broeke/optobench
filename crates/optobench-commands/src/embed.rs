@@ -92,16 +92,15 @@ fn trace_uses(
         library,
     };
     let at = |e: optobench_io::scene_file::FileError| failed(format!("{}: {e}", path.display()));
-    match sidecar::kind_of(body).as_deref() {
+    let root: Table = body.parse().map_err(|e| failed(format!("{e}")))?;
+    let mut keys: Vec<String> = match sidecar::kind_of(body).as_deref() {
         Some("sidecar") => {
             let read = sidecar::read(body, path, &lookups).map_err(at)?;
-            Ok(read.parts.into_iter().map(|m| m.part).collect())
+            read.parts.into_iter().map(|m| m.part).collect()
         }
         _ => {
             scene_file::parse_with(body, &lookups).map_err(at)?;
-            let root: Table = body.parse().map_err(|e| failed(format!("{e}")))?;
-            let keys = root
-                .get("element")
+            root.get("element")
                 .and_then(Toml::as_array)
                 .map(|elements| {
                     elements
@@ -110,10 +109,12 @@ fn trace_uses(
                         .filter_map(|key| library.get(key).map(Part::key))
                         .collect()
                 })
-                .unwrap_or_default();
-            Ok(keys)
+                .unwrap_or_default()
         }
-    }
+    };
+    // Mounts named from the library (not the file's own `[[mount]]`).
+    keys.extend(optobench_io::mounts::library_mounts(&root, library));
+    Ok(keys)
 }
 
 /// A part file's keys as an embedded entry, with its checksum.

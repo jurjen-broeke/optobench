@@ -157,13 +157,28 @@ part's specification), not bundled.
       warned (none at 0.5 mm); an item's entry changes the mount's value and adds its
       own; the solve with headroom keeps every adjuster in range and centres the beam;
       unknown mounts, mounts without a source, `range` with `travel` refused
+- [x] Mounts in the parts library (from the open questions, 2026-11-14): a part file of
+      `type = "mount"` (`optobench_library::PartType::Mount`, typed `Adjuster`s: slide
+      or tilt, axis, optional pivot, `range`, `travel` or unlimited; a `source`; nothing
+      optical) imported and listed as other parts; a design names it by key,
+      `mount = "thorlabs/CXY1A"`, its adjusters given in the element's own frame
+      (`frame = "local"`; in a sidecar that is the body's STEP frame, so the item may give
+      an `axis` key by key). A design's own `[[mount]]` of the same id comes first (ids,
+      like keys, ignore case); then embedded parts, then the user's library. `embed`
+      keeps the library mounts a design uses, so it traces without them. A lens named as
+      a mount, or a mount as a lens, is refused
+- [x] Checks (commands `tests/library_mounts.rs`, library `tests.rs`): the four mounts as
+      part files give the same DOFs, trace and warnings as the same `[[mount]]` tables in
+      the design; an item's entry still changes them; the design's own mount wins; an
+      embedded design traces the same without the library; unknown names, optics as
+      mounts and mounts as optics, and malformed mount files (optical keys, no
+      adjusters, a name twice, `range` with `travel`, an unknown kind, a slide's pivot, an
+      empty source, a `frame`) refused
 
 ## Open questions
 
 - Part tolerances on STEP solids (a lens body from CAD): its prescription is not
   modelled, only its faces; tolerancing them needs the library prescription (M5c1) or is
   left out.
-- Mounts in the parts library (a mount's adjusters kept with the user's parts, given by
-  its part number), once a design's `[[mount]]` tables have been used for a while.
 - Whether to add more metrics than the merit terms (PSF Strehl, coupling efficiency into
   a fibre from M10) as criteria.
