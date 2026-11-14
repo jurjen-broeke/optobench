@@ -332,6 +332,10 @@ pub(crate) fn trace(parameters: &Parameters) -> Result<Value, CommandError> {
             "clear_aperture_used": f.clear_aperture_used,
         })).collect::<Vec<_>>(),
     });
+    // On a table layout: where alignment irises go on the bench.
+    if let Some(irises) = crate::irises::alignment(&source, &scene, &built, &traced) {
+        result["alignment_irises"] = irises;
+    }
     if let Some(n) = parameters.get("ray_paths") {
         let n = n.as_u64().ok_or_else(|| {
             CommandError::new(

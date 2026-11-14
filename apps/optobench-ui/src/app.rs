@@ -1435,7 +1435,12 @@ impl App {
         let mut hovered = None;
         let mut redraw: Option<String> = None;
         let mut close = None;
-        let width = (ui.available_width() * 0.5).max(380.0);
+        // Half the strip for a graph; little until one is open.
+        let width = if doc.graphs.is_empty() {
+            240.0
+        } else {
+            (ui.available_width() * 0.45).max(380.0)
+        };
         ui.vertical(|ui| {
             ui.set_width(width);
             ui.horizontal(|ui| {
@@ -1479,9 +1484,12 @@ impl App {
                 }
             });
             if doc.graphs.is_empty() {
-                ui.label(
-                    RichText::new("Graph draws the graphs you choose; scroll to zoom, drag to pan, double-click to fit")
-                        .color(DARK.text_dim),
+                ui.add(
+                    egui::Label::new(
+                        RichText::new("Graph draws the graphs you choose; scroll to zoom, drag to pan, double-click to fit")
+                            .color(DARK.text_dim),
+                    )
+                    .wrap(),
                 );
                 return;
             }
@@ -1564,7 +1572,7 @@ impl App {
         let Some(doc) = &self.doc else { return };
         ui.horizontal_top(|ui| {
             ui.vertical(|ui| {
-                ui.set_width(340.0);
+                ui.set_width(300.0);
                 ui.label(RichText::new("Messages").strong());
                 for m in doc.messages.iter().rev().take(6) {
                     ui.label(RichText::new(&m.text).color(if m.error {
@@ -1577,7 +1585,7 @@ impl App {
             ui.separator();
             if let Some(trace) = &doc.trace {
                 ui.vertical(|ui| {
-                    ui.set_width(260.0);
+                    ui.set_width(210.0);
                     ui.label(RichText::new("Power ledger (W)").strong());
                     egui::Grid::new("ledger").num_columns(2).show(ui, |ui| {
                         if let Some(ledger) = trace.report["ledger"].as_object() {
@@ -1593,6 +1601,7 @@ impl App {
                 });
                 ui.separator();
                 ui.vertical(|ui| {
+                    ui.set_max_width(300.0);
                     ui.label(RichText::new("Detectors").strong());
                     for d in trace.report["detectors"]
                         .as_array()
@@ -1603,6 +1612,31 @@ impl App {
                             RichText::new(d["id"].as_str().unwrap_or("?")).color(DARK.text_dim),
                         );
                         detector_grid(ui, &d);
+                    }
+                    let irises = &trace.report["alignment_irises"];
+                    if let Some(list) = irises["irises"].as_array() {
+                        ui.add_space(4.0);
+                        ui.label(RichText::new("Alignment irises").strong())
+                            .on_hover_text("Where to put irises on the bench to align this run; not part of the design");
+                        for (k, i) in list.iter().enumerate() {
+                            let hole = &i["hole"];
+                            ui.label(format!(
+                                "I{}  hole ({}, {}) · {} mm high{}",
+                                k + 1,
+                                hole[0],
+                                hole[1],
+                                i["height"].as_f64().unwrap_or(0.0),
+                                if i["on_grid"] == true { "" } else { " · off the grid" }
+                            ));
+                        }
+                        ui.add(
+                            egui::Label::new(
+                                RichText::new(irises["advice"].as_str().unwrap_or(""))
+                                    .color(DARK.text_dim)
+                                    .size(11.0),
+                            )
+                            .wrap(),
+                        );
                     }
                 });
             }

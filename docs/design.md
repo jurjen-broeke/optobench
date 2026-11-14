@@ -356,6 +356,7 @@ Phase C doesn't depend on Phase B: tolerancing can start straight after M11 if i
 | M13 Live write-back | DOF bindings (parameter, joint, move), batched writes, single rebuild, read-back verification, abort on mismatch | nightly contract test green against the latest SolidCraft release for 4 weeks |
 | M14 Tolerancing | Monte Carlo over DOFs, mount and part tolerances; yield and sensitivity report | sensitivity ranking stable across seeds; runtime documented |
 | M15 GPU, tissue MC | wgpu compute for non-sequential batches; photon transport in scattering tissue (Henyey–Greenstein) replacing the diffusion approximation for fluence and heating | GPU equals CPU within statistical error; tissue fluence matches published slab benchmarks |
+| M16 Table layouts in the interface | from the user's hands-on test (2026-11-14): positions as X, Y, Z in mm, the breadboard drawn and sized, SolidCraft-style Move handles snapped to the pitch, graphs chosen several at a time and shown one at a time with an out-of-date mark, where to put alignment irises on the bench | a folded beam path built on a breadboard in the interface alone, every item's position readable and movable by its handles, with the iris advice |
 
 ## Tests and validation
 

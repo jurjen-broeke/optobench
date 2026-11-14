@@ -130,6 +130,28 @@ fn background(painter: &egui::Painter, rect: Rect) {
     painter.add(Shape::mesh(mesh));
 }
 
+/// Two unit vectors across `direction` (and across each other), for a ring facing it.
+fn across(direction: V3) -> (V3, V3) {
+    let cross = |a: V3, b: V3| {
+        [
+            a[1] * b[2] - a[2] * b[1],
+            a[2] * b[0] - a[0] * b[2],
+            a[0] * b[1] - a[1] * b[0],
+        ]
+    };
+    let unit = |a: V3| {
+        let l = (a[0] * a[0] + a[1] * a[1] + a[2] * a[2]).sqrt().max(1e-12);
+        a.map(|c| c / l)
+    };
+    let hint = if direction[2].abs() < 0.9 {
+        [0.0, 0.0, 1.0]
+    } else {
+        [1.0, 0.0, 0.0]
+    };
+    let u = unit(cross(direction, hint));
+    (u, unit(cross(direction, u)))
+}
+
 /// Distance from a point to a segment on the screen.
 fn segment_distance(p: Pos2, a: Pos2, b: Pos2) -> f32 {
     let ab = b - a;
@@ -395,6 +417,43 @@ pub fn show(
             };
             painter.line_segment([screen(top), screen(foot)], Stroke::new(1.0, colour));
             painter.circle_stroke(screen(foot), 4.0, Stroke::new(1.2, colour));
+        }
+    }
+
+    // Where alignment irises go (the trace's advice, not part of the design): a ring
+    // across the beam on a post, named as the results list them.
+    if let Some(report) = doc.and_then(|d| d.trace.as_ref()).map(|t| &t.report) {
+        let a = &report["alignment_irises"];
+        let d = &a["segment"]["direction"];
+        let direction = [0, 1, 2].map(|k| d[k].as_f64().unwrap_or(0.0));
+        let (u, v) = across(direction);
+        let colour = Color32::from_rgb(140, 230, 170);
+        for (k, iris) in a["irises"].as_array().into_iter().flatten().enumerate() {
+            let p = &iris["position_mm"];
+            let Some(centre) = (|| Some([p[0].as_f64()?, p[1].as_f64()?, p[2].as_f64()?]))() else {
+                continue;
+            };
+            let radius = 12.7;
+            let ring: Vec<Pos2> = (0..=32)
+                .map(|n| {
+                    let t = std::f64::consts::TAU * f64::from(n) / 32.0;
+                    screen(
+                        [0, 1, 2].map(|i| centre[i] + radius * (u[i] * t.cos() + v[i] * t.sin())),
+                    )
+                })
+                .collect();
+            painter.add(Shape::line(ring, Stroke::new(2.0, colour)));
+            let foot = [centre[0], centre[1], 0.0];
+            let below = [centre[0], centre[1], centre[2] - radius];
+            painter.line_segment([screen(below), screen(foot)], Stroke::new(1.0, colour));
+            painter.circle_stroke(screen(foot), 4.0, Stroke::new(1.2, colour));
+            painter.text(
+                screen([centre[0], centre[1], centre[2] + radius]) + Vec2::new(0.0, -6.0),
+                egui::Align2::CENTER_BOTTOM,
+                format!("I{}", k + 1),
+                egui::FontId::proportional(12.0),
+                colour,
+            );
         }
     }
 

@@ -24,6 +24,7 @@ mod fluence;
 mod fluorophores;
 mod graph;
 mod heating;
+mod irises;
 mod materials;
 mod moves;
 mod optimize;

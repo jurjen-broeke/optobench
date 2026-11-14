@@ -5,6 +5,13 @@ with the release that introduced them.
 
 ## Unreleased
 
+- M16 table layouts in the interface: Properties shows positions as X, Y, Z in mm (typed
+  on a table layout), with labelled vectors and units; the breadboard is drawn under
+  the items (`[table]` `columns`, `rows`, `corner`, optional) with a post from each item
+  to its hole, and its pitch and size are set in Properties; Move puts arrows and rings
+  on the selected item, snapped to the pitch or a typed step; Graph asks which graphs to
+  draw, shows one at a time with a switcher, marks those out of date and redraws them;
+  `trace` on a table layout says where to put two alignment irises on the bench.
 - M15d light by Monte Carlo: `fluence` and `heating` (and their graphs) take
   `transport = "monte-carlo"` (`packets`, `seed`, `gpu`, `threads`), run on the GPU when
   one is found, else on the CPU's threads; diffusion stays the default. The brain heating
