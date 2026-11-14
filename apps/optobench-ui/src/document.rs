@@ -31,6 +31,9 @@ pub struct Item {
     pub origin: Option<V3>,
     /// See `origin`.
     pub axis: Option<V3>,
+    /// For a lens: its shape, focal length, back focal length and glasses' indices, as
+    /// `view` gives them.
+    pub lens: Option<Value>,
 }
 
 /// Where a line of sight met an item.
@@ -258,6 +261,7 @@ impl Scene {
                     .and_then(|a| Some([v3(a.first()?)?, v3(a.get(1)?)?, v3(a.get(2)?)?])),
                 origin: v3(&item["origin"]),
                 axis: v3(&item["axis"]),
+                lens: item.get("lens").cloned(),
             })
             .collect();
         let sources = value["sources"]

@@ -332,7 +332,9 @@ fn position(
 
 /// The editor of one entry and its degrees of freedom; returns the operations to apply.
 ///
-/// `origin` is where the scene placed it (mm), shown as its position.
+/// `origin` is where the scene placed it (mm), shown as its position; `lens` a lens's
+/// properties from `view`.
+#[allow(clippy::too_many_arguments)]
 pub fn entry(
     ui: &mut Ui,
     drafts: &mut Drafts,
@@ -341,6 +343,7 @@ pub fn entry(
     index: usize,
     context: &Context,
     origin: Option<V3>,
+    lens: Option<&Value>,
 ) -> Vec<Value> {
     let target = selector(table, entry, index);
     let base = format!(
@@ -348,6 +351,11 @@ pub fn entry(
         entry["id"].as_str().unwrap_or(&index.to_string())
     );
     let mut operations = position(ui, drafts, &base, &target, entry, origin, context);
+    // A lens's prescription has its own editor.
+    let prescribed = table == "element" && entry["surfaces"].is_array();
+    if table == "element" && (prescribed || lens.is_some()) {
+        operations.extend(lens_editor(ui, drafts, &base, &target, entry, lens));
+    }
     // On a table layout the height is the position's Z.
     let shown_as_z = context.pitch.is_some() && entry["hole"].is_array();
     egui::Grid::new(format!("entry-{base}"))
@@ -356,6 +364,9 @@ pub fn entry(
         .show(ui, |ui| {
             for key in keys(entry) {
                 if shown_as_z && key == "height" {
+                    continue;
+                }
+                if prescribed && matches!(key.as_str(), "surfaces" | "thickness" | "material") {
                     continue;
                 }
                 ui.label(RichText::new(&key).color(DARK.text_dim));
@@ -554,6 +565,276 @@ pub fn moved_all(
         }
     }
     Some(operations)
+}
+
+/// The singlet shapes a lens can be designed as from its focal length.
+pub const SINGLETS: &[&str] = &["biconvex", "plano-convex", "plano-concave", "biconcave"];
+
+/// The radii (light along +z; infinite for flat) of a singlet of `shape` with focal
+/// length `f`, glass index `n` and centre thickness `t` (mm), from the thick-lens
+/// equation 1/f = (n − 1) (1/R₁ − 1/R₂ + (n − 1) t / (n R₁ R₂)) (E. Hecht, Optics, §6.2):
+/// a plano lens, curved side first, has R₁ = (n − 1) f whatever its thickness; an
+/// equi-convex or equi-concave one R₁ = −R₂ = (n − 1) f (1 + √(1 − t / (n f))). Convex
+/// shapes take |f|, concave ones −|f|. `None` when no such lens exists (too thick).
+pub fn singlet_radii(shape: &str, f: f64, n: f64, t: f64) -> Option<[f64; 2]> {
+    if !(n > 1.0 && f.is_finite() && f != 0.0 && t >= 0.0) {
+        return None;
+    }
+    let f = match shape {
+        "biconvex" | "plano-convex" => f.abs(),
+        "biconcave" | "plano-concave" => -f.abs(),
+        _ => return None,
+    };
+    match shape {
+        "plano-convex" | "plano-concave" => Some([(n - 1.0) * f, f64::INFINITY]),
+        _ => {
+            let root = 1.0 - t / (n * f);
+            (root >= 0.0).then(|| {
+                let r = (n - 1.0) * f * (1.0 + root.sqrt());
+                [r, -r]
+            })
+        }
+    }
+}
+
+/// A radius as a file writes it: a number, or "inf" for flat.
+fn radius_value(r: f64) -> Value {
+    if r.is_finite() {
+        tidy((r * 1e4).round() / 1e4)
+    } else {
+        json!("inf")
+    }
+}
+
+/// A radius as written: a number, or "inf" / "-inf".
+fn radius_of(value: &Value) -> f64 {
+    match value {
+        Value::String(s) if s.starts_with('-') => f64::NEG_INFINITY,
+        Value::String(_) => f64::INFINITY,
+        v => v.as_f64().unwrap_or(f64::INFINITY),
+    }
+}
+
+/// A lens's own editor: its shape, focal length and back focal length (from the scene);
+/// a singlet designed from its focal length; and its prescription, radius by radius,
+/// with each glass's centre thickness and material between them, glasses added (a
+/// cemented doublet: three radii) or taken away.
+fn lens_editor(
+    ui: &mut Ui,
+    drafts: &mut Drafts,
+    base: &str,
+    target: &Value,
+    entry: &Value,
+    lens: Option<&Value>,
+) -> Vec<Value> {
+    let mut operations = Vec::new();
+    let set = |key: &str, value: Value| {
+        let mut op = target.clone();
+        op["op"] = json!("set");
+        op["key"] = json!(key);
+        op["value"] = value;
+        op
+    };
+    ui.label(RichText::new("Lens").strong());
+    let wavelength = lens.and_then(|l| l["wavelength_um"].as_f64());
+    egui::Grid::new(format!("lens-{base}"))
+        .num_columns(3)
+        .spacing([10.0, 4.0])
+        .show(ui, |ui| {
+            let shape = lens.and_then(|l| l["shape"].as_str()).unwrap_or("—");
+            ui.label(RichText::new("shape").color(DARK.text_dim));
+            ui.label(shape);
+            ui.label("");
+            ui.end_row();
+            for (label, key, help) in [
+                (
+                    "f",
+                    "focal_length_mm",
+                    "focal length, from the rear principal plane",
+                ),
+                (
+                    "fb",
+                    "back_focal_length_mm",
+                    "back focal length, from the last surface",
+                ),
+            ] {
+                ui.label(RichText::new(label).color(DARK.text_dim))
+                    .on_hover_text(help);
+                match lens.and_then(|l| l[key].as_f64()) {
+                    Some(v) => ui.label(format!("{v:.3}")),
+                    None => ui.label("—"),
+                };
+                ui.label(RichText::new("mm").color(DARK.text_dim).size(11.0));
+                ui.end_row();
+            }
+        });
+    if let Some(w) = wavelength {
+        ui.label(
+            RichText::new(format!("at {w} µm, the first source's wavelength"))
+                .color(DARK.text_dim)
+                .size(11.0),
+        );
+    }
+    if !entry["surfaces"].is_array() {
+        ui.label(
+            RichText::new("Its prescription comes from the parts library")
+                .color(DARK.text_dim)
+                .size(11.0),
+        );
+        ui.add_space(4.0);
+        return operations;
+    }
+    let surfaces: Vec<Value> = entry["surfaces"].as_array().cloned().unwrap_or_default();
+    let thickness: Vec<Value> = entry["thickness"].as_array().cloned().unwrap_or_default();
+    let material: Vec<Value> = entry["material"].as_array().cloned().unwrap_or_default();
+
+    // Designed from its focal length: a singlet of the first glass and thickness.
+    let n = lens.and_then(|l| l["indices"][0].as_f64());
+    let t = thickness.first().and_then(Value::as_f64).unwrap_or(4.0);
+    ui.horizontal(|ui| {
+        ui.label(RichText::new("design").color(DARK.text_dim));
+        let shape_path = format!("{base}/design/shape");
+        let mut shape = drafts.texts.get(&shape_path).cloned().unwrap_or_else(|| {
+            let now = lens.and_then(|l| l["shape"].as_str()).unwrap_or("biconvex");
+            if SINGLETS.contains(&now) {
+                now
+            } else {
+                "biconvex"
+            }
+            .to_owned()
+        });
+        egui::ComboBox::from_id_salt(&shape_path)
+            .selected_text(shape.clone())
+            .show_ui(ui, |ui| {
+                for option in SINGLETS {
+                    ui.selectable_value(&mut shape, (*option).to_owned(), *option);
+                }
+            });
+        drafts.texts.insert(shape_path, shape.clone());
+        let f_path = format!("{base}/design/f");
+        let current = lens
+            .and_then(|l| l["focal_length_mm"].as_f64())
+            .map_or(100.0, |f| (f * 100.0).round() / 100.0);
+        let mut f = *drafts.numbers.get(&f_path).unwrap_or(&current);
+        let response = ui.add(egui::DragValue::new(&mut f).speed(0.5).suffix(" mm"));
+        if response.changed() {
+            drafts.numbers.insert(f_path.clone(), f);
+        }
+        let radii = n.and_then(|n| singlet_radii(&shape, f, n, t));
+        if ui
+            .add_enabled(radii.is_some(), egui::Button::new("Set"))
+            .on_hover_text(match n {
+                Some(n) => format!(
+                    "Radii for a {shape} of this focal length, n = {n} and {t} mm thick (one glass)"
+                ),
+                None => "The glass's index is not known at this wavelength".to_owned(),
+            })
+            .clicked()
+        {
+            if let Some([r1, r2]) = radii {
+                operations.push(set(
+                    "surfaces",
+                    json!([{ "radius": radius_value(r1) }, { "radius": radius_value(r2) }]),
+                ));
+                operations.push(set("thickness", json!([t])));
+                operations.push(set(
+                    "material",
+                    json!([material.first().cloned().unwrap_or(json!(1.5))]),
+                ));
+                drafts.numbers.remove(&f_path);
+            }
+        }
+    });
+
+    // The prescription, surface by surface.
+    egui::Grid::new(format!("prescription-{base}"))
+        .num_columns(4)
+        .spacing([8.0, 4.0])
+        .show(ui, |ui| {
+            for (k, surface) in surfaces.iter().enumerate() {
+                let r = radius_of(&surface["radius"]);
+                ui.label(RichText::new(format!("R{}", k + 1)).color(DARK.text_dim))
+                    .on_hover_text("radius of curvature, positive when its centre lies further along the light");
+                let mut flat = !r.is_finite();
+                if flat {
+                    ui.label("flat");
+                } else if let Some(v) = number(ui, drafts, &format!("{base}/R/{k}"), r) {
+                    if v != 0.0 {
+                        let mut new = surfaces.clone();
+                        new[k]["radius"] = radius_value(v);
+                        operations.push(set("surfaces", json!(new)));
+                    }
+                }
+                if ui.checkbox(&mut flat, "flat").changed() {
+                    let mut new = surfaces.clone();
+                    new[k]["radius"] = if flat { json!("inf") } else { json!(100.0) };
+                    operations.push(set("surfaces", json!(new)));
+                }
+                ui.label(RichText::new("mm").color(DARK.text_dim).size(11.0));
+                ui.end_row();
+                if k + 1 < surfaces.len() {
+                    ui.label(RichText::new(format!("tc{}", k + 1)).color(DARK.text_dim))
+                        .on_hover_text("centre thickness of this glass");
+                    let tk = thickness.get(k).and_then(Value::as_f64).unwrap_or(0.0);
+                    if let Some(v) = number(ui, drafts, &format!("{base}/t/{k}"), tk) {
+                        if v > 0.0 {
+                            let mut new = thickness.clone();
+                            new.resize(surfaces.len() - 1, json!(1.0));
+                            new[k] = tidy(v);
+                            operations.push(set("thickness", json!(new)));
+                        }
+                    }
+                    let glass = material.get(k).cloned().unwrap_or(json!(1.5));
+                    let shown = match &glass {
+                        Value::String(s) => s.clone(),
+                        other => other.to_string(),
+                    };
+                    if let Some(typed) = text(ui, drafts, &format!("{base}/glass/{k}"), &shown, 90.0) {
+                        let value = typed
+                            .trim()
+                            .parse::<f64>()
+                            .map_or_else(|_| json!(typed.trim()), |n| json!(n));
+                        let mut new = material.clone();
+                        new.resize(surfaces.len() - 1, json!(1.5));
+                        new[k] = value;
+                        operations.push(set("material", json!(new)));
+                    }
+                    ui.label(RichText::new("mm, glass").color(DARK.text_dim).size(11.0))
+                        .on_hover_text("the glass: a material name (bundled or imported) or an index");
+                    ui.end_row();
+                }
+            }
+        });
+    ui.horizontal(|ui| {
+        if ui
+            .small_button("Add a cemented glass")
+            .on_hover_text("One more surface after the last: a singlet becomes a cemented doublet (three radii)")
+            .clicked()
+        {
+            let mut s = surfaces.clone();
+            s.push(json!({ "radius": "inf" }));
+            let mut t = thickness.clone();
+            t.push(json!(2.0));
+            let mut m = material.clone();
+            m.push(material.last().cloned().unwrap_or(json!(1.5)));
+            operations.push(set("surfaces", json!(s)));
+            operations.push(set("thickness", json!(t)));
+            operations.push(set("material", json!(m)));
+        }
+        if surfaces.len() > 2
+            && ui
+                .small_button("Remove the last glass")
+                .on_hover_text("Take away the last surface and the glass before it")
+                .clicked()
+        {
+            let keep = surfaces.len() - 1;
+            operations.push(set("surfaces", json!(surfaces[..keep])));
+            operations.push(set("thickness", json!(thickness[..keep - 1])));
+            operations.push(set("material", json!(material[..keep.saturating_sub(1).min(material.len())])));
+        }
+    });
+    ui.add_space(4.0);
+    operations
 }
 
 /// The tables whose entries carry degrees of freedom.
@@ -911,6 +1192,35 @@ mod tests {
             )
             .is_none()
         );
+    }
+
+    #[test]
+    fn singlets_have_the_focal_length_asked_for() {
+        // Each design traced back through the thick-lens equation gives the f asked for.
+        let f_of = |[r1, r2]: [f64; 2], n: f64, t: f64| {
+            let c1 = 1.0 / r1;
+            let c2 = 1.0 / r2;
+            1.0 / ((n - 1.0) * (c1 - c2 + (n - 1.0) * t * c1 * c2 / n))
+        };
+        for (shape, f) in [
+            ("biconvex", 100.0),
+            ("plano-convex", 50.0),
+            ("plano-concave", -75.0),
+            ("biconcave", -40.0),
+        ] {
+            let r = singlet_radii(shape, f, 1.5168, 4.0).expect(shape);
+            assert!((f_of(r, 1.5168, 4.0) - f).abs() < 1e-9, "{shape}: {r:?}");
+        }
+        // The relay's lens: R ±100 mm, n 1.5, 4 mm: f 100.67 mm.
+        let r = singlet_radii("biconvex", 100.671_140_939_597_3, 1.5, 4.0).expect("lens");
+        assert!(
+            (r[0] - 100.0).abs() < 1e-6 && (r[1] + 100.0).abs() < 1e-6,
+            "{r:?}"
+        );
+        // Concave shapes take −|f|; too thick a lens for its focal length has none.
+        assert!(singlet_radii("biconcave", 40.0, 1.5, 4.0).expect("lens")[0] < 0.0);
+        assert!(singlet_radii("biconvex", 2.0, 1.5, 4.0).is_none());
+        assert!(singlet_radii("meniscus", 100.0, 1.5, 4.0).is_none());
     }
 
     #[test]

@@ -1230,6 +1230,15 @@ impl App {
                         .as_ref()
                         .zip(entry["id"].as_str())
                         .and_then(|(scene, id)| origin_of(scene, id));
+                    let lens = scene
+                        .as_ref()
+                        .zip(entry["id"].as_str())
+                        .and_then(|(s, id)| {
+                            s.items
+                                .iter()
+                                .find(|i| i.id == id)
+                                .and_then(|i| i.lens.clone())
+                        });
                     operations.extend(editors::entry(
                         ui,
                         &mut self.drafts,
@@ -1238,6 +1247,7 @@ impl App {
                         i,
                         &context,
                         origin,
+                        lens.as_ref(),
                     ));
                 });
         }
@@ -1340,7 +1350,16 @@ impl App {
             if let Some((entry, i)) = found {
                 ui.label(RichText::new(format!("{table} {key}")).color(DARK.text_dim));
                 let origin = origin_of(scene, &key);
-                return editors::entry(ui, &mut self.drafts, &table, &entry, i, &context, origin);
+                return editors::entry(
+                    ui,
+                    &mut self.drafts,
+                    &table,
+                    &entry,
+                    i,
+                    &context,
+                    origin,
+                    None,
+                );
             }
         }
         let Some(item) = self.selected.and_then(|i| scene.items.get(i)).cloned() else {
@@ -1361,6 +1380,7 @@ impl App {
                     i,
                     &context,
                     item.origin,
+                    item.lens.as_ref(),
                 );
             }
             None => {
