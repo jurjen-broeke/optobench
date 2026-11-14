@@ -21,7 +21,10 @@ with the release that introduced them.
   on items, `[[group]]` DOFs that move every member; Move moves a whole group. Merit
   terms are added from the browser in the Layout workspace. The lens editor goes name,
   type, f, R, tc, glass, diameter, its values kept consistent (the diameter limited by
-  the edge thickness), and Flip turns a lens round.
+  the edge thickness), and Flip turns a lens round. On a table layout, degrees of
+  freedom are added along and about the board's X, Y and Z (or along an item's axis),
+  their ranges edited in Properties. `collimated` and `point` sources weight their rays
+  by area, for even beams (results with them change slightly: less weight at the rim).
 - M15d light by Monte Carlo: `fluence` and `heating` (and their graphs) take
   `transport = "monte-carlo"` (`packets`, `seed`, `gpu`, `threads`), run on the GPU when
   one is found, else on the CPU's threads; diffusion stays the default. The brain heating

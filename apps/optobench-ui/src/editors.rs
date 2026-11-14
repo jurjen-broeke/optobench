@@ -501,7 +501,7 @@ pub fn entry(
         });
     if WITH_DOFS.contains(&table) && entry["id"].is_string() {
         ui.add_space(6.0);
-        operations.extend(dofs(ui, drafts, table, entry, &base, context.sidecar));
+        operations.extend(dofs(ui, drafts, table, entry, &base, context));
     }
     ui.add_space(4.0);
     let what = if context.sidecar && table == "element" {
@@ -1196,37 +1196,37 @@ pub fn moved_group(
 /// The tables whose entries carry degrees of freedom.
 const WITH_DOFS: &[&str] = &["element", "source", "detector"];
 
-/// The degrees of freedom of an entry: value within the range, remove; and a line to
-/// add one.
-/// In a layout the axes are the item's own (z along its optical axis); in a sidecar they
-/// are the scene's, as the view's gizmo shows them.
+/// The degrees of freedom of an entry: each with its value and its range (both
+/// editable), removed by ×; and buttons to add one. On a table layout and in a sidecar
+/// they move along and about the scene's X, Y and Z (the board's axes), or along the
+/// item's own axis; on a planar layout along its axis and across it. Slides start with
+/// a range of two holes either way on a table, 10 mm elsewhere; tilts 5°.
 fn dofs(
     ui: &mut Ui,
     drafts: &mut Drafts,
     table: &str,
     entry: &Value,
     base: &str,
-    sidecar: bool,
+    context: &Context,
 ) -> Vec<Value> {
     let mut operations = Vec::new();
     let id = entry["id"].as_str().unwrap_or_default();
-    ui.label(RichText::new("Degrees of freedom").strong());
+    ui.label(RichText::new("Degrees of freedom").strong())
+        .on_hover_text("What the optimiser may move, and how far");
     let list = entry["dof"].as_array().cloned().unwrap_or_default();
     for dof in &list {
         let name = dof["name"].as_str().unwrap_or("?");
-        let unit = if dof["kind"] == "tilt" { "°" } else { "mm" };
+        let tilt = dof["kind"] == "tilt";
+        let unit = if tilt { "°" } else { "mm" };
+        let current = dof["value"].as_f64().unwrap_or(0.0);
+        let range = (dof["range"][0].as_f64(), dof["range"][1].as_f64());
         ui.horizontal(|ui| {
             ui.label(RichText::new(name).color(DARK.text_dim));
-            let current = dof["value"].as_f64().unwrap_or(0.0);
-            let range = (
-                dof["range"][0].as_f64().unwrap_or(f64::NEG_INFINITY),
-                dof["range"][1].as_f64().unwrap_or(f64::INFINITY),
-            );
             let path = format!("{base}/dof/{name}");
             let mut value = *drafts.numbers.get(&path).unwrap_or(&current);
             let response = ui.add(
                 egui::DragValue::new(&mut value)
-                    .range(range.0..=range.1)
+                    .range(range.0.unwrap_or(f64::NEG_INFINITY)..=range.1.unwrap_or(f64::INFINITY))
                     .speed(0.01)
                     .max_decimals(4)
                     .suffix(format!(" {unit}")),
@@ -1242,18 +1242,6 @@ fn dofs(
                     }
                 }
             }
-            let kind = dof["kind"].as_str().unwrap_or("?");
-            let locked = dof["locked"].as_bool().unwrap_or(false);
-            ui.label(
-                RichText::new(format!(
-                    "{kind}, {} to {}{}",
-                    range.0,
-                    range.1,
-                    if locked { ", locked" } else { "" }
-                ))
-                .color(DARK.text_dim)
-                .size(11.0),
-            );
             if ui
                 .small_button("×")
                 .on_hover_text("Remove this degree of freedom")
@@ -1262,32 +1250,170 @@ fn dofs(
                 operations.push(json!({ "op": "remove_dof", "dof": name }));
             }
         });
+        ui.horizontal(|ui| {
+            ui.add_space(12.0);
+            let axis = &dof["axis"];
+            let along = match axis {
+                Value::String(a) => a.clone(),
+                Value::Array(v) => format!(
+                    "[{}]",
+                    v.iter()
+                        .map(|x| x.to_string())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ),
+                _ => "?".into(),
+            };
+            let frame = if dof["frame"] == "scene" {
+                "scene"
+            } else {
+                "its own"
+            };
+            ui.label(
+                RichText::new(format!(
+                    "{} {along} ({frame} axes), range",
+                    if tilt { "tilt about" } else { "slide along" }
+                ))
+                .color(DARK.text_dim)
+                .size(11.0),
+            );
+            for (k, end) in [range.0, range.1].into_iter().enumerate() {
+                let path = format!("{base}/dof/{name}/range/{k}");
+                let shown = end.unwrap_or(if k == 0 { -10.0 } else { 10.0 });
+                if let Some(v) = number(ui, drafts, &path, shown) {
+                    let mut new = [range.0.unwrap_or(-10.0), range.1.unwrap_or(10.0)];
+                    new[k] = v;
+                    if new[0] <= new[1] {
+                        operations.push(json!({
+                            "op": "set", "dof": name, "key": "range",
+                            "value": [tidy(new[0]), tidy(new[1])],
+                        }));
+                    }
+                }
+            }
+            ui.label(RichText::new(unit).color(DARK.text_dim).size(11.0));
+        });
     }
-    let frame = if sidecar { "scene" } else { "local" };
-    let axes_named = if sidecar {
-        "the scene's"
+    // Buttons to add one.
+    let scene_axes = context.sidecar || context.pitch.is_some();
+    let slide = context
+        .pitch
+        .map_or(10.0, |p| tidy(2.0 * p).as_f64().unwrap_or(50.0));
+    let options: Vec<(&str, &str, Value, &str, f64, &str)> = if scene_axes {
+        vec![
+            (
+                "slide X",
+                "slide_X",
+                json!([1, 0, 0]),
+                "scene",
+                slide,
+                "along the board's X",
+            ),
+            (
+                "slide Y",
+                "slide_Y",
+                json!([0, 1, 0]),
+                "scene",
+                slide,
+                "along the board's Y",
+            ),
+            (
+                "slide Z",
+                "slide_Z",
+                json!([0, 0, 1]),
+                "scene",
+                slide,
+                "up and down",
+            ),
+            (
+                "along its axis",
+                "along",
+                json!([0, 0, 1]),
+                "local",
+                slide,
+                "along its own optical axis",
+            ),
+            (
+                "tilt about X",
+                "tilt_X",
+                json!([1, 0, 0]),
+                "scene",
+                5.0,
+                "about the board's X",
+            ),
+            (
+                "tilt about Y",
+                "tilt_Y",
+                json!([0, 1, 0]),
+                "scene",
+                5.0,
+                "about the board's Y",
+            ),
+            (
+                "tilt about Z",
+                "tilt_Z",
+                json!([0, 0, 1]),
+                "scene",
+                5.0,
+                "about the vertical",
+            ),
+        ]
     } else {
-        "its own (z along its optical axis)"
+        vec![
+            (
+                "along its axis",
+                "along",
+                json!([0, 0, 1]),
+                "local",
+                slide,
+                "along the path",
+            ),
+            (
+                "across x",
+                "slide_x",
+                json!([1, 0, 0]),
+                "local",
+                5.0,
+                "across the path, sideways",
+            ),
+            (
+                "across y",
+                "slide_y",
+                json!([0, 1, 0]),
+                "local",
+                5.0,
+                "across the path, up",
+            ),
+            (
+                "tilt x",
+                "tilt_x",
+                json!([1, 0, 0]),
+                "local",
+                5.0,
+                "about its own x",
+            ),
+            (
+                "tilt y",
+                "tilt_y",
+                json!([0, 1, 0]),
+                "local",
+                5.0,
+                "about its own y",
+            ),
+        ]
     };
     ui.horizontal_wrapped(|ui| {
         ui.label(RichText::new("Add").color(DARK.text_dim));
-        for (kind, axis, label, range) in [
-            ("slide", [1, 0, 0], "slide x", 5.0),
-            ("slide", [0, 1, 0], "slide y", 5.0),
-            ("slide", [0, 0, 1], "slide z", 5.0),
-            ("tilt", [1, 0, 0], "tilt x", 2.0),
-            ("tilt", [0, 1, 0], "tilt y", 2.0),
-        ] {
-            let short = label.replace(' ', "_");
+        for (label, short, axis, frame, range, help) in options {
             let name = format!("{id}_{short}");
             if list.iter().any(|d| d["name"] == name.as_str()) {
                 continue;
             }
+            let kind = if short.starts_with("tilt") { "tilt" } else { "slide" };
+            let unit = if kind == "tilt" { "°" } else { " mm" };
             if ui
                 .small_button(label)
-                .on_hover_text(format!(
-                    "A {kind} along or about {axis:?} in {axes_named} axes, ±{range}"
-                ))
+                .on_hover_text(format!("A {kind} {help}, ±{range}{unit} to start (edit its range after)"))
                 .clicked()
             {
                 operations.push(json!({

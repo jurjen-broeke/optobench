@@ -187,6 +187,9 @@ pub fn optimise(
         .iter()
         .filter(|d| !d.locked && d.follows.is_none())
         .collect();
+    if scene.dofs.is_empty() {
+        return Err("nothing to move: give the items it may move a degree of freedom (a slide or tilt; in the interface: select the item, then Add under Degrees of freedom)".into());
+    }
     if free.is_empty() {
         return Err("no free degrees of freedom (every DOF is locked or coupled)".into());
     }

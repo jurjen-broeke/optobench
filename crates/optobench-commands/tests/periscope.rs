@@ -65,8 +65,10 @@ fn the_report_undoes_the_misalignment() {
     assert!((suggested(&result, "M1_y") + 0.4).abs() < 1e-4);
     assert!((suggested(&result, "M2_d") - 0.3).abs() < 1e-4);
     assert!(suggested(&result, "M1_d").abs() < 1e-4 && suggested(&result, "M2_y").abs() < 1e-4);
-    // L2 back to within a few µm: collimation is flat near its best.
-    assert!((suggested(&result, "L2_z") + 2.0).abs() < 0.01);
+    // L2 back to within 20 µm: collimation is flat near its best, and where its best lies
+    // depends on how the beam's rays are weighted (since M16 by the area each ring stands
+    // for: −1.989 mm; with equal weights it was −2.000).
+    assert!((suggested(&result, "L2_z") + 2.0).abs() < 0.02);
     let report: Value =
         serde_json::from_str(&std::fs::read_to_string(&json_path).expect("report")).expect("JSON");
     assert_eq!(report["kind"], "moves");
@@ -85,11 +87,15 @@ fn the_report_undoes_the_misalignment() {
 #[test]
 fn the_moves_made_in_cad_restore_alignment_in_one_iteration() {
     let (_, json_path) = report("restore");
+    // The realigned export applied the report's moves as they were with equally
+    // weighted rays (L2 −2.000 mm); with area-weighted rays (M16) the report asks
+    // −1.989: within 20 µm, on collimation's flat best.
     let check = run(
         "check-moves",
         json!({
             "path": fixtures().join("periscope-realigned.optobench").to_string_lossy(),
             "report": json_path.to_string_lossy(),
+            "tolerance_mm": 0.02,
         }),
     );
     assert_eq!(check["ok"], true, "{check}");
@@ -119,7 +125,9 @@ fn the_moves_made_in_cad_restore_alignment_in_one_iteration() {
     );
     let collimation = number(&merit("collimation")[0]);
     let best = number(&nominal["detectors"][0]["direct_rms_slope_mrad"]);
-    assert!((collimation - best).abs() < 1e-6, "{collimation} vs {best}");
+    // At least as well collimated as the nominal design (with area-weighted rays the
+    // realigned L2 is a little better: 0.01284 against 0.01291 mrad).
+    assert!(collimation <= best + 1e-6, "{collimation} vs {best}");
 }
 
 #[test]

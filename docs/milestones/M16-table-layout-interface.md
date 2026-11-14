@@ -195,6 +195,36 @@ focal length with radius, thickness and index, then the diameter.
       collimation term added from the browser, a biconvex singlet made plano-concave
       (R −25.3 mm, flat) and flipped
 
+## M16i Degrees of freedom on the board; evenly weighted beams
+
+From the user's test of the expander (2026-11-14): Optimise said there were no degrees
+of freedom, and the only way found to move L2 along the beam was "slide x", which on a
+table layout slid it across (the item's own axes, z along its optical axis) and only
+±5 mm.
+
+- [x] On a table layout (and in a sidecar) Add gives slides along the scene's X, Y and Z
+      (the board's axes, as the view's gizmo shows them), "along its axis" (its own
+      optical axis, any orientation), and tilts about X, Y and Z; slides start at two
+      holes either way, tilts at 5°. Planar layouts: along its axis, across x and y,
+      tilts. Each DOF's range is edited where it is listed
+- [x] Optimise without any DOF says how to add one
+- [x] `collimated` and `point` sources weight their rings by the area each stands for
+      (`hexapolar_weighted`: ring k the annulus (k − ½)/N to (k + ½)/N, cut at the rim):
+      equal weights had put too much light at the rim (the second moment 15 % high at 6
+      rings, the `diameter` term 7.6 % high; now 0.7 %, 2 mm reads 2.014 mm). The golden
+      cage relay's report was made again: its theory checks hold (image −2 mm, 0.96⁴
+      through), only weight-dependent values moved (RMS spot 0.036 → 0.033 mm; the
+      ghosts' clipped powers within 6 %). On the golden periscope the collimation best
+      for L2 moved 11 µm (it is flat there): the report now asks −1.989 mm where it asked
+      −2.000, so its tests take 20 µm (check-moves' `tolerance_mm` 0.02 against the
+      realigned export made from the old report), and the realigned L2 collimates a little
+      better than the nominal design (0.01284 against 0.01291 mrad). Corpus traces with
+      these sources change the same way
+- [x] Check (commands `tests/expander.rs`): the expander on a 25 mm board, L2 with a
+      slide along X (±50 mm) from 26 mm off, a collimated 1 mm source, collimation and a
+      5 mm diameter at D1: converged a little short of the paraxial 98.681 mm (the 1 mm
+      beam's spherical aberration), 5 mm across within 1 %, collimated
+
 ## Next, from the same test
 
 Noted while reading the code before the user's test; not yet confirmed by it:

@@ -6,8 +6,8 @@ Suggested by `optobench optimize`. Values are mm and degrees; moves are in the a
 
 | DOF | Unit | Current | Suggested | Change | At range limit |
 | --- | --- | ---: | ---: | ---: | --- |
-| PCV_slide_x | mm | 5.0000 | 0.0004 | -4.9996 | no |
-| PCV_slide_y | mm | 5.0000 | 0.0003 | -4.9997 | no |
+| PCC_slide_x | mm | 0.0000 | -0.6397 | -0.6397 | no |
+| PCV_slide_x | mm | 0.0000 | 1.2794 | 1.2794 | no |
 
 ## Adjustment room
 
@@ -15,21 +15,22 @@ How much of each adjuster's travel towards one end the suggested value uses (0 %
 
 | DOF | Range | Suggested | Used | Left (−, +) | Range after adjusting | Status |
 | --- | --- | ---: | ---: | --- | --- | --- |
-| PCV_slide_x | -5.0000 to 5.0000 | 0.0004 | 0 % | 5.0004 to 4.9996 | -5.0004 to 4.9996 | ok |
-| PCV_slide_y | -5.0000 to 5.0000 | 0.0003 | 0 % | 5.0003 to 4.9997 | -5.0003 to 4.9997 | ok |
+| PCC_slide_x | -5.0000 to 5.0000 | -0.6397 | 13 % | 4.3603 to 5.6397 | -4.3603 to 5.6397 | ok |
+| PCV_slide_x | -5.0000 to 5.0000 | 1.2794 | 26 % | 6.2794 to 3.7206 | -6.2794 to 3.7206 | ok |
 
 
 ## Moves
 
 | Item | Translate (mm) | Rotate about | By (deg) |
 | --- | --- | --- | ---: |
-| element `PCV` | (0.0000, 0.0004, 0.0003) | (0.0000, 0.0000, 1.0000) | 0.0000 |
+| element `PCC` | (0.0000, -0.6397, 0.0000) | (0.0000, 0.0000, 1.0000) | 0.0000 |
+| element `PCV` | (0.0000, 1.2794, 0.0000) | (0.0000, 0.0000, 1.0000) | 0.0000 |
 
 ## Merit
 
 | Term | Detector | Unit | Before | After |
 | --- | --- | --- | --- | --- |
-| collimation | D1 | mrad | 19.454311 | 15.371066 |
-| diameter | D1 | mm | -2.361846 | -1.184187 |
+| collimation | D1 | mrad | 11.363545 | 10.047782 |
+| diameter | D1 | mm | 3.142519 | 2.180000 |
 
 Next: Set each DOF's `value` in the layout to the suggested one.

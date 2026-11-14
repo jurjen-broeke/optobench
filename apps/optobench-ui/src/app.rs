@@ -3109,7 +3109,7 @@ mod exit {
             }
         }
         click(&mut h, "D1");
-        click(&mut h, "slide z");
+        click(&mut h, "along its axis");
         click(&mut h, "Workspace");
         click(&mut h, "Simulate");
         click(&mut h, "3  Detectors & merit");
@@ -3133,7 +3133,7 @@ mod exit {
             "[[element]]",
             "[[detector]]",
             "kind = \"focus\"",
-            "name = \"D1_slide_z\"",
+            "name = \"D1_along\"",
             "value = ",
         ] {
             assert!(text.contains(expected), "`{expected}` in\n{text}");
@@ -3250,8 +3250,8 @@ mod exit {
             h.step();
         }
         settle(&mut h);
-        click(&mut h, "tilt x");
-        click(&mut h, "tilt y");
+        click(&mut h, "tilt about X");
+        click(&mut h, "tilt about Y");
         assert!(errors(&h).is_empty(), "{:?}", errors(&h));
         click(&mut h, "Align");
         click(&mut h, "Optimise");
@@ -3268,7 +3268,7 @@ mod exit {
             .filter_map(|d| d["name"].as_str())
             .collect();
         assert!(
-            names.contains(&"M2_tilt_x") && names.contains(&"M2_tilt_y"),
+            names.contains(&"M2_tilt_X") && names.contains(&"M2_tilt_Y"),
             "{names:?}"
         );
         assert!(

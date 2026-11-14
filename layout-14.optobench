@@ -29,19 +29,20 @@ thickness = [1.5]
 material = [1.5]
 diameter = 11.9
 clear_aperture = 10.7
+dof = [{ name = "PCC_slide_x", kind = "slide", axis = [1, 0, 0], frame = "local", range = [-5.0, 5.0] }]
 
 [[element]]
 id = "PCV"
 kind = "lens"
-hole = [3, 0]
-height = 50.0
+hole = [1, 0]
+height = 50
 axis = [1, 0, 0]
 surfaces = [{ radius = "inf" }, { radius = -30 }]
 thickness = [4.7]
 material = [1.5]
 diameter = 25.4
 clear_aperture = 22.9
-dof = [{ name = "PCV_slide_x", kind = "slide", axis = [1, 0, 0], frame = "local", range = [-5.0, 5.0] , value = 5.0 }, { name = "PCV_slide_y", kind = "slide", axis = [0, 1, 0], frame = "local", range = [-5.0, 5.0] , value = 5.0 }]
+dof = [{ name = "PCV_slide_x", kind = "slide", axis = [1, 0, 0], frame = "local", range = [-5.0, 5.0] }]
 
 [[detector]]
 id = "D1"

@@ -109,3 +109,42 @@ fn a_diameter_needs_its_target() {
     let _ = std::fs::remove_file(&path);
     assert!(e.message.contains("target"), "{}", e.message);
 }
+
+#[test]
+fn on_a_table_the_second_lens_slides_along_x_to_its_place() {
+    // The same lenses on a 25 mm breadboard, beam along +x at 75 mm: L2 given a slide
+    // along the scene's X (as the interface's "slide X" writes it, two holes either way),
+    // a collimated 1 mm source, collimation and a 5 mm diameter at D1. L1's first vertex
+    // at x = 50, so L2's paraxial place is 50 + 48.681 = 98.681 mm; the start, hole 5
+    // (x = 125), is 26 mm off.
+    let text = "format = \"optobench/1\"\nkind = \"layout\"\nlayout = \"table\"\n\n[table]\npitch = 25.0\n\n\
+        [[source]]\nid = \"S1\"\nkind = \"collimated\"\nwavelength_um = 0.633\npower_w = 0.001\ndiameter = 1.0\nhole = [0, 0]\nheight = 75.0\naxis = [1, 0, 0]\n\n\
+        [[element]]\nid = \"L1\"\nkind = \"lens\"\nhole = [2, 0]\nheight = 75.0\naxis = [1, 0, 0]\n\
+        surfaces = [ { radius = -6.2016 }, { radius = \"inf\" } ]\nthickness = [2.0]\nmaterial = [1.5168]\ndiameter = 6.0\nclear_aperture = 5.0\n\n\
+        [[element]]\nid = \"L2\"\nkind = \"lens\"\nhole = [5, 0]\nheight = 75.0\naxis = [1, 0, 0]\n\
+        surfaces = [ { radius = 31.008 }, { radius = \"inf\" } ]\nthickness = [4.0]\nmaterial = [1.5168]\ndiameter = 25.4\nclear_aperture = 22.9\n\
+        dof = [ { name = \"L2_slide_X\", kind = \"slide\", axis = [1, 0, 0], frame = \"scene\", range = [-50, 50] } ]\n\n\
+        [[detector]]\nid = \"D1\"\nhole = [10, 0]\nheight = 75.0\naxis = [1, 0, 0]\nsize = [20, 20]\npixels = [64, 64]\n\n\
+        [[merit]]\nkind = \"collimation\"\ndetector = \"D1\"\n\n\
+        [[merit]]\nkind = \"diameter\"\ndetector = \"D1\"\ntarget = 5.0\n";
+    let path = std::env::temp_dir().join(format!(
+        "optobench-expander-table-{}.optobench",
+        std::process::id()
+    ));
+    std::fs::write(&path, text).expect("written");
+    let r = Registry::standard()
+        .run("optimize", &json!({ "path": path.to_string_lossy() }))
+        .unwrap_or_else(|e| panic!("{}", e.message));
+    let _ = std::fs::remove_file(&path);
+    assert_eq!(r["converged"], true, "{r}");
+    let place = 125.0 + r["dofs"][0]["suggested"].as_f64().expect("L2_slide_X");
+    let paraxial = 50.0 + 2.0 + (-12.0 - 2.0 / 1.5168) + 60.0;
+    // The 1 mm beam's spherical aberration puts it a little short of paraxial.
+    assert!(
+        place < paraxial && paraxial - place < 0.5,
+        "L2 at {place} (paraxial {paraxial})"
+    );
+    // 5 mm across (rings weighted by area: within 1 %), collimated within the aberration.
+    assert!(end(&r, "diameter").abs() < 0.05, "{r}");
+    assert!(end(&r, "collimation") < 0.15, "{r}");
+}
