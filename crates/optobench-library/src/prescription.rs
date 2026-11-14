@@ -59,7 +59,7 @@ impl Prescription {
     /// What it is: singlet, cemented doublet, air-spaced doublet, cemented triplet, …
     pub fn kind(&self) -> String {
         let glasses = self.glasses();
-        let air = self.gaps.iter().any(|g| *g == Gap::Air);
+        let air = self.gaps.contains(&Gap::Air);
         match (glasses, air) {
             (1, _) => "singlet".into(),
             (2, false) => "cemented doublet".into(),
