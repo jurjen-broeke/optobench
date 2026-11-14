@@ -2114,6 +2114,7 @@ version = "0.0.1"
 dependencies = [
  "optobench-analysis",
  "optobench-field",
+ "optobench-gpu",
  "optobench-io",
  "optobench-library",
  "optobench-materials",

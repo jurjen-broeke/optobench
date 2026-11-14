@@ -95,10 +95,27 @@ descriptions; no code is adapted.
 
 ## M15d Fluence and heating from the Monte Carlo
 
-- [ ] `fluence` and `heating` take the light from the Monte Carlo (`transport =
-      "monte-carlo"`, then the default) or from diffusion (M11a2)
-- [ ] The Podgorski and Ranganathan benchmark (M11 exit check, left open) run again with
-      Monte Carlo light; its gap reported
+- [x] `fluence` and `heating` (and their graphs) take `transport = "monte-carlo"` with
+      `packets` per traced ray (default 200), `seed`, `gpu` (default true: use one if
+      found) and `threads`: the walk on the GPU (found once per process), else on the
+      CPU's threads, one batch and stream each, the power shared between them
+      (`commands::transport`); the light built as for diffusion
+      (`sample::light_from_transport`: absorbed density, fluence from the track,
+      absorption per layer, the run's account), heating fed through `heating_with`.
+      Heating's walk records no fluence (`WalkSettings::track`, also on the GPU), and its
+      default focal depth then follows the absorption. Decided: diffusion stays the
+      default, being deterministic and fast without a GPU; Monte Carlo is asked for
+- [x] Check: an evenly lit absorbing layer heated by Monte Carlo light (CPU, 4 threads):
+      Beer–Lambert's absorbed power within 4σ, the heat balance closed, the rise at 0.5 mm
+      as with diffusion (3 %); the fluence command's account closes
+- [x] The Podgorski and Ranganathan benchmark again, light by Monte Carlo (commands
+      `tests/podgorski.rs`, on the GPU; skipped without one): per 100 mW at 250 µm
+      0.578 K (0.519 at 150 µm, 0.667 at 500), against 0.47 by diffusion and 1.86 ± 0.25
+      measured. About 60 % of the light comes back out of the brain (diffusion theory
+      gives as much for µs′ 0.65 /mm, µa 0.02 /mm), 1 % goes through; over µa 0.015 to
+      0.02 /mm the rise is 0.50 to 0.66 K. The light transport accounts for about a fifth
+      of the gap; the rest, a factor of about 3, points to µa (in vivo blood) or to where
+      the paper's 100 mW is measured. 500 µm against 150 µm: +29 % (measured +20 ± 7 %)
 
 ## Open questions
 

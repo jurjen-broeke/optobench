@@ -97,8 +97,30 @@ pub struct SampleLight {
     pub direct_absorbed: f64,
     /// The diffuse light's outcome (absorbed, out through top, bottom and side).
     pub diffuse_light: Option<DiffuseLight>,
-    /// Per turbid layer.
+    /// Per turbid layer (per layer from the Monte Carlo).
     pub parts: Vec<PartLight>,
+    /// Where the light came from by Monte Carlo (M15), with its account; `None` for the
+    /// diffusion approximation.
+    pub monte_carlo: Option<MonteCarloAccount>,
+}
+
+/// The account of a Monte Carlo run behind a [`SampleLight`] (W unless said).
+#[derive(Debug, Clone, PartialEq)]
+pub struct MonteCarloAccount {
+    /// Packets walked.
+    pub packets: u64,
+    /// Power launched into the sample.
+    pub launched: f64,
+    /// Out through the first face.
+    pub reflected: f64,
+    /// Out through the last face.
+    pub transmitted: f64,
+    /// Absorbed beyond the grid.
+    pub absorbed_outside: f64,
+    /// Russian roulette's net effect (zero on average).
+    pub roulette: f64,
+    /// The GPU it ran on, if any.
+    pub gpu: Option<String>,
 }
 
 /// The light in sample `sample` (index into the scene's elements) of a traced scene.
@@ -333,5 +355,76 @@ pub fn sample_light(
         direct_absorbed,
         diffuse_light,
         parts,
+        monte_carlo: None,
+    })
+}
+
+/// The grid of a Monte Carlo run in sample `sample`: its radius (by default half the
+/// sample's diameter) and its whole stack, from the first face to the last.
+pub fn monte_carlo_grid(
+    scene: &Scene,
+    sample: usize,
+    settings: &LightSettings,
+) -> Result<RzGrid, String> {
+    let element = scene.elements.get(sample).ok_or("no such element")?;
+    let ElementKind::Sample {
+        layers, diameter, ..
+    } = &element.kind
+    else {
+        return Err(format!("`{}` is not a sample", element.id));
+    };
+    Ok(RzGrid {
+        radius: settings.radius.unwrap_or(diameter / 2.0),
+        rings: settings.rings.max(4),
+        z: (0.0, layers.iter().map(|l| l.0).sum()),
+        slices: settings.slices.max(4),
+    })
+}
+
+/// The light in sample `sample` from a Monte Carlo run (`crate::photon`): the absorbed
+/// power density from its absorption, the fluence rate from its track (in `direct`, the
+/// whole light; `diffuse` is zero), per layer what was absorbed.
+pub fn light_from_transport(
+    scene: &Scene,
+    sample: usize,
+    transport: &crate::photon::Transport,
+    wavelength: f64,
+    packets: u64,
+    gpu: Option<String>,
+) -> Result<SampleLight, String> {
+    let element = scene.elements.get(sample).ok_or("no such element")?;
+    let g = transport.grid;
+    let absorbed: Vec<f64> = (0..g.cells())
+        .map(|c| transport.absorbed[c] / g.volume(c % g.rings))
+        .collect();
+    Ok(SampleLight {
+        id: element.id.clone(),
+        grid: g,
+        wavelength,
+        direct: transport.fluence(),
+        diffuse: vec![0.0; g.cells()],
+        absorbed,
+        scattered: 0.0,
+        direct_absorbed: transport.absorbed.iter().sum(),
+        diffuse_light: None,
+        parts: transport
+            .absorbed_by_layer
+            .iter()
+            .enumerate()
+            .map(|(k, a)| PartLight {
+                part: format!("layer {}", k + 1),
+                direct: *a,
+                diffuse: 0.0,
+            })
+            .collect(),
+        monte_carlo: Some(MonteCarloAccount {
+            packets,
+            launched: transport.launched,
+            reflected: transport.reflected,
+            transmitted: transport.transmitted,
+            absorbed_outside: transport.absorbed_outside,
+            roulette: transport.roulette,
+            gpu,
+        }),
     })
 }

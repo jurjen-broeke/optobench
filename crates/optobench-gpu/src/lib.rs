@@ -223,7 +223,7 @@ impl Gpu {
                 batch32,
                 offset,
                 total,
-                0,
+                u32::from(settings.track),
             ] {
                 params.extend_from_slice(&v.to_le_bytes());
             }
@@ -311,6 +311,7 @@ impl Gpu {
             value as f64 / SCALE * unit
         };
         let mut out = empty(*grid, layers);
+        out.tracking = settings.track;
         out.launched = launches.iter().map(|l| l.power).sum();
         for c in 0..cells {
             out.absorbed[c] = at(c);
@@ -344,16 +345,5 @@ impl Gpu {
 }
 
 fn empty(grid: RzGrid, layers: usize) -> Transport {
-    Transport {
-        grid,
-        absorbed: vec![0.0; grid.cells()],
-        track: vec![0.0; grid.cells()],
-        absorbed_outside: 0.0,
-        absorbed_by_layer: vec![0.0; layers],
-        reflected: 0.0,
-        transmitted: 0.0,
-        launched: 0.0,
-        interactions: 0,
-        roulette: 0.0,
-    }
+    Transport::empty(grid, layers)
 }

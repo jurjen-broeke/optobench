@@ -212,11 +212,36 @@ fn spread(grid: &RzGrid, q: &[f64], big: f64, duty: f64) -> Vec<f64> {
     out
 }
 
-/// The heating of sample `sample` (index into the scene's elements).
+/// The light in a sample for [`heating_with`]: from the scene as traced (detectors left
+/// out), its system and its trace, for sample `sample`.
+pub type LightSource<'a> = dyn Fn(
+        &Scene,
+        &optobench_scene::Built,
+        &optobench_scene::SceneTrace,
+        usize,
+    ) -> Result<SampleLight, String>
+    + 'a;
+
+/// The heating of sample `sample` (index into the scene's elements), its light by the
+/// diffusion approximation (M11a2).
 pub fn heating(
     scene: &Scene,
     sample: usize,
     settings: &HeatingSettings,
+) -> Result<Heating, String> {
+    let light = |s: &Scene,
+                 _: &optobench_scene::Built,
+                 t: &optobench_scene::SceneTrace,
+                 k: usize| sample_light(s, t, k, &settings.light);
+    heating_with(scene, sample, settings, &light)
+}
+
+/// [`heating`] with the light from `light` (the Monte Carlo of M15, run where a GPU is).
+pub fn heating_with(
+    scene: &Scene,
+    sample: usize,
+    settings: &HeatingSettings,
+    light: &LightSource,
 ) -> Result<Heating, String> {
     let element = scene.elements.get(sample).ok_or("no such element")?;
     let ElementKind::Sample {
@@ -254,11 +279,21 @@ pub fn heating(
     alone.detectors.clear();
     let built = alone.build().map_err(|e| e.to_string())?;
     let trace = alone.trace_built(&built);
-    let light = sample_light(&alone, &trace, sample, &settings.light)?;
+    let light = light(&alone, &built, &trace, sample)?;
     let lg = light.grid;
     notes[0] = format!(
-        "the heat source is the light absorbed on the light grid (depth {:.4} to {:.4} mm, radius {:.4} mm); absorption elsewhere is not counted",
-        lg.z.0, lg.z.1, lg.radius
+        "the heat source is the light absorbed on the light grid (depth {:.4} to {:.4} mm, radius {:.4} mm, {}); absorption elsewhere is not counted",
+        lg.z.0,
+        lg.z.1,
+        lg.radius,
+        match &light.monte_carlo {
+            Some(m) => format!(
+                "Monte Carlo, {} packets{}",
+                m.packets,
+                m.gpu.as_ref().map_or(String::new(), |g| format!(" on {g}"))
+            ),
+            None => "diffusion approximation".to_owned(),
+        }
     );
     let wavelength = light.wavelength;
 
@@ -280,9 +315,18 @@ pub fn heating(
     }
     let focal_depth = match settings.focal_depth {
         Some(d) => d,
-        None => (0..lg.slices)
-            .max_by(|&a, &b| light.direct[lg.index(0, a)].total_cmp(&light.direct[lg.index(0, b)]))
-            .map_or(0.5 * (lg.z.0 + lg.z.1), |j| lg.z_at(j)),
+        None => {
+            // Where the direct light peaks on the axis; a Monte Carlo run for heating
+            // records no fluence, and then where the absorption does.
+            let along: &[f64] = if light.direct.iter().any(|v| *v > 0.0) {
+                &light.direct
+            } else {
+                &light.absorbed
+            };
+            (0..lg.slices)
+                .max_by(|&a, &b| along[lg.index(0, a)].total_cmp(&along[lg.index(0, b)]))
+                .map_or(0.5 * (lg.z.0 + lg.z.1), |j| lg.z_at(j))
+        }
     };
     let mut focal_power = 0.0;
     for record in &trace.records {

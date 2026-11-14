@@ -296,3 +296,65 @@ fn thermal_properties_are_needed_and_checked() {
     assert!((p.capacity - RHO_C).abs() < 1e-15);
     assert!((p.perfusion - 1060.0 * 3600.0 * 8.5e-3 * 1e-9).abs() < 1e-15);
 }
+
+#[test]
+fn monte_carlo_light_heats_the_slab_as_the_formula_says() {
+    // The same evenly lit absorbing layer, its light by Monte Carlo (on the CPU, for the
+    // same result everywhere): Beer–Lambert's absorbed power within its sampling error,
+    // the heat balance closed, and the rise at the focus as the diffusion-fed one (both
+    // carry the same light here: no scattering), at the same depth.
+    let scratch = Scratch::new("monte-carlo");
+    let path = scratch.design(&design(2.0 * R - 0.2, "\"insulated\""));
+    let mc = run(
+        "heating",
+        json!({ "path": path, "rings": 10, "slices": 100, "transport": "monte-carlo",
+                "packets": 20, "gpu": false, "threads": 4, "focal_depth_mm": 0.5 }),
+    )
+    .expect("heats");
+    let absorbed = number(&mc["absorbed_w"]);
+    let expected = POWER * (1.0 - (-MU_A * L).exp());
+    // 4921 rays × 20 packets, each absorbed or not: σ = P √(p (1 − p) / N).
+    let p = expected / POWER;
+    let sigma = POWER * (p * (1.0 - p) / (4921.0 * 20.0)).sqrt();
+    assert!(
+        (absorbed - expected).abs() < 4.0 * sigma,
+        "{absorbed} {expected}"
+    );
+    let b = &mc["balance"];
+    let out = number(&b["conducted_top_w"]) + number(&b["conducted_bottom_w"]);
+    assert!((out / absorbed - 1.0).abs() < 1e-9);
+    assert!(
+        mc["notes"][0]
+            .as_str()
+            .expect("note")
+            .contains("Monte Carlo"),
+        "{}",
+        mc["notes"]
+    );
+    let diffusion = run(
+        "heating",
+        json!({ "path": path, "rings": 10, "slices": 100, "focal_depth_mm": 0.5 }),
+    )
+    .expect("heats");
+    let (a, d) = (
+        number(&mc["rise_at_focus_k"]),
+        number(&diffusion["rise_at_focus_k"]),
+    );
+    assert!((a / d - 1.0).abs() < 0.03, "{a} {d}");
+    // The fluence command reports the run's account.
+    let fluence = run(
+        "fluence",
+        json!({ "path": path, "rings": 10, "slices": 50, "transport": "monte-carlo",
+                "packets": 5, "gpu": false }),
+    )
+    .expect("fluence");
+    let m = &fluence["monte_carlo"];
+    let balance = number(&m["launched_w"])
+        - number(&m["reflected_w"])
+        - number(&m["transmitted_w"])
+        - number(&fluence["layers"][0]["direct_absorbed_w"])
+        - number(&m["roulette_w"]);
+    assert!(balance.abs() < 1e-9, "{balance}");
+    let refused = run("heating", json!({ "path": path, "packets": 5 })).expect_err("diffusion");
+    assert!(refused.contains("goes with `transport"), "{refused}");
+}

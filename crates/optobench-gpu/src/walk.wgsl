@@ -14,7 +14,7 @@ struct Params {
     batch: u32,
     offset: u32,
     total: u32,
-    pad0: u32,
+    tracking: u32,
     above: f32,
     below: f32,
     radius: f32,
@@ -111,6 +111,9 @@ fn scalar(k: u32) -> u32 {
 
 // Weighted track of the segment a → b, in pieces, in units of the slice thickness.
 fn track(a: vec3<f32>, b: vec3<f32>, w: f32) {
+    if (p.tracking == 0u) {
+        return;
+    }
     let length_ab = length(b - a);
     if (length_ab <= 0.0) {
         return;

@@ -13,7 +13,18 @@ fn invalid(message: impl Into<String>) -> CommandError {
 }
 
 /// The parameters of the light in a sample, besides `path`, `dofs` and `data_directory`.
-pub(crate) const LIGHT_KEYS: &[&str] = &["sample", "radius", "rings", "slices", "primary"];
+pub(crate) const LIGHT_KEYS: &[&str] = &[
+    "sample",
+    "radius",
+    "rings",
+    "slices",
+    "primary",
+    "transport",
+    "packets",
+    "seed",
+    "gpu",
+    "threads",
+];
 
 /// The light in the sample the parameters name (`sample`; default the first).
 pub(crate) fn light(parameters: &Parameters) -> Result<SampleLight, CommandError> {
@@ -60,6 +71,15 @@ pub(crate) fn light(parameters: &Parameters) -> Result<SampleLight, CommandError
             )));
         }
     };
+    let choice = crate::transport::choice(parameters)?;
+    if choice.monte_carlo {
+        let built = scene.build().map_err(|e| failed(e.to_string()))?;
+        let trace = scene.trace_built(&built);
+        return crate::transport::monte_carlo_light(
+            &scene, &built, &trace, sample, &settings, &choice, true,
+        )
+        .map_err(failed);
+    }
     let trace = scene.trace().map_err(|e| failed(e.to_string()))?;
     sample_light(&scene, &trace, sample, &settings).map_err(failed)
 }
@@ -98,6 +118,15 @@ pub(crate) fn fluence(parameters: &Parameters) -> Result<Value, CommandError> {
         "scattered_w": light.scattered,
         "direct_absorbed_w": light.direct_absorbed,
         "diffuse": diffuse,
+        "monte_carlo": light.monte_carlo.as_ref().map(|m| json!({
+            "packets": m.packets,
+            "launched_w": m.launched,
+            "reflected_w": m.reflected,
+            "transmitted_w": m.transmitted,
+            "absorbed_outside_w": m.absorbed_outside,
+            "roulette_w": m.roulette,
+            "gpu": m.gpu,
+        })),
         "layers": light.parts.iter().map(|p| json!({
             "part": p.part, "direct_absorbed_w": p.direct, "diffuse_absorbed_w": p.diffuse,
         })).collect::<Vec<_>>(),

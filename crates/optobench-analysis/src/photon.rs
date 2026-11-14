@@ -85,6 +85,9 @@ pub struct WalkSettings {
     pub chance: u32,
     /// The run's seed.
     pub seed: u64,
+    /// Record the weighted track length per cell (the fluence); off, only absorption is
+    /// recorded, which is all heating needs and much faster on fine grids.
+    pub track: bool,
 }
 
 impl Default for WalkSettings {
@@ -94,6 +97,7 @@ impl Default for WalkSettings {
             threshold: 1e-4,
             chance: 10,
             seed: 1,
+            track: true,
         }
     }
 }
@@ -123,10 +127,13 @@ pub struct Transport {
     /// added to the survivors. Zero on average (the game is fair); it closes the balance
     /// exactly.
     pub roulette: f64,
+    /// Whether the track (fluence) was recorded.
+    pub tracking: bool,
 }
 
 impl Transport {
-    fn empty(grid: RzGrid, layers: usize) -> Self {
+    /// No packets yet.
+    pub fn empty(grid: RzGrid, layers: usize) -> Self {
         Self {
             grid,
             absorbed: vec![0.0; grid.cells()],
@@ -138,6 +145,7 @@ impl Transport {
             launched: 0.0,
             interactions: 0,
             roulette: 0.0,
+            tracking: true,
         }
     }
 
@@ -218,6 +226,9 @@ fn turn(u: Vec3, cos_theta: f64, phi: f64) -> Vec3 {
 /// Adds `weight × length` of the segment from `a` to `b` to the track per cell, in
 /// pieces no longer than half a cell.
 fn track(out: &mut Transport, a: Vec3, b: Vec3, weight: f64) {
+    if !out.tracking {
+        return;
+    }
     let g = out.grid;
     let length = (b - a).length();
     if length <= 0.0 {
@@ -244,6 +255,7 @@ pub fn walk(
     batch: u64,
 ) -> Transport {
     let mut out = Transport::empty(*grid, tissue.layers.len());
+    out.tracking = settings.track;
     let mut random = Random::stream(settings.seed, batch);
     let layers = &tissue.layers;
     if layers.is_empty() || settings.packets == 0 {

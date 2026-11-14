@@ -131,3 +131,84 @@ fn brain_heating_against_podgorski_and_ranganathan() {
          500/150 {deeper:.4}; field 0.5 mm {smaller:+.4}, 2 mm {larger:+.4}"
     );
 }
+
+/// The same benchmark with the light by Monte Carlo on the GPU (M15d; skipped without
+/// one): the rise per 100 mW at 250 µm is 0.58 K, about a fifth above the diffusion
+/// approximation's 0.47 and still about a third of the measured 1.86 ± 0.25 °C, so most
+/// of the gap is not the light transport (see the M11 and M15 milestones).
+#[test]
+fn brain_heating_with_monte_carlo_light() {
+    use optobench_analysis::heating::heating_with;
+    use optobench_analysis::photon::{WalkSettings, sample_launches, sample_tissue};
+    use optobench_analysis::sample::{light_from_transport, monte_carlo_grid};
+    let Some(gpu) = optobench_gpu::Gpu::blocking() else {
+        eprintln!("no GPU adapter: the Monte Carlo benchmark is skipped");
+        return;
+    };
+    let scene = parse(&design(), &|n: &str| material(None, n)).expect("reads");
+    let sample = scene
+        .elements
+        .iter()
+        .position(|e| e.id == "brain")
+        .expect("sample");
+    let settings = HeatingSettings {
+        light: LightSettings {
+            rings: 120,
+            slices: 200,
+            ..Default::default()
+        },
+        field: Some(ScanField {
+            side: 1.0,
+            duty: 0.7,
+        }),
+        focal_depth: Some(DURA + 0.25),
+        ..Default::default()
+    };
+    let light = |s: &optobench_scene::Scene,
+                 b: &optobench_scene::Built,
+                 t: &optobench_scene::SceneTrace,
+                 k: usize| {
+        let (launches, wavelength) = sample_launches(s, b, t, k)?;
+        let tissue = sample_tissue(s, k, wavelength)?;
+        let grid = monte_carlo_grid(s, k, &settings.light)?;
+        let walk = WalkSettings {
+            packets: 400,
+            seed: 1,
+            track: false,
+            ..Default::default()
+        };
+        let out = gpu.walk_blocking(&tissue, &grid, &launches, &walk, 0)?;
+        // About 60 % of the light comes back out of the brain, 1 % goes through.
+        assert!(out.reflected / out.launched > 0.55 && out.reflected / out.launched < 0.65);
+        light_from_transport(
+            s,
+            k,
+            &out,
+            wavelength,
+            (launches.len() * 400) as u64,
+            Some(gpu.name.clone()),
+        )
+    };
+    let h = heating_with(&scene, sample, &settings, &light).expect("heats");
+    let g = &h.grid;
+    let at = |d: f64| {
+        let z = DURA + d;
+        let j = (0..g.slices() - 1)
+            .find(|&j| g.z_at(j) <= z && z < g.z_at(j + 1))
+            .expect("inside");
+        let s = (z - g.z_at(j)) / (g.z_at(j + 1) - g.z_at(j));
+        (h.rise[g.index(0, j)] * (1.0 - s) + h.rise[g.index(0, j + 1)] * s) * 0.1 / h.surface_power
+    };
+    let (at_150, at_250, at_500) = (at(0.15), at(0.25), at(0.5));
+    eprintln!(
+        "Monte Carlo on {}: {at_150:.3}, {at_250:.3}, {at_500:.3} K per 100 mW",
+        gpu.name
+    );
+    assert!((0.50..0.66).contains(&at_250), "{at_250}");
+    assert!(
+        at_250 > rises(1.0, &[0.25])[0],
+        "above the diffusion approximation"
+    );
+    let deeper = at_500 / at_150;
+    assert!((1.20 - 0.14..1.20 + 0.14).contains(&deeper), "{deeper}");
+}

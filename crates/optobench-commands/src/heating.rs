@@ -27,6 +27,11 @@ pub(crate) const HEATING_KEYS: &[&str] = &[
     "off_at_s",
     "probes",
     "max_rise_k",
+    "transport",
+    "packets",
+    "seed",
+    "gpu",
+    "threads",
 ];
 
 fn number(parameters: &Parameters, key: &str) -> Result<Option<f64>, CommandError> {
@@ -119,6 +124,18 @@ pub(crate) fn compute(parameters: &Parameters) -> Result<Heating, CommandError> 
                     .ok_or_else(|| invalid("`probes` is a list of [radius_mm, depth_mm]"))
             })
             .collect::<Result<_, _>>()?;
+    }
+    let choice = crate::transport::choice(parameters)?;
+    if choice.monte_carlo {
+        let light_settings = settings.light;
+        let light = move |s: &optobench_scene::Scene,
+                          b: &optobench_scene::Built,
+                          t: &optobench_scene::SceneTrace,
+                          k: usize| {
+            crate::transport::monte_carlo_light(s, b, t, k, &light_settings, &choice, false)
+        };
+        return optobench_analysis::heating::heating_with(&scene, sample, &settings, &light)
+            .map_err(failed);
     }
     heating(&scene, sample, &settings).map_err(failed)
 }

@@ -5,6 +5,11 @@ with the release that introduced them.
 
 ## Unreleased
 
+- M15d light by Monte Carlo: `fluence` and `heating` (and their graphs) take
+  `transport = "monte-carlo"` (`packets`, `seed`, `gpu`, `threads`), run on the GPU when
+  one is found, else on the CPU's threads; diffusion stays the default. The brain heating
+  benchmark with Monte Carlo light gives 0.58 K per 100 mW (diffusion 0.47, measured
+  1.86 ± 0.25).
 - M15b tissue Monte Carlo on the GPU: new crate `optobench-gpu` runs the photon walk as a
   wgpu compute kernel (f32, xoshiro128**, deposits in exact 64-bit fixed point), with the
   CPU walk when no adapter is found. It meets the published slab benchmarks and equals
