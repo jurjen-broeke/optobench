@@ -684,11 +684,11 @@ pub fn read(text: &str, sidecar: &Path, lookups: &Lookups) -> Result<Read, FileE
     let mut root: Table = text
         .parse()
         .map_err(|e: toml::de::Error| error(format!("not valid TOML: {e}")))?;
-    crate::mounts::expand(&mut root)?;
-    crate::groups::expand(&mut root)?;
     // Embedded values (`[resolved]`) first, then the user's own data.
     let embedded = crate::resolved::read(&root)?;
     let merged_library = embedded.library(lookups.library)?;
+    crate::mounts::expand(&mut root, &merged_library)?;
+    crate::groups::expand(&mut root)?;
     let merged_materials = |name: &str| {
         embedded
             .material(name)
@@ -770,6 +770,7 @@ pub fn read(text: &str, sidecar: &Path, lookups: &Lookups) -> Result<Read, FileE
         )));
     }
 
+    let (split_cutoff, threads) = crate::scene_file::trace_options(&root)?;
     let mut scene = Scene {
         surrounding,
         elements: Vec::new(),
@@ -777,7 +778,8 @@ pub fn read(text: &str, sidecar: &Path, lookups: &Lookups) -> Result<Read, FileE
         proxies: Vec::new(),
         detectors: Vec::new(),
         solids: Vec::new(),
-        split_cutoff: crate::scene_file::trace_options(&root)?,
+        split_cutoff,
+        threads,
         dofs: Vec::new(),
         fluorophores: Vec::new(),
         thermal: Vec::new(),
@@ -865,6 +867,12 @@ pub fn read(text: &str, sidecar: &Path, lookups: &Lookups) -> Result<Read, FileE
                     item.context
                 ))
             })?;
+            if !part.part_type.is_optic() {
+                return Err(error(format!(
+                    "{}: part `{key}` is a mount; give it with `mount = \"{key}\"`",
+                    item.context
+                )));
+            }
             if !part.part_type.transmits()
                 || item
                     .table
@@ -1261,7 +1269,7 @@ mod tests {
             number: "AC-TEST".into(),
             part_type: PartType::Lens,
             source: "test".into(),
-            outline: Outline::Round { diameter: 25.4 },
+            outline: Some(Outline::Round { diameter: 25.4 }),
             clear_aperture: None,
             surfaces: [40.0, -25.0, -200.0]
                 .map(|radius| PartSurface { radius, conic: 0.0 })
@@ -1271,6 +1279,7 @@ mod tests {
             coating: None,
             coatings: vec![],
             products: vec![],
+            adjusters: Vec::new(),
         };
         let crown = body("crown", [(0.0, 40.0), (8.0, -25.0)], Vec3::Z);
         let flint = body("flint", [(8.0, -25.0), (10.5, -200.0)], -Vec3::Z);

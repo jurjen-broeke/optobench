@@ -4,6 +4,8 @@
 //!
 //! - [`Part`]: one catalogue part as its spec sheet gives it (radii, centre thicknesses,
 //!   glasses, outline), with the spec sheet as its source.
+//! - Mounts ([`PartType::Mount`]): a mount's [`Adjuster`]s with their ranges, from its
+//!   spec sheet, given to an element by part number (`mount = "thorlabs/CXY1A"`).
 //! - [`Library`]: the parts the user has, looked up by key (`thorlabs/LA1951-ML`) or by
 //!   the name of a STEP product.
 //! - [`profile`] and [`compare`]: the prescription read back from a body's exact faces
@@ -33,6 +35,8 @@ pub enum PartType {
     Filter,
     /// A reflecting surface on a substrate.
     Mirror,
+    /// A mount that holds an optic and moves it: adjusters, no optics.
+    Mount,
 }
 
 impl PartType {
@@ -42,12 +46,18 @@ impl PartType {
             PartType::Lens => "lens",
             PartType::Filter => "filter",
             PartType::Mirror => "mirror",
+            PartType::Mount => "mount",
         }
     }
 
     /// Whether light passes through it (lenses and filters).
     pub fn transmits(self) -> bool {
-        !matches!(self, PartType::Mirror)
+        matches!(self, PartType::Lens | PartType::Filter)
+    }
+
+    /// Whether it is an optic (not a mount).
+    pub fn is_optic(self) -> bool {
+        !matches!(self, PartType::Mount)
     }
 }
 
@@ -126,6 +136,96 @@ pub enum CoatingSpec {
     Layers(Vec<LayerSpec>),
 }
 
+/// How a mount's adjuster moves what it holds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AdjusterKind {
+    /// Along its axis (mm).
+    Slide,
+    /// About its axis (degrees).
+    Tilt,
+}
+
+impl AdjusterKind {
+    /// The word in a file (`slide`, `tilt`), as DOFs write it.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            AdjusterKind::Slide => "slide",
+            AdjusterKind::Tilt => "tilt",
+        }
+    }
+}
+
+/// How far an adjuster goes, as the spec sheet gives it (mm for slides, degrees for
+/// tilts).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Reach {
+    /// No limit (a rotation mount's full turn).
+    Unlimited,
+    /// From `low` to `high` about where the part sits as built (±1 mm: −1 to 1).
+    Range {
+        /// Lowest.
+        low: f64,
+        /// Highest.
+        high: f64,
+    },
+    /// The whole travel, the part placed in its middle (12.7 mm: −6.35 to 6.35).
+    Travel(f64),
+}
+
+/// One adjuster of a mount: a DOF of the element it holds, in the element's own frame
+/// (+z along its optical axis).
+#[derive(Debug, Clone, PartialEq)]
+pub struct Adjuster {
+    /// Its name; the element's DOF is `<element id>_<name>`.
+    pub name: String,
+    /// Slide or tilt.
+    pub kind: AdjusterKind,
+    /// The axis it moves along or about, in the element's frame.
+    pub axis: Vec3,
+    /// For a tilt, the point it turns about in the element's frame (the element's origin
+    /// when not given).
+    pub pivot: Option<Vec3>,
+    /// How far it goes.
+    pub reach: Reach,
+}
+
+impl Adjuster {
+    /// Checks the adjuster on its own.
+    pub fn check(&self) -> Result<(), String> {
+        let name = &self.name;
+        let valid = !name.is_empty()
+            && name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')
+            && name.as_bytes()[0].is_ascii_alphabetic();
+        if !valid {
+            return Err(format!(
+                "adjuster `{name}`: a name is letters, digits and `_`, starting with a letter"
+            ));
+        }
+        if !(self.axis.length() > 0.0 && self.axis.length().is_finite()) {
+            return Err(format!("adjuster `{name}`: its axis has no direction"));
+        }
+        if self.kind == AdjusterKind::Slide && self.pivot.is_some() {
+            return Err(format!("adjuster `{name}`: a slide has no pivot"));
+        }
+        match self.reach {
+            Reach::Unlimited => {}
+            Reach::Range { low, high } => {
+                if !(low.is_finite() && high.is_finite() && low <= high) {
+                    return Err(format!(
+                        "adjuster `{name}`: its range runs from low to high"
+                    ));
+                }
+            }
+            Reach::Travel(travel) => {
+                if !(travel > 0.0 && travel.is_finite()) {
+                    return Err(format!("adjuster `{name}`: its travel must be positive"));
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
 /// One catalogue part.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Part {
@@ -137,8 +237,8 @@ pub struct Part {
     pub part_type: PartType,
     /// Where the numbers came from: the spec sheet's address or title.
     pub source: String,
-    /// The outline.
-    pub outline: Outline,
+    /// The outline (`None` for a mount).
+    pub outline: Option<Outline>,
     /// Clear aperture diameter (mm), when the spec sheet gives one.
     pub clear_aperture: Option<f64>,
     /// Surfaces in the order light meets them.
@@ -154,6 +254,8 @@ pub struct Part {
     pub coatings: Vec<CoatingSpec>,
     /// Other names of its STEP product, beyond the part number (a vendor's file name).
     pub products: Vec<String>,
+    /// A mount's adjusters (empty for optics).
+    pub adjusters: Vec<Adjuster>,
 }
 
 impl Part {
@@ -177,16 +279,23 @@ impl Part {
                 .any(|p| product.eq_ignore_ascii_case(p))
     }
 
-    /// The largest dimension of the outline (mm).
+    /// The largest dimension of the outline (mm; 0 without one).
     pub fn size(&self) -> f64 {
         match self.outline {
-            Outline::Round { diameter } => diameter,
-            Outline::Rectangular { width, height } => width.max(height),
+            Some(Outline::Round { diameter }) => diameter,
+            Some(Outline::Rectangular { width, height }) => width.max(height),
+            None => 0.0,
         }
     }
 
     /// Checks that the prescription is complete and consistent.
     pub fn check(&self) -> Result<(), String> {
+        if self.part_type == PartType::Mount {
+            return self.check_mount();
+        }
+        if !self.adjusters.is_empty() {
+            return Err("only a mount has adjusters".into());
+        }
         let n = self.surfaces.len();
         match self.part_type {
             PartType::Lens | PartType::Filter => {
@@ -217,6 +326,7 @@ impl Part {
                     return Err("a mirror has at most one substrate thickness and glass".into());
                 }
             }
+            PartType::Mount => unreachable!("checked above"),
         }
         if self.thickness.iter().any(|t| !(*t > 0.0 && t.is_finite())) {
             return Err("thicknesses must be positive".into());
@@ -229,8 +339,9 @@ impl Part {
             return Err("radii must be non-zero (\"inf\" for flat)".into());
         }
         let size = match self.outline {
-            Outline::Round { diameter } => diameter,
-            Outline::Rectangular { width, height } => width.min(height),
+            Some(Outline::Round { diameter }) => diameter,
+            Some(Outline::Rectangular { width, height }) => width.min(height),
+            None => return Err("an optic has an outline".into()),
         };
         if !(size > 0.0 && size.is_finite()) {
             return Err("the outline must have a positive size".into());
@@ -244,6 +355,30 @@ impl Part {
         if let Some(ca) = self.clear_aperture {
             if !(ca > 0.0 && ca <= self.size()) {
                 return Err("the clear aperture must be positive and fit in the outline".into());
+            }
+        }
+        Ok(())
+    }
+
+    /// A mount: adjusters with distinct names, and nothing optical.
+    fn check_mount(&self) -> Result<(), String> {
+        if self.adjusters.is_empty() {
+            return Err("a mount has at least one adjuster".into());
+        }
+        let optical = !self.surfaces.is_empty()
+            || !self.thickness.is_empty()
+            || !self.glass.is_empty()
+            || self.coating.is_some()
+            || !self.coatings.is_empty()
+            || self.outline.is_some()
+            || self.clear_aperture.is_some();
+        if optical {
+            return Err("a mount has adjusters only, no optics".into());
+        }
+        for (i, a) in self.adjusters.iter().enumerate() {
+            a.check()?;
+            if self.adjusters[..i].iter().any(|b| b.name == a.name) {
+                return Err(format!("two adjusters are named `{}`", a.name));
             }
         }
         Ok(())
@@ -334,6 +469,12 @@ impl Library {
     /// The part a STEP product of this name is, if any.
     pub fn for_product(&self, product: &str) -> Option<&Part> {
         self.parts.iter().find(|p| p.names_product(product))
+    }
+
+    /// The mount with this key (case ignored); `None` if there is none or the key names
+    /// an optic.
+    pub fn mount(&self, key: &str) -> Option<&Part> {
+        self.get(key).filter(|p| p.part_type == PartType::Mount)
     }
 }
 
@@ -502,7 +643,7 @@ pub fn compare(part: &Part, profile: &Profile, glass: usize, reversed: bool) -> 
     let [(t0, r0), (t1, r1)] = profile.surfaces[..] else {
         return None;
     };
-    if glass + 1 >= part.surfaces.len() || part.part_type == PartType::Mirror {
+    if glass + 1 >= part.surfaces.len() || !part.part_type.transmits() {
         return None;
     }
     let step_radii = if reversed { [-r1, -r0] } else { [r0, r1] };
@@ -539,7 +680,7 @@ pub fn compare(part: &Part, profile: &Profile, glass: usize, reversed: bool) -> 
             step: thickness,
         });
     }
-    if let (Outline::Round { diameter }, Some(rim)) = (part.outline, profile.rim_radius) {
+    if let (Some(Outline::Round { diameter }), Some(rim)) = (part.outline, profile.rim_radius) {
         let difference = (2.0 * rim - diameter).abs();
         fits &= difference <= 1.0;
         score += difference;

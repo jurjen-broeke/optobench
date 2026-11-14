@@ -435,3 +435,39 @@ fn dichroic_curve_splits_a_beam_at_45_degrees() {
     assert!((power(0) - 0.1).abs() < 1e-12, "transmitted {}", power(0));
     assert!(balanced(&ledger));
 }
+
+#[test]
+fn threads_give_the_same_trace_bit_for_bit() {
+    // Rays are independent and booked in their order, so a trace on several threads must
+    // equal the trace on one: records and ledger identical, not merely close. A split
+    // plate, rays fanned across it and past its edge (some clipped by the detector's
+    // edge, some escaping), enough of them for several threads.
+    let mut system = NonSequentialSystem::new(1.0.into());
+    let glass = system.add_medium(1.5.into());
+    let disk = Region::Disk { radius: 20.0 };
+    system.faces = vec![
+        plane(0.0, disk, REFRACT, AIR, glass),
+        plane(5.0, disk, REFRACT, glass, AIR),
+        detector(40.0),
+    ];
+    system.split_cutoff = Some(1e-9);
+    system.build_index();
+    let rays: Vec<Ray> = (0..2000)
+        .map(|k| {
+            let t = k as f64 / 2000.0;
+            let position = Vec3::new(60.0 * t - 30.0, 7.0 * (13.0 * t).sin(), -10.0);
+            let direction = Vec3::new(0.3 * (5.0 * t).cos(), 0.2 * t, 1.0);
+            Ray::new(position, direction, 0.55, 1e-3).expect("ray")
+        })
+        .collect();
+    system.threads = 1;
+    let one = system.trace_all(rays.clone());
+    for threads in [2, 3, 8] {
+        system.threads = threads;
+        let many = system.trace_all(rays.clone());
+        assert!(many.0 == one.0, "records differ on {threads} threads");
+        assert!(many.1 == one.1, "ledgers differ on {threads} threads");
+    }
+    assert!(one.0.len() > rays.len(), "rays were split");
+    assert!(balanced(&one.1));
+}

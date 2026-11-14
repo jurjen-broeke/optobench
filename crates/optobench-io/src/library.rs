@@ -31,12 +31,36 @@
 //!
 //! A STEP product named after the part number or one of `products` is the part: a
 //! sidecar tags its glass bodies automatically (see `sidecar`).
+//!
+//! A mount (M14 open question, 2026-11-14) is a part file of `type = "mount"` with its
+//! adjusters and their ranges from its spec sheet, and nothing optical:
+//!
+//! ```toml
+//! format = "optobench/1"
+//! kind = "part"
+//! part = "CXY1A"
+//! vendor = "Thorlabs"
+//! type = "mount"
+//! source = "Thorlabs CXY1A specifications: ±1 mm in X and Y"
+//! adjusters = [ { name = "x", kind = "slide", axis = "x", range = [-1, 1] },
+//!               { name = "y", kind = "slide", axis = "y", range = [-1, 1] } ]
+//! notes = "..."                     # optional
+//! ```
+//!
+//! An adjuster is `name`, `kind` ("slide", mm, or "tilt", degrees), `axis` ("x", "y",
+//! "z" or [x, y, z]) in the frame of the element the mount holds, optionally a tilt's
+//! `pivot` (that frame; default the element's own pivot), and `range` = [low, high] or
+//! `travel` (the whole travel, the part placed in its middle), or neither (unlimited).
+//! Designs name it by its key, `mount = "thorlabs/CXY1A"` (see `mounts`).
 
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use optobench_library::{Glass, Library, Outline, Part, PartSurface, PartType};
+use optobench_library::{
+    Adjuster, AdjusterKind, Glass, Library, Outline, Part, PartSurface, PartType, Reach,
+};
 use optobench_materials::Medium;
+use optobench_math::Vec3;
 use toml::{Table, Value};
 
 use crate::scene_file::{FileError, Item, MaterialLookup, check_header, check_keys, error};
@@ -72,6 +96,9 @@ pub fn parse(text: &str) -> Result<Part, FileError> {
     if item.text("kind")? != KIND {
         return Err(error("a part file has kind = \"part\""));
     }
+    if root.get("type").and_then(Value::as_str) == Some("mount") {
+        return parse_mount(&root, &item);
+    }
     check_keys(
         &root,
         &[
@@ -100,18 +127,18 @@ pub fn parse(text: &str) -> Result<Part, FileError> {
         "mirror" => PartType::Mirror,
         other => {
             return Err(error(format!(
-                "{}: type `{other}` is not known; use \"lens\", \"filter\" or \"mirror\"",
+                "{}: type `{other}` is not known; use \"lens\", \"filter\", \"mirror\" or \"mount\"",
                 item.context
             )));
         }
     };
     let outline = match (root.get("diameter"), root.get("size")) {
-        (Some(_), None) => Outline::Round {
+        (Some(_), None) => Some(Outline::Round {
             diameter: item.positive("diameter")?,
-        },
+        }),
         (None, Some(_)) => {
             let (width, height) = item.pair("size")?;
-            Outline::Rectangular { width, height }
+            Some(Outline::Rectangular { width, height })
         }
         _ => {
             return Err(error(format!(
@@ -206,18 +233,151 @@ pub fn parse(text: &str) -> Result<Part, FileError> {
         coating,
         coatings,
         products,
+        adjusters: Vec::new(),
     };
+    named(part, &item.context)
+}
+
+/// Checks the vendor and part number are file names, and the part as a whole.
+fn named(part: Part, context: &str) -> Result<Part, FileError> {
     for (what, name) in [("vendor", part.vendor.as_str()), ("part", &part.number)] {
         if !valid_name(name) {
             return Err(error(format!(
-                "{}: `{what}` may use letters, digits, `-`, `_`, `.` and `+`, starting with a letter or digit",
-                item.context
+                "{context}: `{what}` may use letters, digits, `-`, `_`, `.` and `+`, starting with a letter or digit",
             )));
         }
     }
-    part.check()
-        .map_err(|e| error(format!("{}: {e}", item.context)))?;
+    part.check().map_err(|e| error(format!("{context}: {e}")))?;
     Ok(part)
+}
+
+/// A part file of `type = "mount"`.
+fn parse_mount(root: &Table, item: &Item) -> Result<Part, FileError> {
+    let context = &item.context;
+    check_keys(
+        root,
+        &[
+            "format",
+            "kind",
+            "part",
+            "vendor",
+            "type",
+            "source",
+            "adjusters",
+            "notes",
+        ],
+        context,
+    )?;
+    if let Some(notes) = root.get("notes") {
+        notes
+            .as_str()
+            .ok_or_else(|| error(format!("{context}: `notes` must be text")))?;
+    }
+    let source = item.text("source")?;
+    if source.trim().is_empty() {
+        return Err(error(format!(
+            "{context}: say where the ranges come from (`source`, its spec sheet)"
+        )));
+    }
+    let list = root
+        .get("adjusters")
+        .and_then(Value::as_array)
+        .ok_or_else(|| {
+            error(format!(
+                "{context}: `adjusters` is a list of {{ name, kind, axis, range or travel }}"
+            ))
+        })?;
+    let adjusters = list
+        .iter()
+        .map(|a| {
+            let table = a
+                .as_table()
+                .ok_or_else(|| error(format!("{context}: each adjuster is a table")))?;
+            adjuster(table, context)
+        })
+        .collect::<Result<Vec<_>, FileError>>()?;
+    let part = Part {
+        vendor: item.text("vendor")?.to_owned(),
+        number: item.text("part")?.to_owned(),
+        part_type: PartType::Mount,
+        source: source.to_owned(),
+        outline: None,
+        clear_aperture: None,
+        surfaces: Vec::new(),
+        thickness: Vec::new(),
+        glass: Vec::new(),
+        coating: None,
+        coatings: Vec::new(),
+        products: Vec::new(),
+        adjusters,
+    };
+    named(part, context)
+}
+
+/// One adjuster of a mount part file.
+fn adjuster(table: &Table, context: &str) -> Result<Adjuster, FileError> {
+    let name = table.get("name").and_then(Value::as_str).unwrap_or("?");
+    let context = format!("{context} adjuster `{name}`");
+    check_keys(
+        table,
+        &["name", "kind", "axis", "pivot", "range", "travel"],
+        &context,
+    )?;
+    let a = Item {
+        table,
+        context: context.clone(),
+    };
+    let kind = match a.text("kind")? {
+        "slide" => AdjusterKind::Slide,
+        "tilt" => AdjusterKind::Tilt,
+        other => {
+            return Err(error(format!(
+                "{context}: kind `{other}` is not known; use \"slide\" (mm) or \"tilt\" (degrees)"
+            )));
+        }
+    };
+    let axis = match table.get("axis") {
+        Some(Value::String(axis)) => match axis.as_str() {
+            "x" => Vec3::X,
+            "y" => Vec3::Y,
+            "z" => Vec3::Z,
+            _ => {
+                return Err(error(format!(
+                    "{context}: `axis` is \"x\", \"y\", \"z\" or [x, y, z]"
+                )));
+            }
+        },
+        Some(_) => a.vector("axis")?,
+        None => return Err(error(format!("{context}: missing `axis`"))),
+    };
+    let pivot = match table.get("pivot") {
+        None => None,
+        Some(_) => Some(a.vector("pivot")?),
+    };
+    let reach = match (table.get("range"), table.get("travel")) {
+        (Some(_), Some(_)) => {
+            return Err(error(format!(
+                "{context}: give `range` or `travel`, not both"
+            )));
+        }
+        (None, None) => Reach::Unlimited,
+        (None, Some(_)) => Reach::Travel(a.positive("travel")?),
+        (Some(_), None) => {
+            let (low, high) = a.pair("range")?;
+            Reach::Range { low, high }
+        }
+    };
+    let adjuster = Adjuster {
+        name: a.text("name")?.to_owned(),
+        kind,
+        axis,
+        pivot,
+        reach,
+    };
+    adjuster
+        .check()
+        .map_err(|e| error(format!("{context}: {e}")))?;
+    Ok(adjuster)
 }
 
 /// A vendor or part number that is safe as a file name.

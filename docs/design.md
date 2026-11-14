@@ -231,6 +231,24 @@ products = ["ttn189114-e0w"]                            # other names of its STE
 
 A STEP product named after a part (its part number or one of `products`) is that part. The optical axis of each of its bodies comes from the rim cylinder (for a rectangular plate, its thinnest pair of opposite flat faces); `io` reads the radii and centre thicknesses from the exact spherical and planar faces along it and compares them with the library entry. The bodies that match are the part's glasses, the rest (the mount) absorbs. A difference above 0.05 mm is reported, catching simplified or wrong vendor models. Matching by product name rather than geometry fingerprint is deliberate: vendor product names are internal numbers, but SolidCraft names a component after its file, and its export merges faces, so fingerprints change (M5c1).
 
+A mount is a part file of `type = "mount"` with the adjusters its spec sheet gives and nothing optical (decided 2026-11-14; M14's open question):
+
+```toml
+format = "optobench/1"
+kind = "part"
+part = "CXY1A"
+vendor = "Thorlabs"
+type = "mount"
+source = "Thorlabs CXY1A specifications: ±1 mm in X and Y"
+adjusters = [ { name = "x", kind = "slide", axis = "x", range = [-1, 1] },
+              { name = "y", kind = "slide", axis = "y", range = [-1, 1] } ]
+                                          # kind "slide" (mm) or "tilt" (degrees, optional
+                                          # pivot); range = [low, high], travel = 12.7
+                                          # (the part placed in its middle), or neither
+```
+
+A design names it by its key, `mount = "thorlabs/CXY1A"`, as it names a `[[mount]]` of its own; its adjusters become the element's DOFs in the element's own frame (in a sidecar, the frame of the element's body in the STEP file, so a design may give an adjuster's `axis` itself), and `embed` keeps it in `[resolved]`. A `[[mount]]` in the design with the same id is used instead.
+
 **Standalone scene** (`<name>.optobench`) uses the same element, source and detector tables as the sidecar, but places elements itself instead of pointing at bodies. Example of a planar layout (values illustrative):
 
 ```toml
