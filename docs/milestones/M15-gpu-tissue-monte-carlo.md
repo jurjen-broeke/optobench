@@ -43,8 +43,21 @@ descriptions; no code is adapted.
       (ω/2) ∫ H = 1 − √(1 − ω) to 10⁻⁹), within 4σ; packets launched from a traced layout
       carry (1 − r) of the beam into a slab and cross it as the formula says; the
       balance closes to rounding (10⁻¹⁰)
-- [ ] Published slab benchmarks (exit criterion): van de Hulst's tables as MCML compares
-      with them, once those sources are in the corpus
+- [x] Published slab benchmarks (exit criterion, read 2026-11-14 from L. Wang, S. L. Jacques
+      and L. Zheng, Comput. Methods Programs Biomed. 47, 131 (1995), Tables 1 and 2, and
+      S. A. Prahl et al., SPIE IS 5, 102 (1989), Sect. 10; van de Hulst's book itself was
+      not available): an index-matched slab, µa = 10 /cm, µs = 90 /cm, g = 0.75,
+      d = 0.02 cm: diffuse reflectance 0.09739 and total transmittance 0.66096 (van de
+      Hulst's tables); a semi-infinite medium of relative index 1.5, same µa and µs,
+      g = 0: total reflection 0.2600 (Giovanelli 1955), the specular 0.04 included (Prahl
+      et al. call it total reflection; MCML adds the specular reflectance to its
+      unscattered reflectance, Sect. 4.1): ours within 4σ of each (commands
+      `tests/photon.rs`; MCML's own results 0.09734 ± 0.00035, 0.66096 ± 0.00020,
+      0.25907 ± 0.0017)
+- [x] Fluence: deep in a semi-infinite isotropic scatterer (albedo 0.9) the fluence decays
+      at k µt with k the root of (ω / 2k) ln((1 + k)/(1 − k)) = 1, the transport
+      equation's asymptotic solution (k = 0.5254; diffusion's √(3 (1 − ω)) = 0.5477 is 4 %
+      off): the walk's slope 0.5261 (to 3 %)
 
 ## M15b The tissue Monte Carlo on the GPU
 
@@ -74,6 +87,4 @@ descriptions; no code is adapted.
 
 ## Open questions
 
-- Which published slab benchmarks to use and where their numbers come from (van de
-  Hulst's tables; MCML's comparisons): the papers are needed in the corpus.
 - Polarisation in the tissue walk (ch. 7 of Welch and van Gemert): not planned.
