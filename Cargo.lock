@@ -2138,6 +2138,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "optobench-gpu"
+version = "0.0.1"
+dependencies = [
+ "optobench-analysis",
+ "optobench-math",
+ "pollster",
+ "wgpu",
+]
+
+[[package]]
 name = "optobench-io"
 version = "0.0.1"
 dependencies = [

@@ -5,6 +5,10 @@ with the release that introduced them.
 
 ## Unreleased
 
+- M15b tissue Monte Carlo on the GPU: new crate `optobench-gpu` runs the photon walk as a
+  wgpu compute kernel (f32, xoshiro128**, deposits in exact 64-bit fixed point), with the
+  CPU walk when no adapter is found. It meets the published slab benchmarks and equals
+  the CPU within statistical error; about 30× one CPU core on a laptop GPU.
 - M15a tissue Monte Carlo: `optobench_analysis::photon` walks weighted photon packets
   through a sample's layers (Henyey–Greenstein scattering, Fresnel at index steps, Russian
   roulette), launched from the traced rays where they enter the sample, recording

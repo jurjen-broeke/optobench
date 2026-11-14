@@ -1,7 +1,8 @@
 # M15 GPU and tissue Monte Carlo
 
 Exit criterion (docs/design.md, milestone table): the GPU equals the CPU within
-statistical error; tissue fluence matches published slab benchmarks.
+statistical error; tissue fluence matches published slab benchmarks. Both met
+2026-11-14 (M15a, M15b).
 
 Scope: photon transport in scattering tissue by Monte Carlo (Henyey–Greenstein
 scattering) replacing the diffusion approximation of M11 for fluence and heating, and
@@ -61,13 +62,27 @@ descriptions; no code is adapted.
 
 ## M15b The tissue Monte Carlo on the GPU
 
-- [ ] wgpu (MIT OR Apache-2.0) behind a feature; the photon walk as a WGSL compute
-      kernel (f32 on most GPUs: its accuracy against the f64 CPU measured), absorbed
-      power accumulated per cell, one generator stream per invocation
-- [ ] No adapter, or the feature off: the CPU path, the same interface
-- [ ] Check (exit criterion): the GPU's reflectance, transmittance and absorbed profile
-      equal the CPU's within their statistical errors (several seeds, a χ² over the
-      grid); the speed-up measured and written down
+- [x] Crate `optobench-gpu` (L4; wgpu 30, MIT OR Apache-2.0, the version eframe already
+      brings; pollster on desktop): `Gpu::new` (async; `blocking` on desktop) takes the
+      first adapter, `None` without one, and the caller runs the CPU walk; `Gpu::walk`
+      (`walk_blocking`) gives the same `Transport` as `photon::walk`
+- [x] The kernel (`walk.wgsl`): one invocation per packet, the CPU walk step by step in
+      f32; random numbers from xoshiro128** (Blackman and Vigna's 32-bit member), each
+      invocation seeded from (seed, batch, packet) by a 32-bit mixer; every deposit
+      (absorbed per cell, track per cell, outside, reflected, transmitted, per layer,
+      roulette, interactions) summed in 64-bit fixed point, 2⁻³⁰ of the largest launch
+      weight, from two u32 atomics with carry: exact and independent of the order the
+      invocations finish in; dispatched in chunks of 65 535 workgroups of 64
+- [x] Builds for wasm32 (in CI's engine build); on the web `walk` would need the browser's
+      event loop to finish (it waits by polling): not used there yet
+- [x] Checks (`optobench-gpu/tests/walk.rs`; skipped with a message without an adapter,
+      as on CI runners): van de Hulst's slab (0.09677, 0.66179 at 10⁶ packets; 0.09741
+      and 0.66096 at 1.6 × 10⁷: no f32 bias) and Giovanelli's medium (0.25929) within 4σ;
+      the exit criterion, the GPU against the CPU: a two-layer, forward-scattering,
+      index-mismatched stack, the absorbed depth profile (12 slices), reflectance and
+      transmittance from 8 independent batches each, χ² = 9.4 over 14 quantities (below
+      36.1, p = 0.999). Speed on an AMD Radeon Pro 555X against one core of an Intel Core
+      i7-8750H (both release): 6.5 µs against 195 µs per packet, 30×
 
 ## M15c Non-sequential batches on the GPU
 
