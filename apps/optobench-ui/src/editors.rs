@@ -492,6 +492,42 @@ pub fn board(ui: &mut Ui, drafts: &mut Drafts, board: &crate::board::Board) -> V
     operations
 }
 
+/// The edit a Move makes to a table layout's entry: a slide along x or y moves its hole
+/// by `amount / pitch` (fractions kept), along z its height; a turn about a scene axis
+/// turns its `axis` (degrees). `None` when the entry is not placed on the table.
+pub fn moved(
+    table: &str,
+    entry: &Value,
+    index: usize,
+    pitch: f64,
+    handle: crate::moving::Handle,
+    amount: f64,
+) -> Option<Value> {
+    let hole = [entry["hole"][0].as_f64()?, entry["hole"][1].as_f64()?];
+    let mut op = selector(table, entry, index);
+    op["op"] = json!("set");
+    match handle {
+        crate::moving::Handle::Slide(k @ (0 | 1)) => {
+            let mut new = hole;
+            new[k] += amount / pitch;
+            op["key"] = json!("hole");
+            op["value"] = json!([tidy(new[0]), tidy(new[1])]);
+        }
+        crate::moving::Handle::Slide(_) => {
+            op["key"] = json!("height");
+            op["value"] = tidy(entry["height"].as_f64()? + amount);
+        }
+        crate::moving::Handle::Turn(k) => {
+            let a = &entry["axis"];
+            let axis = [a[0].as_f64()?, a[1].as_f64()?, a[2].as_f64()?];
+            let turned = crate::moving::turned(axis, [0.0; 3], k, amount);
+            op["key"] = json!("axis");
+            op["value"] = json!(turned.map(tidy));
+        }
+    }
+    Some(op)
+}
+
 /// The tables whose entries carry degrees of freedom.
 const WITH_DOFS: &[&str] = &["element", "source", "detector"];
 
@@ -797,6 +833,38 @@ mod tests {
         assert_eq!(entry[0], json!(["id", "D1"]));
         // A sidecar is not a layout.
         assert!(add(&json!({ "kind": "sidecar" }), New::Lens).is_none());
+    }
+
+    #[test]
+    fn moves_write_holes_heights_and_axes() {
+        use crate::moving::Handle;
+        let entry = json!({ "id": "M1", "hole": [4, 0], "height": 75.0, "axis": [-1, 1, 0] });
+        let op = moved("element", &entry, 0, 25.0, Handle::Slide(0), 50.0).expect("an op");
+        assert_eq!(op["key"], "hole");
+        assert_eq!(op["value"], json!([6, 0]));
+        let op = moved("element", &entry, 0, 25.0, Handle::Slide(1), -12.5).expect("an op");
+        assert_eq!(op["value"], json!([4, -0.5]));
+        let op = moved("element", &entry, 0, 25.0, Handle::Slide(2), 25.0).expect("an op");
+        assert_eq!(
+            (op["key"].as_str(), op["value"].as_f64()),
+            (Some("height"), Some(100.0))
+        );
+        // A mirror facing (−1, 1, 0) turned 90° about z faces (−1, −1, 0).
+        let op = moved("element", &entry, 0, 25.0, Handle::Turn(2), 90.0).expect("an op");
+        assert_eq!(op["key"], "axis");
+        assert_eq!(op["value"], json!([-1, -1, 0]));
+        assert_eq!(op["id"], "M1");
+        assert!(
+            moved(
+                "element",
+                &json!({ "id": "L", "at": 5 }),
+                0,
+                25.0,
+                Handle::Slide(0),
+                1.0
+            )
+            .is_none()
+        );
     }
 
     #[test]

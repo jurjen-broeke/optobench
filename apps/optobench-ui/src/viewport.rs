@@ -29,6 +29,8 @@ pub struct Extras {
     pub board: Option<crate::board::Board>,
     /// Whether the breadboard is shown.
     pub show_board: bool,
+    /// The Move tool, when it is on.
+    pub moving: Option<crate::moving::MoveTool>,
 }
 
 impl Extras {
@@ -74,12 +76,15 @@ pub fn pick_mesh(
 }
 
 /// What the view asks the app to do.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Request {
     /// Select this item (index into the scene's items), or nothing.
     Select(Option<usize>),
     /// Fit the view to the scene.
     Fit,
+    /// Move the selected item by a dragged handle: mm along, or degrees about, a scene
+    /// axis.
+    Move(crate::moving::Handle, f64),
 }
 
 /// The colour of an item by its role.
@@ -156,8 +161,43 @@ pub fn show(
     let centre = (rect.center().x as f64, rect.center().y as f64);
     let high = rect.height() as f64;
 
+    // The Move tool's handles take a drag that starts on them.
+    if let Some(tool) = extras.moving.as_mut() {
+        if response.drag_started_by(egui::PointerButton::Primary) {
+            let start = ui.input(|i| i.pointer.press_origin());
+            if let Some((start, handle)) =
+                start.and_then(|p| Some((p, tool.handle_at(p, camera, rect)?)))
+            {
+                tool.drag = Some(crate::moving::Drag {
+                    handle,
+                    start,
+                    amount: 0.0,
+                });
+            }
+        }
+        if let (Some(drag), Some(pointer)) = (tool.drag, response.interact_pointer_pos()) {
+            let amount = tool.amount(drag.handle, drag.start, pointer, camera, rect);
+            tool.drag = Some(crate::moving::Drag { amount, ..drag });
+        }
+        if response.drag_stopped() {
+            if let Some(drag) = tool.drag.take() {
+                if drag.amount != 0.0 {
+                    requests.push(Request::Move(drag.handle, drag.amount));
+                }
+            }
+        }
+        if tool.drag.is_none() {
+            if let Some(p) = response.hover_pos() {
+                if tool.handle_at(p, camera, rect).is_some() {
+                    ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
+                }
+            }
+        }
+    }
+    let handle_dragged = extras.moving.as_ref().is_some_and(|t| t.drag.is_some());
+
     // Pointer: orbit, pan, zoom.
-    if response.dragged_by(egui::PointerButton::Primary) {
+    if response.dragged_by(egui::PointerButton::Primary) && !handle_dragged {
         let d = response.drag_delta();
         camera.orbit(d.x as f64, d.y as f64);
     }
@@ -358,6 +398,10 @@ pub fn show(
         }
     }
 
+    if let Some(tool) = &extras.moving {
+        tool.paint(&painter, camera, rect, accent.ink);
+    }
+
     // Sources on top: where the light starts and where it goes.
     if let Some(scene) = scene {
         for source in &scene.sources {
@@ -373,6 +417,9 @@ pub fn show(
     }
 
     gizmo(&painter, rect, camera);
+    if let Some(tool) = extras.moving.as_mut() {
+        move_panel(ui, rect, tool);
+    }
     if toolbar(ui, rect, camera, extras, scene, doc.is_some()) {
         requests.push(Request::Fit);
     }
@@ -419,6 +466,71 @@ fn gizmo(painter: &egui::Painter, rect: Rect, camera: &Camera) {
             label,
             egui::FontId::proportional(10.0),
             Color32::BLACK,
+        );
+    }
+}
+
+/// The Move tool's settings, floating at the view's top left: the steps moves and turns
+/// snap to.
+fn move_panel(ui: &mut egui::Ui, rect: Rect, tool: &mut crate::moving::MoveTool) {
+    let panel = Rect::from_min_size(
+        rect.left_top() + Vec2::new(12.0, 12.0),
+        Vec2::new(250.0, 92.0),
+    );
+    ui.painter().rect_filled(
+        panel,
+        egui::CornerRadius::same(DARK.radius_lg),
+        DARK.panel.gamma_multiply(0.92),
+    );
+    ui.painter().rect_stroke(
+        panel,
+        egui::CornerRadius::same(DARK.radius_lg),
+        Stroke::new(1.0, DARK.border),
+        StrokeKind::Inside,
+    );
+    let mut child = ui.new_child(
+        egui::UiBuilder::new()
+            .max_rect(panel.shrink(8.0))
+            .layout(egui::Layout::top_down(egui::Align::Min)),
+    );
+    child.label(egui::RichText::new("Move").strong());
+    child.horizontal(|ui| {
+        ui.label(egui::RichText::new("step").color(DARK.text_dim));
+        ui.add(
+            egui::DragValue::new(&mut tool.step)
+                .range(0.0..=1000.0)
+                .speed(0.1)
+                .suffix(" mm"),
+        );
+        if let Some(pitch) = tool.pitch {
+            if ui
+                .small_button("pitch")
+                .on_hover_text(format!("One hole: {pitch} mm"))
+                .clicked()
+            {
+                tool.step = pitch;
+            }
+        }
+    });
+    child.horizontal(|ui| {
+        ui.label(egui::RichText::new("turn").color(DARK.text_dim));
+        ui.add(
+            egui::DragValue::new(&mut tool.turn_step)
+                .range(0.0..=180.0)
+                .speed(0.1)
+                .suffix(" °"),
+        );
+        ui.label(
+            egui::RichText::new("0: no snapping")
+                .color(DARK.text_dim)
+                .size(11.0),
+        );
+    });
+    if tool.target.is_none() {
+        child.label(
+            egui::RichText::new("Select an item of the layout to move it")
+                .color(DARK.text_dim)
+                .size(11.0),
         );
     }
 }

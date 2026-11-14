@@ -31,6 +31,9 @@ pub struct App {
     show_rays: bool,
     /// Whether a table layout's breadboard is drawn.
     show_board: bool,
+    /// The Move tool, when it is on (its steps are kept while it is off).
+    move_on: bool,
+    move_tool: crate::moving::MoveTool,
     fit_pending: bool,
     open_path: String,
     /// Where imported materials, parts and curves are; empty for the platform's default.
@@ -78,6 +81,35 @@ fn origin_of(scene: &crate::document::Scene, id: &str) -> Option<crate::camera::
         .find(|i| i.id == id)
         .and_then(|i| i.origin)
         .or_else(|| scene.sources.iter().find(|s| s.id == id).map(|s| s.origin))
+}
+
+/// The layout entry selected (an item, or a source chosen in the browser), with its
+/// place in the file, where it sits and its outline: what the Move tool moves.
+#[allow(clippy::type_complexity)]
+fn movable(
+    scene: &crate::document::Scene,
+    selected: Option<usize>,
+    focus: Option<&(String, String)>,
+) -> Option<(
+    String,
+    Value,
+    usize,
+    crate::camera::V3,
+    Vec<Vec<crate::camera::V3>>,
+)> {
+    if scene.design["layout"] != "table" {
+        return None;
+    }
+    if let Some(item) = selected.and_then(|i| scene.items.get(i)) {
+        let (table, entry, index) = entry_of(&scene.design, &item.id)?;
+        return Some((table, entry, index, item.origin?, item.lines.clone()));
+    }
+    let (table, id) = focus.filter(|(t, _)| t == "source")?;
+    let source = scene.sources.iter().find(|s| &s.id == id)?;
+    let (_, entry, index) = entry_of(&scene.design, id)?;
+    let o = source.origin;
+    let tip = [0, 1, 2].map(|k| o[k] + source.axis[k] * 20.0);
+    Some((table.clone(), entry, index, o, vec![vec![o, tip]]))
 }
 
 /// A few words on what operations change, for the runs strip.
@@ -138,6 +170,8 @@ impl App {
             hidden: Vec::new(),
             show_rays: true,
             show_board: true,
+            move_on: false,
+            move_tool: crate::moving::MoveTool::default(),
             fit_pending: false,
             open_path: String::new(),
             data_directory: data_directory
@@ -179,6 +213,9 @@ impl App {
             .and_then(|w| w.parse::<usize>().ok())
         {
             app.workspace = w.min(WORKSPACES.len() - 1);
+        }
+        if std::env::var_os("OPTOBENCH_UI_MOVE").is_some() {
+            app.move_on = true;
         }
         if let Some(stage) = std::env::var("OPTOBENCH_UI_STAGE")
             .ok()
@@ -270,6 +307,16 @@ impl App {
                 Action::Apply => {
                     if let Some(doc) = &mut self.doc {
                         doc.apply_optimised();
+                    }
+                }
+                Action::Move => {
+                    self.move_on = !self.move_on;
+                    self.move_tool.drag = None;
+                    // The pitch is the step to start with on a table.
+                    if let Some(pitch) = self.design().and_then(|d| d["table"]["pitch"].as_f64()) {
+                        if self.move_tool.pitch != Some(pitch) {
+                            self.move_tool.step = pitch;
+                        }
                     }
                 }
             },
@@ -1761,6 +1808,15 @@ impl eframe::App for App {
                     .and_then(|d| d.scene.as_ref())
                     .and_then(|s| crate::board::Board::of(&s.design, s));
                 self.view.show_board = self.show_board;
+                self.view.moving = self.move_on.then(|| {
+                    let mut tool = self.move_tool.clone();
+                    let scene = self.doc.as_ref().and_then(|d| d.scene.as_ref());
+                    tool.pitch = scene.and_then(|s| s.design["table"]["pitch"].as_f64());
+                    tool.target = scene
+                        .and_then(|s| movable(s, self.selected, self.focus.as_ref()))
+                        .map(|(_, _, _, origin, outline)| (origin, outline));
+                    tool
+                });
                 viewport::show(
                     ui,
                     &mut self.camera,
@@ -1773,13 +1829,35 @@ impl eframe::App for App {
                 )
             })
             .inner;
+        // The Move tool's steps and drag live on in the app.
+        if let Some(tool) = self.view.moving.take() {
+            self.move_tool = tool;
+        }
         for request in requests {
             match request {
                 Request::Select(index) => {
-                    self.selected = index;
-                    self.focus = None;
+                    // While moving, a click beside the handles keeps what is selected.
+                    if !(self.move_on && index.is_none()) {
+                        self.selected = index;
+                        self.focus = None;
+                    }
                 }
                 Request::Fit => self.fit_pending = true,
+                Request::Move(handle, amount) => {
+                    let found = self
+                        .doc
+                        .as_ref()
+                        .and_then(|d| d.scene.as_ref())
+                        .and_then(|s| {
+                            let pitch = s.design["table"]["pitch"].as_f64()?;
+                            let (table, entry, index, _, _) =
+                                movable(s, self.selected, self.focus.as_ref())?;
+                            editors::moved(&table, &entry, index, pitch, handle, amount)
+                        });
+                    if let Some(op) = found {
+                        self.apply(vec![op]);
+                    }
+                }
             }
         }
         self.confirm_dialog(&ctx);
@@ -1991,6 +2069,94 @@ mod exit {
                 &json!({ "path": path.to_string_lossy(), "data_directory": data.to_string_lossy() }),
             )
             .expect("traces")
+    }
+
+    #[test]
+    fn an_item_is_moved_and_turned_by_dragging_its_handles() {
+        // The table periscope's screen at hole (8, 0): Move on, its x arrow dragged
+        // about two pitches to the right (seen from above) puts it at hole (10, 0); its
+        // ring about z dragged a quarter turn turns its axis from +x to +y.
+        let dir = scratch("move");
+        let path = dir.join("periscope.optobench");
+        std::fs::copy(
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/table-periscope.optobench"),
+            &path,
+        )
+        .expect("copied");
+        let mut h = window(Some(path.clone()), &dir);
+        settle(&mut h);
+        click(&mut h, "Move");
+        let index = h
+            .state()
+            .doc
+            .as_ref()
+            .and_then(|d| d.scene.as_ref())
+            .and_then(|s| s.items.iter().position(|i| i.id == "screen"))
+            .expect("the screen");
+        h.state_mut().selected = Some(index);
+        h.state_mut().camera.top();
+        h.step();
+        h.step();
+        let drag = |h: &mut Harness<'static, App>, from: egui::Pos2, to: egui::Pos2| {
+            h.event(egui::Event::PointerMoved(from));
+            h.step();
+            h.event(egui::Event::PointerButton {
+                pos: from,
+                button: egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: egui::Modifiers::NONE,
+            });
+            h.step();
+            for k in 1..=10 {
+                h.event(egui::Event::PointerMoved(
+                    from + (to - from) * (k as f32 / 10.0),
+                ));
+                h.step();
+            }
+            h.event(egui::Event::PointerButton {
+                pos: to,
+                button: egui::PointerButton::Primary,
+                pressed: false,
+                modifiers: egui::Modifiers::NONE,
+            });
+            h.step();
+            settle(h);
+        };
+        let at = |h: &Harness<'static, App>| {
+            let app = h.state();
+            let rect = app.view.rect.expect("drawn");
+            let scene = app
+                .doc
+                .as_ref()
+                .and_then(|d| d.scene.as_ref())
+                .expect("a scene");
+            let origin = scene.items[index].origin.expect("placed");
+            let (x, y) = app.camera.to_screen(
+                origin,
+                (rect.center().x as f64, rect.center().y as f64),
+                rect.height() as f64,
+            );
+            (
+                egui::pos2(x as f32, y as f32),
+                25.0 * rect.height() / app.camera.height as f32,
+            )
+        };
+        let (centre, pitch) = at(&h);
+        let start = centre + egui::vec2(40.0, 0.0);
+        drag(&mut h, start, start + egui::vec2(2.1 * pitch, 0.0));
+        let text = std::fs::read_to_string(&path).expect("written");
+        assert!(text.contains("hole = [10, 0]"), "{text}");
+        let (centre, _) = at(&h);
+        // On the ring at 45°, clear of the arrows, a quarter turn counter-clockwise.
+        let r = 56.0 * std::f32::consts::FRAC_1_SQRT_2;
+        drag(
+            &mut h,
+            centre + egui::vec2(r, -r),
+            centre + egui::vec2(-r, -r),
+        );
+        let text = std::fs::read_to_string(&path).expect("written");
+        assert!(text.contains("axis = [0, 1, 0]"), "{text}");
+        assert!(errors(&h).is_empty(), "{:?}", errors(&h));
     }
 
     #[test]
