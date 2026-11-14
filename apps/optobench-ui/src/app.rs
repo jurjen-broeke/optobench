@@ -52,6 +52,10 @@ pub struct App {
     /// The graph cursor of the last frame (its x quantity and value), shown on graphs
     /// whose x measures the same.
     graph_cursor: Option<(optobench_analysis::graph::Unit, f64)>,
+    /// The Graph button's chooser is open.
+    graph_dialog: bool,
+    /// The kinds ticked in it (kept for next time).
+    graph_choice: Vec<&'static str>,
 }
 
 /// Where in the design file an item of the view is written: its table and the entry.
@@ -164,6 +168,8 @@ impl App {
                 done: Default::default(),
             }),
             graph_cursor: None,
+            graph_dialog: false,
+            graph_choice: vec!["spot"],
         };
         if let Some(path) = path {
             app.open(path);
@@ -267,6 +273,7 @@ impl App {
                     }
                 }
             },
+            Control::Command("graph") => self.graph_dialog = true,
             Control::Command(id) => {
                 let writes = optobench_commands::Registry::standard()
                     .get(id)
@@ -1371,51 +1378,138 @@ impl App {
         });
     }
 
-    /// The graphs: which one the Graph button draws, and the last three drawn.
+    /// The graphs: one shown at a time, a switcher between those open, a mark on graphs
+    /// drawn before the design last changed, Redraw and Close.
     fn graphs_panel(&mut self, ui: &mut egui::Ui) {
         let App {
             doc, graph_cursor, ..
         } = self;
         let Some(doc) = doc else { return };
         let mut hovered = None;
+        let mut redraw: Option<String> = None;
+        let mut close = None;
+        let width = (ui.available_width() * 0.5).max(380.0);
         ui.vertical(|ui| {
+            ui.set_width(width);
             ui.horizontal(|ui| {
                 ui.label(RichText::new("Graphs").strong());
-                let name = crate::graphs::KINDS
-                    .iter()
-                    .find(|(id, _)| *id == doc.graph_kind)
-                    .map_or("?", |(_, name)| name);
-                egui::ComboBox::new("graph kind", "drawn by Graph")
-                    .selected_text(name)
+                if doc.graphs.is_empty() {
+                    return;
+                }
+                let shown = doc.shown_graph.min(doc.graphs.len() - 1);
+                egui::ComboBox::new("open graphs", "")
+                    .selected_text(doc.graphs[shown].graph.title.clone())
                     .show_ui(ui, |ui| {
-                        for (id, name) in crate::graphs::KINDS {
-                            ui.selectable_value(&mut doc.graph_kind, id, *name);
+                        for i in 0..doc.graphs.len() {
+                            let title = doc.graphs[i].graph.title.clone();
+                            let stale = doc.out_of_date(&doc.graphs[i]);
+                            let label = if stale {
+                                format!("{title} · out of date")
+                            } else {
+                                title
+                            };
+                            ui.selectable_value(&mut doc.shown_graph, i, label);
                         }
                     });
+                let graph = &doc.graphs[shown];
+                if doc.out_of_date(graph) {
+                    // The reload icon with a warning dot: drawn before the last change.
+                    let (rect, response) = ui.allocate_exact_size(Vec2::splat(16.0), Sense::hover());
+                    crate::icons::draw(ui.painter(), rect, "reload", true);
+                    ui.painter()
+                        .circle_filled(rect.right_top() + Vec2::new(-2.0, 2.0), 3.0, DARK.warning);
+                    response.on_hover_text("Out of date: the design changed after this graph was drawn");
+                }
+                if ui
+                    .small_button("Redraw")
+                    .on_hover_text("Draw this graph again from the design as it is now")
+                    .clicked()
+                {
+                    redraw = Some(graph.kind.clone());
+                }
+                if ui.small_button("×").on_hover_text("Close this graph").clicked() {
+                    close = Some(shown);
+                }
             });
             if doc.graphs.is_empty() {
                 ui.label(
-                    RichText::new("Choose one and press Graph; scroll to zoom, drag to pan, double-click to fit")
+                    RichText::new("Graph draws the graphs you choose; scroll to zoom, drag to pan, double-click to fit")
                         .color(DARK.text_dim),
                 );
                 return;
             }
+            let shown = doc.shown_graph.min(doc.graphs.len() - 1);
             let height = ui.available_height().max(150.0);
-            ui.horizontal_top(|ui| {
-                for (graph, view) in &mut doc.graphs {
-                    if let Some(c) = crate::graphs::show(
-                        ui,
-                        graph,
-                        view,
-                        *graph_cursor,
-                        Vec2::new(380.0, height),
-                    ) {
-                        hovered = Some(c);
-                    }
-                }
-            });
+            let open = &mut doc.graphs[shown];
+            if let Some(c) = crate::graphs::show(
+                ui,
+                &open.graph,
+                &mut open.view,
+                *graph_cursor,
+                Vec2::new(width, height),
+            ) {
+                hovered = Some(c);
+            }
         });
         *graph_cursor = hovered;
+        if let Some(kind) = redraw {
+            doc.draw_graphs(&[kind]);
+        }
+        if let Some(i) = close {
+            doc.graphs.remove(i);
+            doc.shown_graph = doc.shown_graph.min(doc.graphs.len().saturating_sub(1));
+        }
+    }
+
+    /// The Graph button's chooser: tick the graphs to draw, all at once.
+    fn graph_dialog(&mut self, ctx: &egui::Context) {
+        if !self.graph_dialog {
+            return;
+        }
+        let mut open = true;
+        let mut draw = false;
+        egui::Window::new("Graphs to draw")
+            .collapsible(false)
+            .resizable(false)
+            .open(&mut open)
+            .anchor(egui::Align2::CENTER_CENTER, Vec2::ZERO)
+            .show(ctx, |ui| {
+                for (id, name) in crate::graphs::KINDS {
+                    let mut on = self.graph_choice.contains(id);
+                    if ui.checkbox(&mut on, *name).changed() {
+                        if on {
+                            self.graph_choice.push(id);
+                        } else {
+                            self.graph_choice.retain(|k| k != id);
+                        }
+                    }
+                }
+                ui.separator();
+                ui.horizontal(|ui| {
+                    let some = !self.graph_choice.is_empty();
+                    if ui.add_enabled(some, egui::Button::new("Draw")).clicked() {
+                        draw = true;
+                    }
+                    if ui.button("Cancel").clicked() {
+                        self.graph_dialog = false;
+                    }
+                });
+            });
+        if draw {
+            // In the list's order, so the first ticked is shown.
+            let kinds: Vec<String> = crate::graphs::KINDS
+                .iter()
+                .filter(|(id, _)| self.graph_choice.contains(id))
+                .map(|(id, _)| (*id).to_owned())
+                .collect();
+            if let Some(doc) = &mut self.doc {
+                doc.draw_graphs(&kinds);
+            }
+            self.graph_dialog = false;
+        }
+        if !open {
+            self.graph_dialog = false;
+        }
     }
 
     /// Messages, the power ledger, detectors, runs and the last command's output.
@@ -1690,6 +1784,7 @@ impl eframe::App for App {
         }
         self.confirm_dialog(&ctx);
         self.licence_dialog(&ctx);
+        self.graph_dialog(&ctx);
         self.screenshot(&ctx);
     }
 }
@@ -1917,26 +2012,50 @@ mod exit {
         settle(&mut h);
         click(&mut h, "Workspace");
         click(&mut h, "Simulate");
+        // Graph asks what to draw: Spot is ticked to start with.
         click(&mut h, "Graph");
+        click(&mut h, "Draw");
         assert!(errors(&h).is_empty(), "{:?}", errors(&h));
         let titles = |h: &Harness<'static, App>| -> Vec<String> {
             h.state()
                 .doc
                 .as_ref()
-                .map(|d| d.graphs.iter().map(|(g, _)| g.title.clone()).collect())
+                .map(|d| d.graphs.iter().map(|g| g.graph.title.clone()).collect())
                 .unwrap_or_default()
         };
         assert_eq!(titles(&h), ["Spot diagram on `focus`"]);
-        if let Some(doc) = h.state_mut().doc.as_mut() {
-            doc.graph_kind = "psf-lateral"; // chosen in the Graphs list
-        }
+        // The PSF ticked and the spot unticked: the PSF is added and shown, the spot
+        // stays open to switch back to.
         click(&mut h, "Graph");
+        click(&mut h, "PSF across the peak");
+        click(&mut h, "Spot diagram");
+        click(&mut h, "Draw");
         assert_eq!(
             titles(&h),
-            ["PSF across the peak", "Spot diagram on `focus`"]
+            ["Spot diagram on `focus`", "PSF across the peak"]
         );
-        // The newest graph is first, at the left of the results strip: the pointer on its
-        // plot reads a length along x.
+        let shown = |h: &Harness<'static, App>| h.state().doc.as_ref().map_or(9, |d| d.shown_graph);
+        assert_eq!(shown(&h), 1, "only the PSF was left ticked");
+        // An edit leaves the open graphs out of date until redrawn.
+        let doc = h.state().doc.as_ref().expect("open");
+        assert!(!doc.out_of_date(&doc.graphs[1]));
+        if let Some(doc) = h.state_mut().doc.as_mut() {
+            doc.edit(
+                vec![serde_json::json!({ "op": "set", "table": "detector", "id": "focus", "key": "at", "value": 85.01 })],
+                "detector",
+            );
+        }
+        settle(&mut h);
+        let doc = h.state().doc.as_ref().expect("open");
+        assert!(doc.out_of_date(&doc.graphs[1]) && doc.out_of_date(&doc.graphs[0]));
+        click(&mut h, "Redraw");
+        let doc = h.state().doc.as_ref().expect("open");
+        assert!(
+            !doc.out_of_date(&doc.graphs[1]),
+            "the shown graph is redrawn"
+        );
+        assert!(doc.out_of_date(&doc.graphs[0]), "the other one is not");
+        // The pointer on the shown graph's plot reads a length along x.
         let strip = h
             .query_all_by_label("Graphs")
             .next()
