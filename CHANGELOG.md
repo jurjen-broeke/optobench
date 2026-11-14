@@ -5,6 +5,13 @@ with the release that introduced them.
 
 ## Unreleased
 
+Nothing yet.
+
+## 0.1.0 (2026-11-14)
+
+The first numbered version: everything up to and including M16. From here each merged
+pull request raises the version (AGENTS.md, Versions).
+
 - M16 table layouts in the interface: Properties shows positions as X, Y, Z in mm (typed
   on a table layout), with labelled vectors and units; the breadboard is drawn under
   the items (`[table]` `columns`, `rows`, `corner`, optional) with a post from each item

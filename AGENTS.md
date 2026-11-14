@@ -29,6 +29,22 @@ The design is in `docs/design.md`; read the section for the area you touch befor
   The extension is `.optobench`; kinds are `sidecar`, `layout`, `part`. New names must pass
   `cargo xtask naming` and a read-aloud check in Dutch, German, French and Spanish.
 
+## Versions
+
+The application's version (`version` in the root `Cargo.toml`, shown by `optobench
+version` and in the window's title bar) follows semantic versioning; it is separate from
+the file-format number (`optobench/<N>`, see `docs/design.md`). 0.1.0 was set on
+2026-11-14. Every merged pull request raises it once:
+
+- a pull request that adds features: the minor number, +0.1.0 (0.1.0 → 0.2.0);
+- one with only bug fixes or performance improvements: the patch number, +0.0.1;
+- the first releasable version will be 1.0.0. From then on, once ten feature pull
+  requests have been merged since the last major version (the minor number would reach
+  10), the next one raises the major number instead: +1.0.0, minor and patch back to 0.
+
+The pull request sets the new version in `Cargo.toml` and moves its CHANGELOG lines from
+"Unreleased" under a heading with that version and the date.
+
 ## Before you open a pull request
 
 ```
