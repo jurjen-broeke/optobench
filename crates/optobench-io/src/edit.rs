@@ -121,9 +121,26 @@ fn entries<'a>(doc: &'a mut DocumentMut, table: &str) -> Result<&'a mut ArrayOfT
         .ok_or_else(|| error(format!("the file has no [[{table}]]")))
 }
 
-/// The entry an operation names: `table` with `id`, or with `index`; or the file's top
-/// level when it names no table.
+/// The sections of one table each that operations may change by `section` (created when
+/// missing): a table layout's breadboard, a planar layout's axis, the trace options.
+const SECTIONS: &[&str] = &["table", "planar", "trace"];
+
+/// The entry an operation names: `table` with `id`, or with `index`; a `section`
+/// (`[table]`); or the file's top level when it names neither.
 fn entry<'a>(doc: &'a mut DocumentMut, op: &Json) -> Result<&'a mut Table, EditError> {
+    if let Some(section) = op.get("section") {
+        let section = section
+            .as_str()
+            .filter(|s| SECTIONS.contains(s))
+            .ok_or_else(|| error(format!("`section`: one of {}", SECTIONS.join(", "))))?;
+        if doc.get(section).is_none() {
+            doc.insert(section, Item::Table(Table::new()));
+        }
+        return doc
+            .get_mut(section)
+            .and_then(Item::as_table_mut)
+            .ok_or_else(|| error(format!("[{section}] is not a table")));
+    }
     let Some(table) = op.get("table") else {
         return Ok(doc.as_table_mut());
     };
@@ -378,6 +395,37 @@ mod tests {
         [[element]]\nid = \"M1\"  # the first mirror\nkind = \"mirror\"\nhole = [4, 0]\nheight = 50.0\n\
         dof = [ { name = \"M1_y\", kind = \"tilt\", axis = [0, 1, 0], range = [-2, 2] } ]\n\n\
         [[merit]]\nkind = \"centring\"\ndetector = \"screen\"\n";
+
+    #[test]
+    fn sections_are_set_in_place_or_made() {
+        let out = edit(
+            LAYOUT,
+            &[
+                json!({"op": "set", "section": "table", "key": "pitch", "value": 25.4}),
+                json!({"op": "set", "section": "table", "key": "columns", "value": 24}),
+                json!({"op": "set", "section": "trace", "key": "threads", "value": 1}),
+            ],
+        )
+        .expect("edits");
+        assert!(
+            out.contains("# The breadboard.\n[table]\npitch = 25.4\n"),
+            "{out}"
+        );
+        assert!(out.contains("columns = 24"));
+        assert!(out.contains("[trace]\nthreads = 1"), "{out}");
+        let back = edit(
+            &out,
+            &[json!({"op": "unset", "section": "table", "key": "columns"})],
+        )
+        .expect("edits");
+        assert!(!back.contains("columns"));
+        let e = edit(
+            LAYOUT,
+            &[json!({"op": "set", "section": "element", "key": "x", "value": 1})],
+        )
+        .expect_err("not a section");
+        assert!(e.0.contains("one of table, planar, trace"), "{}", e.0);
+    }
 
     #[test]
     fn set_keeps_comments_and_the_rest_of_the_file() {

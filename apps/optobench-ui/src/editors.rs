@@ -166,8 +166,12 @@ fn field(
         Value::String(s) => text(ui, drafts, path, s, 140.0).map(Value::String),
         Value::Array(items) if items.iter().all(Value::is_number) => {
             let mut changed = None;
+            let names = component_names(key, items.len());
             ui.horizontal(|ui| {
                 for (k, item) in items.iter().enumerate() {
+                    if let Some(name) = names.get(k) {
+                        ui.label(RichText::new(*name).color(DARK.text_dim).size(11.0));
+                    }
                     let component = format!("{path}/{k}");
                     if let Some(v) = field(ui, drafts, &component, table, "", item, context) {
                         let mut new = items.clone();
@@ -194,6 +198,8 @@ pub struct Context {
     pub detectors: Vec<String>,
     /// Whether the file is a sidecar (CAD).
     pub sidecar: bool,
+    /// A table layout's hole pitch (mm).
+    pub pitch: Option<f64>,
 }
 
 impl Context {
@@ -209,11 +215,124 @@ impl Context {
                 })
                 .unwrap_or_default(),
             sidecar: design["kind"] == "sidecar",
+            pitch: (design["layout"] == "table")
+                .then(|| design["table"]["pitch"].as_f64())
+                .flatten(),
         }
     }
 }
 
+/// The names of a list's numbers, by its key: `hole` [column, row], a size [width,
+/// height], a vector [x, y, z].
+fn component_names(key: &str, count: usize) -> &'static [&'static str] {
+    match (key, count) {
+        ("hole" | "corner", 2) => &["column", "row"],
+        ("size", 2) => &["width", "height"],
+        ("pixels", 2) => &["across", "up"],
+        ("offset", 2) => &["x", "y"],
+        (_, 3) => &["x", "y", "z"],
+        _ => &[],
+    }
+}
+
+/// The unit of a key's numbers, shown after its field.
+fn unit(key: &str) -> Option<&'static str> {
+    Some(match key {
+        "at" | "height" | "diameter" | "clear_aperture" | "focal_length" | "working_distance"
+        | "pupil_distance" | "inner_diameter" | "hole_diameter" | "length" | "waist_diameter"
+        | "core_diameter" | "thickness" | "size" | "pitch" => "mm",
+        "wavelength_um" => "µm",
+        "power_w" => "W",
+        "fold" | "half_angle_deg" => "°",
+        _ => return None,
+    })
+}
+
+/// A number rounded to 1e-9, and whole when it is whole (holes stay `[4, 0]`).
+pub fn tidy(v: f64) -> Value {
+    let r = (v * 1e9).round() / 1e9;
+    if r.fract() == 0.0 && r.abs() < 1e15 {
+        json!(r as i64)
+    } else {
+        json!(r)
+    }
+}
+
+/// The position of an entry (mm, scene frame): on a table layout X, Y and Z to type,
+/// written back as its hole and height; otherwise as the scene placed it, to read.
+fn position(
+    ui: &mut Ui,
+    drafts: &mut Drafts,
+    base: &str,
+    target: &Value,
+    entry: &Value,
+    origin: Option<V3>,
+    context: &Context,
+) -> Vec<Value> {
+    let mut operations = Vec::new();
+    let table = context
+        .pitch
+        .filter(|_| entry["hole"].is_array() && entry["height"].is_number());
+    if table.is_none() && origin.is_none() {
+        return operations;
+    }
+    ui.label(RichText::new("Position").strong());
+    egui::Grid::new(format!("position-{base}"))
+        .num_columns(3)
+        .spacing([10.0, 4.0])
+        .show(ui, |ui| match table {
+            Some(pitch) => {
+                let hole = [
+                    entry["hole"][0].as_f64().unwrap_or(0.0),
+                    entry["hole"][1].as_f64().unwrap_or(0.0),
+                ];
+                let height = entry["height"].as_f64().unwrap_or(0.0);
+                for (k, label) in ["X", "Y", "Z"].into_iter().enumerate() {
+                    ui.label(RichText::new(label).color(DARK.text_dim));
+                    let current = if k < 2 { hole[k] * pitch } else { height };
+                    let path = format!("{base}/position/{k}");
+                    if let Some(v) = number(ui, drafts, &path, current) {
+                        let mut op = target.clone();
+                        op["op"] = json!("set");
+                        if k < 2 {
+                            let mut new = hole;
+                            new[k] = v / pitch;
+                            op["key"] = json!("hole");
+                            op["value"] = json!([tidy(new[0]), tidy(new[1])]);
+                        } else {
+                            op["key"] = json!("height");
+                            op["value"] = tidy(v);
+                        }
+                        operations.push(op);
+                    }
+                    ui.label(RichText::new("mm").color(DARK.text_dim).size(11.0));
+                    ui.end_row();
+                }
+            }
+            None => {
+                let p = origin.unwrap_or([0.0; 3]);
+                for (k, label) in ["X", "Y", "Z"].into_iter().enumerate() {
+                    ui.label(RichText::new(label).color(DARK.text_dim));
+                    ui.label(format!("{:.3}", p[k] + 0.0));
+                    ui.label(RichText::new("mm").color(DARK.text_dim).size(11.0));
+                    ui.end_row();
+                }
+            }
+        });
+    if table.is_some() {
+        ui.label(
+            RichText::new("X and Y move it by holes (fractions allowed), Z is its height")
+                .color(DARK.text_dim)
+                .size(11.0),
+        );
+    }
+    ui.add_space(4.0);
+    operations
+}
+
 /// The editor of one entry and its degrees of freedom; returns the operations to apply.
+///
+/// `origin` is where the scene placed it (mm), shown as its position.
 pub fn entry(
     ui: &mut Ui,
     drafts: &mut Drafts,
@@ -221,18 +340,24 @@ pub fn entry(
     entry: &Value,
     index: usize,
     context: &Context,
+    origin: Option<V3>,
 ) -> Vec<Value> {
     let target = selector(table, entry, index);
     let base = format!(
         "{table}/{}",
         entry["id"].as_str().unwrap_or(&index.to_string())
     );
-    let mut operations = Vec::new();
+    let mut operations = position(ui, drafts, &base, &target, entry, origin, context);
+    // On a table layout the height is the position's Z.
+    let shown_as_z = context.pitch.is_some() && entry["hole"].is_array();
     egui::Grid::new(format!("entry-{base}"))
-        .num_columns(2)
+        .num_columns(3)
         .spacing([10.0, 4.0])
         .show(ui, |ui| {
             for key in keys(entry) {
+                if shown_as_z && key == "height" {
+                    continue;
+                }
                 ui.label(RichText::new(&key).color(DARK.text_dim));
                 let path = format!("{base}/{key}");
                 if let Some(value) = field(ui, drafts, &path, table, &key, &entry[&key], context) {
@@ -242,6 +367,10 @@ pub fn entry(
                     op["value"] = value;
                     operations.push(op);
                 }
+                match unit(&key) {
+                    Some(u) => ui.label(RichText::new(u).color(DARK.text_dim).size(11.0)),
+                    None => ui.label(""),
+                };
                 ui.end_row();
             }
         });

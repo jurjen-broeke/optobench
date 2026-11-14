@@ -12,6 +12,10 @@
 //!
 //! [table]                           # required for table layouts
 //! pitch = 25.0                      # distance between holes (mm)
+//! columns = 24                      # optional, the breadboard: holes along x and y
+//! rows = 18                         # (together), its edge half a pitch beyond the
+//! corner = [0, 0]                   # outer holes; corner: the hole at its corner
+//!                                   # nearest the origin (default [0, 0])
 //!
 //! [[source]]
 //! id = "laser"
@@ -475,6 +479,45 @@ pub(crate) fn trace_options(root: &Table) -> Result<Option<f64>, FileError> {
         return Err(error("[trace]: `split_cutoff` must be between 0 and 1"));
     }
     Ok(Some(cutoff))
+}
+
+/// Checks the breadboard of a table layout (`[table]` `columns`, `rows`, `corner`):
+/// the number of holes along x and y, and the hole (column, row) at the board's corner
+/// nearest the origin (default [0, 0]); the board's edge lies half a pitch beyond its
+/// outer holes. Only the interface draws it; the trace does not need it.
+fn board(table: &Table) -> Result<(), FileError> {
+    let whole = |key: &str, least: i64| -> Result<Option<i64>, FileError> {
+        match table.get(key) {
+            None => Ok(None),
+            Some(v) => v
+                .as_integer()
+                .filter(|n| *n >= least)
+                .map(Some)
+                .ok_or_else(|| error(format!("[table]: `{key}` must be a whole number ≥ {least}"))),
+        }
+    };
+    match (whole("columns", 1)?, whole("rows", 1)?) {
+        (Some(_), Some(_)) => {}
+        (None, None) => {
+            if table.contains_key("corner") {
+                return Err(error("[table]: `corner` goes with `columns` and `rows`"));
+            }
+            return Ok(());
+        }
+        _ => return Err(error("[table]: give `columns` and `rows` together")),
+    }
+    match table.get("corner") {
+        None => Ok(()),
+        Some(v) => {
+            let pair = v.as_array().and_then(|a| match a.as_slice() {
+                [c, r] => Some((c.as_integer()?, r.as_integer()?)),
+                _ => None,
+            });
+            pair.map(|_| ()).ok_or_else(|| {
+                error("[table]: `corner` is the hole [column, row] at the board's corner")
+            })
+        }
+    }
 }
 
 /// A `[[source]]` entry, in either kind of file. `placement_keys` are the keys that
@@ -1529,12 +1572,13 @@ pub fn parse_with(text: &str, lookups: &Lookups) -> Result<Scene, FileError> {
                 .get("table")
                 .and_then(Value::as_table)
                 .ok_or_else(|| error("a table layout needs a [table] with `pitch`"))?;
-            check_keys(table, &["pitch"], "[table]")?;
+            check_keys(table, &["pitch", "columns", "rows", "corner"], "[table]")?;
             let pitch = Item {
                 table,
                 context: "[table]".into(),
             }
             .positive("pitch")?;
+            board(table)?;
             Placement::Table(TableLayout { pitch })
         }
         other => {
@@ -2232,6 +2276,31 @@ mod tests {
         let error = read("format = \"optobench/1\"\nkind = \"sidecar\"\nlayout = \"planar\"\n")
             .expect_err("rejected");
         assert!(error.0.contains("kind = \"layout\""));
+    }
+
+    #[test]
+    fn a_breadboard_is_checked() {
+        let table = |keys: &str| {
+            read(&format!(
+                "format = \"optobench/1\"\nkind = \"layout\"\nlayout = \"table\"\n\n[table]\npitch = 25.0\n{keys}"
+            ))
+        };
+        table("").expect("no board");
+        table("columns = 24\nrows = 18\n").expect("a board");
+        table("columns = 24\nrows = 18\ncorner = [-2, 0]\n").expect("a board with its corner");
+        for (keys, words) in [
+            ("columns = 24\n", "together"),
+            ("columns = 0\nrows = 3\n", "whole number ≥ 1"),
+            ("columns = 2.5\nrows = 3\n", "whole number"),
+            ("corner = [0, 0]\n", "goes with"),
+            (
+                "columns = 2\nrows = 3\ncorner = [0.5, 0]\n",
+                "the hole [column, row]",
+            ),
+        ] {
+            let e = table(keys).expect_err(keys);
+            assert!(e.0.contains(words), "{keys}: {}", e.0);
+        }
     }
 
     #[test]

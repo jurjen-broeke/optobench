@@ -64,6 +64,16 @@ fn entry_of(design: &Value, id: &str) -> Option<(String, Value, usize)> {
     None
 }
 
+/// Where the scene placed an item or source of this id (mm).
+fn origin_of(scene: &crate::document::Scene, id: &str) -> Option<crate::camera::V3> {
+    scene
+        .items
+        .iter()
+        .find(|i| i.id == id)
+        .and_then(|i| i.origin)
+        .or_else(|| scene.sources.iter().find(|s| s.id == id).map(|s| s.origin))
+}
+
 /// A few words on what operations change, for the runs strip.
 fn describe(operations: &[Value]) -> String {
     let Some(first) = operations.first() else {
@@ -1036,6 +1046,7 @@ impl App {
             return Vec::new();
         };
         let context = editors::Context::of(&design);
+        let scene = self.doc.as_ref().and_then(|d| d.scene.clone());
         let mut operations = Vec::new();
         let list = design[table].as_array().cloned().unwrap_or_default();
         ui.label(RichText::new(format!("{title} ({})", list.len())).strong());
@@ -1053,6 +1064,10 @@ impl App {
             egui::CollapsingHeader::new(name)
                 .id_salt(format!("{table}-{i}"))
                 .show(ui, |ui| {
+                    let origin = scene
+                        .as_ref()
+                        .zip(entry["id"].as_str())
+                        .and_then(|(scene, id)| origin_of(scene, id));
                     operations.extend(editors::entry(
                         ui,
                         &mut self.drafts,
@@ -1060,6 +1075,7 @@ impl App {
                         entry,
                         i,
                         &context,
+                        origin,
                     ));
                 });
         }
@@ -1156,7 +1172,8 @@ impl App {
             };
             if let Some((entry, i)) = found {
                 ui.label(RichText::new(format!("{table} {key}")).color(DARK.text_dim));
-                return editors::entry(ui, &mut self.drafts, &table, &entry, i, &context);
+                let origin = origin_of(scene, &key);
+                return editors::entry(ui, &mut self.drafts, &table, &entry, i, &context, origin);
             }
         }
         let Some(item) = self.selected.and_then(|i| scene.items.get(i)).cloned() else {
@@ -1169,7 +1186,15 @@ impl App {
         match entry_of(&design, &item.id) {
             Some((table, entry, i)) => {
                 ui.label(RichText::new(format!("{table} · {}", item.role)).color(DARK.text_dim));
-                operations = editors::entry(ui, &mut self.drafts, &table, &entry, i, &context);
+                operations = editors::entry(
+                    ui,
+                    &mut self.drafts,
+                    &table,
+                    &entry,
+                    i,
+                    &context,
+                    item.origin,
+                );
             }
             None => {
                 egui::Grid::new("properties")

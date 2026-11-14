@@ -488,6 +488,18 @@ pub(crate) fn view(parameters: &Parameters) -> Result<Value, CommandError> {
                     .map(|l| l.iter().map(|p| point(*p)).collect::<Vec<_>>())
                     .collect::<Vec<_>>(),
             });
+            // Where a layout item sits: its frame's origin and +z (optical axis, a mirror's
+            // normal), for the interface's positions and move handles.
+            let frame = match owner {
+                Owner::Element(i) => Some(scene.elements[i].frame),
+                Owner::Proxy(i) => Some(scene.proxies[i].frame),
+                Owner::Detector(i) => Some(scene.detectors[i].frame),
+                Owner::Solid(_) => None,
+            };
+            if let (Some(frame), Some(object)) = (frame, item.as_object_mut()) {
+                object.insert("origin".into(), json!(point(frame.origin())));
+                object.insert("axis".into(), json!(point(frame.axes()[2])));
+            }
             // A CAD body's own axes in the scene frame: a sidecar names faces in them
             // (a mirror's `reflect`).
             if let Owner::Solid(i) = owner {
@@ -654,6 +666,8 @@ fn design_json(source: &str) -> Value {
         "detector": list("detector"),
         "proxy": list("proxy"),
         "merit": list("merit"),
+        "table": table.get("table").and_then(|v| serde_json::to_value(v).ok()),
+        "planar": table.get("planar").and_then(|v| serde_json::to_value(v).ok()),
     })
 }
 
