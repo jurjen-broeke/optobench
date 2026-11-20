@@ -21,6 +21,18 @@ pub const IDENTITY: Matrix = [
     [0.0, 0.0, 0.0, 1.0],
 ];
 
+/// The inverse of a rigid transform: the rotation transposed, the translation taken back.
+pub fn inverse(m: &Matrix) -> Matrix {
+    let mut out = IDENTITY;
+    for i in 0..3 {
+        for j in 0..3 {
+            out[i][j] = m[j][i];
+        }
+        out[i][3] = -(0..3).map(|k| m[k][i] * m[k][3]).sum::<f64>();
+    }
+    out
+}
+
 /// `a · b`.
 pub fn multiply(a: &Matrix, b: &Matrix) -> Matrix {
     std::array::from_fn(|i| std::array::from_fn(|j| (0..4).map(|k| a[i][k] * b[k][j]).sum()))
@@ -108,6 +120,38 @@ pub struct Snapshot {
     pub joints: Vec<Joint>,
     /// Every parameter.
     pub parameters: Vec<Parameter>,
+    /// Everything read that a change of geometry changes and a move does not: the
+    /// component tree without its placements, the bodies (names, features, visibility),
+    /// the timeline and the parameters. Equal in two snapshots, the design differs only in
+    /// where its parts are, and a STEP export of the first, its occurrences moved, is the
+    /// second (the live link's fast path).
+    pub geometry: Value,
+}
+
+/// The [`Snapshot::geometry`] of the replies read: `component.list` with every
+/// `transform` and the pending moves left out, the parameters' names, expressions and
+/// values, and `document.inspect`'s bodies and timeline.
+pub fn geometry(components: &Value, parameters: &Value, inspected: &Value) -> Value {
+    fn without_placements(value: &Value) -> Value {
+        match value {
+            Value::Object(map) => Value::Object(
+                map.iter()
+                    .filter(|(k, _)| !matches!(k.as_str(), "transform" | "pending_moves"))
+                    .map(|(k, v)| (k.clone(), without_placements(v)))
+                    .collect(),
+            ),
+            Value::Array(items) => Value::Array(items.iter().map(without_placements).collect()),
+            other => other.clone(),
+        }
+    }
+    json!({
+        "components": without_placements(&components["components"]),
+        "parameters": parameters["parameters"].as_array().into_iter().flatten()
+            .map(|p| json!([p["name"], p["expression"], p["value"]]))
+            .collect::<Vec<_>>(),
+        "bodies": inspected["bodies"],
+        "timeline": inspected["timeline"],
+    })
 }
 
 fn protocol(what: &str) -> BridgeError {
@@ -126,6 +170,9 @@ fn id(value: &Value, what: &str) -> Result<u64, BridgeError> {
         .ok_or_else(|| protocol(&format!("{what} is not an id")))
 }
 
+/// A placement as SolidCraft writes it: four rows of four numbers that are the columns of
+/// the matrix (the translation in the last row, `[tx, ty, tz, 1]`, as SolidCraft 0.45.0's
+/// `component.list` gives it), turned into the row-major [`Matrix`] this crate uses.
 fn matrix(value: &Value) -> Result<Matrix, BridgeError> {
     let rows = value
         .as_array()
@@ -138,7 +185,7 @@ fn matrix(value: &Value) -> Result<Matrix, BridgeError> {
             .filter(|r| r.len() == 4)
             .ok_or_else(|| protocol("a transform row is not 4 numbers"))?;
         for (j, v) in row.iter().enumerate() {
-            m[i][j] = number(v, "a transform entry")?;
+            m[j][i] = number(v, "a transform entry")?;
         }
     }
     Ok(m)
@@ -256,15 +303,21 @@ pub fn parameters(list: &Value) -> Result<Vec<Parameter>, BridgeError> {
 pub fn snapshot(connection: &mut Connection) -> Result<Snapshot, BridgeError> {
     for _ in 0..3 {
         let before = revision(connection)?;
-        let occurrences = occurrences(&connection.execute("component.list", json!({}))?)?;
-        let joints = joints(&connection.execute("joint.list", json!({ "quiet": true }))?)?;
-        let parameters = parameters(&connection.execute("parameters.list", json!({}))?)?;
+        let components = connection.execute("component.list", json!({}))?;
+        let joint_list = connection.execute("joint.list", json!({ "quiet": true }))?;
+        let parameter_list = connection.execute("parameters.list", json!({}))?;
+        // No measurements: on a vendor assembly they take half a minute.
+        let inspected = connection.execute(
+            "document.inspect",
+            json!({ "measure": false, "timeline": "summary", "bodies": true, "sketch_counts": false }),
+        )?;
         if revision(connection)? == before {
             return Ok(Snapshot {
                 revision: before,
-                occurrences,
-                joints,
-                parameters,
+                occurrences: occurrences(&components)?,
+                joints: joints(&joint_list)?,
+                parameters: parameters(&parameter_list)?,
+                geometry: geometry(&components, &parameter_list, &inspected),
             });
         }
     }
@@ -343,8 +396,9 @@ mod tests {
         // The design places a cage (component 1) at x 100 turned a quarter about z; the
         // cage places a lens (component 2) at its own y 10: the lens stands at
         // (100 − 10, 0, 0) in the world, turned with the cage.
-        let quarter = json!([[0, -1, 0, 100], [1, 0, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]]);
-        let up = json!([[1, 0, 0, 0], [0, 1, 0, 10], [0, 0, 1, 0], [0, 0, 0, 1]]);
+        // As SolidCraft writes placements: the columns of the matrix, translation last.
+        let quarter = json!([[0, 1, 0, 0], [-1, 0, 0, 0], [0, 0, 1, 0], [100, 0, 0, 1]]);
+        let up = json!([[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0], [0, 10, 0, 1]]);
         let list = json!({ "components": [
             { "id": 0, "name": "design", "children": [
                 { "id": 4, "component": 1, "parent": 0, "name": "cage:1", "transform": quarter, "grounded": true } ] },

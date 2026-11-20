@@ -42,9 +42,24 @@ fn the_design_is_found_checked_and_read() {
         .iter()
         .map(|o| o.name.as_str())
         .collect();
-    assert_eq!(names, ["cage:1", "lens:1"]);
-    assert_eq!(snapshot.occurrences[1].path, [1, 2]);
-    assert_eq!(snapshot.occurrences[1].world[2][3], 50.0);
+    assert_eq!(
+        names[..4],
+        ["pc-lens:1", "pc-lens:2", "cage-plate:1", "cage-plate:2"]
+    );
+    assert_eq!(snapshot.occurrences[1].path, [2]);
+    // A move changes the placements only: the geometry fingerprint stays.
+    app.move_occurrence(
+        "pc-lens:2",
+        [0.0, 0.0, 1.0],
+        &golden("cage-relay-moved.step"),
+    );
+    let moved = read::snapshot(&mut link).expect("read");
+    assert_eq!(moved.occurrences[1].world[2][3], 1.0);
+    assert_eq!(moved.geometry, snapshot.geometry);
+    // A feature added changes it.
+    app.change(&golden("cage-relay.step"));
+    let changed = read::snapshot(&mut link).expect("read");
+    assert_ne!(changed.geometry, snapshot.geometry);
     assert_eq!(snapshot.joints[0].kind, "slider");
     assert_eq!(snapshot.joints[0].values[0].limits, Some((40.0, 60.0)));
     assert_eq!(snapshot.parameters[0].value, Some(150.0));

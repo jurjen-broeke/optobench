@@ -433,6 +433,14 @@ fn placement_frame(item: &Item, bodies: &[PlacedBody]) -> Result<Frame, FileErro
         .ok_or_else(|| invalid("axis has zero length"))
 }
 
+/// Whether a body at `path` is in occurrence `occurrence` (it, or below it).
+fn within(path: &str, occurrence: &str) -> bool {
+    path == occurrence
+        || path
+            .strip_prefix(occurrence)
+            .is_some_and(|rest| rest.starts_with('/'))
+}
+
 /// The STEP file a sidecar refers to.
 fn step_path(root: &Table, sidecar: &Path) -> Result<PathBuf, FileError> {
     let directory = sidecar.parent().unwrap_or(Path::new("."));
@@ -681,15 +689,68 @@ fn add_part(
 /// A sidecar, with parts from `library`: elements that name a part, and STEP products
 /// named after a part (tagged automatically unless `[library] automatic = false`).
 pub fn read(text: &str, sidecar: &Path, lookups: &Lookups) -> Result<Read, FileError> {
-    read_with_step(text, sidecar, None, lookups)
+    read_with_step(text, sidecar, None, &[], lookups)
+}
+
+/// A rigid move of an occurrence of the assembly, with everything in it: `transform`
+/// (in the assembly's frame) applied after the STEP file's own placement. A body takes
+/// the move of the deepest occurrence it is in.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Move<'a> {
+    /// The occurrence's path: occurrence names from the root down, joined by `/`, as
+    /// [`PlacedBody::path`] has them.
+    pub occurrence: &'a str,
+    /// The move.
+    pub transform: Transform,
+}
+
+/// The placed bodies of STEP files read lately, by path, size and time of change: reading
+/// and converting a vendor assembly's faces takes over a second (M7), and the same file
+/// is read again for every view, trace and live update until it changes.
+type Converted = std::sync::Arc<(Vec<PlacedBody>, usize)>;
+/// A STEP file as it was read: its path, size and time of change.
+type FileKey = (PathBuf, u64, std::time::SystemTime);
+static CONVERTED: std::sync::Mutex<Vec<(FileKey, Converted)>> = std::sync::Mutex::new(Vec::new());
+
+/// How many converted files are kept.
+const CONVERTED_KEPT: usize = 2;
+
+/// The placed bodies of a STEP file and the faces skipped, read and converted once while
+/// the file stays as it is.
+fn converted(path: &Path) -> Result<Converted, FileError> {
+    let at = |e: &dyn std::fmt::Display| error(format!("{}: {e}", path.display()));
+    let metadata = std::fs::metadata(path).map_err(|e| at(&e))?;
+    let key = (
+        path.canonicalize().unwrap_or_else(|_| path.to_path_buf()),
+        metadata.len(),
+        metadata.modified().map_err(|e| at(&e))?,
+    );
+    if let Ok(cache) = CONVERTED.lock() {
+        if let Some((_, found)) = cache.iter().find(|(k, _)| *k == key) {
+            return Ok(found.clone());
+        }
+    }
+    let text = std::fs::read_to_string(path).map_err(|e| at(&e))?;
+    let model = step::read(&text).map_err(|e| at(&e))?;
+    let found: Converted = std::sync::Arc::new(placed_bodies(&model));
+    if let Ok(mut cache) = CONVERTED.lock() {
+        cache.retain(|(k, _)| k.0 != key.0);
+        cache.push((key, found.clone()));
+        while cache.len() > CONVERTED_KEPT {
+            cache.remove(0);
+        }
+    }
+    Ok(found)
 }
 
 /// As [`read`], with the assembly read from `step` instead of the file the sidecar names
-/// (the live link, M12: a fresh export of the design open in SolidCraft).
+/// (the live link, M12: a fresh export of the design open in SolidCraft), and its
+/// occurrences moved by `moves` (the live link's parts moved since that export).
 pub fn read_with_step(
     text: &str,
     sidecar: &Path,
     step: Option<&Path>,
+    moves: &[Move],
     lookups: &Lookups,
 ) -> Result<Read, FileError> {
     check_header(text)?;
@@ -774,10 +835,42 @@ pub fn read_with_step(
         Some(step) => step.to_path_buf(),
         None => step_path(&root, sidecar)?,
     };
-    let step_text =
-        std::fs::read_to_string(&path).map_err(|e| error(format!("{}: {e}", path.display())))?;
-    let model = step::read(&step_text).map_err(|e| error(format!("{}: {e}", path.display())))?;
-    let (bodies, skipped) = placed_bodies(&model);
+    let read = converted(&path)?;
+    let skipped = read.1;
+    let moved: Vec<PlacedBody>;
+    let bodies: &[PlacedBody] = if moves.is_empty() {
+        &read.0
+    } else {
+        for m in moves {
+            if !read.0.iter().any(|b| within(&b.path, m.occurrence)) {
+                return Err(error(format!(
+                    "{}: no occurrence `{}` to move",
+                    path.display(),
+                    m.occurrence
+                )));
+            }
+        }
+        moved = read
+            .0
+            .iter()
+            .map(|b| {
+                let mut b = b.clone();
+                if let Some(m) = moves
+                    .iter()
+                    .filter(|m| within(&b.path, m.occurrence))
+                    .max_by_key(|m| m.occurrence.len())
+                {
+                    // The body and each of its faces, which carry their own placements.
+                    b.placement = m.transform * b.placement;
+                    for face in &mut b.faces {
+                        face.placement = m.transform * face.placement;
+                    }
+                }
+                b
+            })
+            .collect();
+        &moved
+    };
     if skipped > 0 {
         return Err(error(format!(
             "{}: {skipped} faces use geometry this reader does not support",
@@ -827,7 +920,7 @@ pub fn read_with_step(
             }
             check_keys(item.table, &keys, &item.context)?;
             if objective && item.table.contains_key("body") {
-                for i in matches(&bodies, &reference(&item, "body")?)? {
+                for i in matches(bodies, &reference(&item, "body")?)? {
                     if tagged[i] {
                         return Err(error(format!(
                             "{}: body `{}` of `{}` is already named by another element",
@@ -838,7 +931,7 @@ pub fn read_with_step(
                     claimed[i] = true;
                 }
             }
-            let frame = placement_frame(&item, &bodies)?;
+            let frame = placement_frame(&item, bodies)?;
             let element_kind = if objective {
                 objective_kind(&item, lookup)?
             } else {
@@ -861,7 +954,7 @@ pub fn read_with_step(
             });
             continue;
         }
-        let found = matches(&bodies, &reference(&item, "body")?)?;
+        let found = matches(bodies, &reference(&item, "body")?)?;
         if let Some(value) = item.table.get("library") {
             check_keys(
                 item.table,
@@ -911,7 +1004,7 @@ pub fn read_with_step(
             if let Some(matched) = add_part(
                 &mut scene,
                 &mut tagged,
-                &bodies,
+                bodies,
                 &found,
                 part,
                 &id,
@@ -926,9 +1019,9 @@ pub fn read_with_step(
             for &i in &found {
                 claimed[i] = true;
             }
-            scene.dofs.extend(element_dofs(&item, &bodies, &found)?);
+            scene.dofs.extend(element_dofs(&item, bodies, &found)?);
             if let Some((path, frame, centre)) =
-                element_occurrence(&item, &bodies, &found).unwrap_or(None)
+                element_occurrence(&item, bodies, &found).unwrap_or(None)
             {
                 cad.push(crate::tolerance::CadElement {
                     id: item.text("id")?.to_owned(),
@@ -1084,9 +1177,9 @@ pub fn read_with_step(
                 )));
             }
         }
-        scene.dofs.extend(element_dofs(&item, &bodies, &found)?);
+        scene.dofs.extend(element_dofs(&item, bodies, &found)?);
         if let Some((path, frame, centre)) =
-            element_occurrence(&item, &bodies, &found).unwrap_or(None)
+            element_occurrence(&item, bodies, &found).unwrap_or(None)
         {
             cad.push(crate::tolerance::CadElement {
                 id: item.text("id")?.to_owned(),
@@ -1125,7 +1218,7 @@ pub fn read_with_step(
             if let Some(matched) = add_part(
                 &mut scene,
                 &mut tagged,
-                &bodies,
+                bodies,
                 &members,
                 part,
                 &id,
@@ -1166,7 +1259,7 @@ pub fn read_with_step(
 
     let position = ["position", "axis", "frame"];
     for item in items(&root, "source")? {
-        let frame = placement_frame(&item, &bodies)?;
+        let frame = placement_frame(&item, bodies)?;
         scene
             .sources
             .push(crate::scene_file::source(&item, &position, frame)?);
@@ -1195,7 +1288,7 @@ pub fn read_with_step(
         if !(size.0 > 0.0 && size.1 > 0.0) {
             return Err(error(format!("{}: `size` must be positive", item.context)));
         }
-        let frame = placement_frame(&item, &bodies)?;
+        let frame = placement_frame(&item, bodies)?;
         scene.detectors.push(Detector {
             id: item.text("id")?.to_owned(),
             frame,

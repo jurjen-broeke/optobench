@@ -477,6 +477,7 @@ impl App {
         self.live = None;
         self.notice = Some((error, why));
         if let Some(doc) = &mut self.doc {
+            doc.live_moves = Value::Null;
             if doc.live_step.take().is_some() {
                 doc.start("view", json!({}));
                 if doc.trace.is_some() {
@@ -3776,11 +3777,33 @@ mod exit {
         settle(&mut h);
         let moved = image(h.state()).expect("traced again");
         assert_ne!(moved, first, "the move shows");
+        // Moved back in SolidCraft: no export, the parts placed by moves, as at first.
+        app.move_occurrence(
+            "pc-lens:2",
+            [0.0, 0.0, -1.0],
+            &fixtures.join("cage-relay.step"),
+        );
+        app.move_occurrence(
+            "cage-plate:2",
+            [0.0, 0.0, -1.0],
+            &fixtures.join("cage-relay.step"),
+        );
+        wait(&mut h, &|a| {
+            a.live.as_ref().is_some_and(|l| l.revision == Some(4))
+        });
+        settle(&mut h);
+        let doc = h.state().doc.as_ref().expect("open");
+        assert_eq!(
+            doc.live_moves.as_array().map(Vec::len),
+            Some(2),
+            "{}",
+            doc.live_moves
+        );
         assert!(
             h.state()
                 .notice
                 .as_ref()
-                .is_some_and(|(e, t)| !e && t.contains("revision 2")),
+                .is_some_and(|(e, t)| !e && t.contains("revision 4")),
             "{:?}",
             h.state().notice
         );

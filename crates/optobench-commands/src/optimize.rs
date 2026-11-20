@@ -116,6 +116,7 @@ pub(crate) fn optimize(parameters: &Parameters) -> Result<Value, CommandError> {
             "small_range_mm",
             "data_directory",
             "step",
+            "moves",
         ],
     )?;
     let small = crate::trace::small_range(parameters)?;

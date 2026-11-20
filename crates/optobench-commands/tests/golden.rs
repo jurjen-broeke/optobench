@@ -200,3 +200,45 @@ fn export_placements_writes_poses_and_a_matching_sidecar() {
     );
     let _ = std::fs::remove_dir_all(&out);
 }
+
+#[test]
+fn moves_place_occurrences_as_a_new_export_would() {
+    // The live link's fast path (M12e): the golden relay's STEP file with the moves its
+    // moved re-export was made with (cage-relay-moved.json: `pc-lens:2` and
+    // `cage-plate:2` 1 mm along world z) traces as the moved export does.
+    let empty = std::env::temp_dir().join(format!("optobench-golden-moves-{}", std::process::id()));
+    let along = json!([[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 1], [0, 0, 0, 1]]);
+    let run = |extra: Value| {
+        let mut parameters = json!({
+            "path": fixtures().join("cage-relay.optobench").to_string_lossy(),
+            "data_directory": empty.to_string_lossy(),
+        });
+        for (k, v) in extra.as_object().expect("an object") {
+            parameters[k] = v.clone();
+        }
+        Registry::standard().run("trace", &parameters)
+    };
+    let moved = run(json!({ "moves": [
+        { "occurrence": "pc-lens:2", "matrix": along },
+        { "occurrence": "cage-plate:2", "matrix": along } ] }))
+    .expect("traces");
+    let exported =
+        run(json!({ "step": fixtures().join("cage-relay-moved.step").to_string_lossy() }))
+            .expect("traces");
+    same(&moved["detectors"], &exported["detectors"], "detectors");
+    same(&moved["ledger"], &exported["ledger"], "ledger");
+    let unmoved = run(json!({})).expect("traces");
+    assert_ne!(moved["detectors"], unmoved["detectors"], "the move shows");
+    // An occurrence the assembly does not have, and a move that is not rigid, refused.
+    let error = run(json!({ "moves": [{ "occurrence": "pc-lens:9", "matrix": along }] }))
+        .expect_err("refused");
+    assert!(
+        error.message.contains("no occurrence `pc-lens:9`"),
+        "{}",
+        error.message
+    );
+    let stretched = json!([[2, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]]);
+    let error = run(json!({ "moves": [{ "occurrence": "pc-lens:2", "matrix": stretched }] }))
+        .expect_err("refused");
+    assert!(error.message.contains("not rigid"), "{}", error.message);
+}

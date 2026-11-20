@@ -75,6 +75,12 @@ const NEEDED: &[Needed] = &[
         properties: &["name", "expression", "value", "unit", "source"],
     },
     Needed {
+        command: "document.inspect",
+        side: "output",
+        definition: None,
+        properties: &["bodies", "timeline"],
+    },
+    Needed {
         command: "file.export_step",
         side: "input",
         definition: None,

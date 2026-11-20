@@ -26,6 +26,11 @@ struct State {
     removed: Vec<(String, String)>,
     /// Requests served, by method and command.
     served: Vec<String>,
+    /// The design's placements, as the golden cage relay has its occurrences: name and
+    /// translation (mm) in the design.
+    placements: Vec<(String, [f64; 3])>,
+    /// Features added since the start: a change of geometry, which a move is not.
+    features: u64,
 }
 
 /// A stand-in app listening on 127.0.0.1.
@@ -52,6 +57,20 @@ impl FakeApp {
                 subscribers: Vec::new(),
                 removed: Vec::new(),
                 served: Vec::new(),
+                placements: [
+                    "pc-lens:1",
+                    "pc-lens:2",
+                    "cage-plate:1",
+                    "cage-plate:2",
+                    "rod:1",
+                    "rod:2",
+                    "rod:3",
+                    "rod:4",
+                ]
+                .iter()
+                .map(|n| ((*n).to_owned(), [0.0; 3]))
+                .collect(),
+                features: 0,
             })),
         };
         let serving = app.clone();
@@ -77,9 +96,30 @@ impl FakeApp {
     }
 
     /// The design changes to `step`: a new revision, announced to every subscriber.
+    /// A change of geometry (a feature added), after which the design exports as `step`.
     pub fn change(&self, step: &Path) {
         let mut state = self.state.lock().expect("state");
         state.step = step.to_path_buf();
+        state.features += 1;
+        Self::announce(&mut state);
+    }
+
+    /// An occurrence moved by `translate` (mm, in the design), as Move or a joint does:
+    /// its placement changes, its geometry not; an export would now write `step`.
+    pub fn move_occurrence(&self, name: &str, translate: [f64; 3], step: &Path) {
+        let mut state = self.state.lock().expect("state");
+        state.step = step.to_path_buf();
+        for (n, t) in &mut state.placements {
+            if n == name {
+                for k in 0..3 {
+                    t[k] += translate[k];
+                }
+            }
+        }
+        Self::announce(&mut state);
+    }
+
+    fn announce(state: &mut State) {
         state.revision += 1;
         let line = format!(
             "{}\n",
@@ -175,7 +215,11 @@ impl FakeApp {
                     "document.revision" => {
                         Ok(json!({ "document_id": state.document_id, "revision": state.revision }))
                     }
-                    "component.list" => Ok(design_tree()),
+                    "component.list" => Ok(design_tree(&state.placements)),
+                    "document.inspect" => Ok(json!({
+                        "bodies": state.placements.iter().map(|(n, _)| json!({ "name": n, "feature": 1, "visible": true })).collect::<Vec<_>>(),
+                        "timeline": (0..=state.features).map(|k| json!({ "id": k + 1, "name": format!("feature {k}"), "type": "BaseFeature" })).collect::<Vec<_>>(),
+                    })),
                     "joint.list" => Ok(joints()),
                     "parameters.list" => Ok(json!({ "parameters": [
                         { "name": "relay_length", "expression": "150 mm", "unit": "mm", "value": 150.0,
@@ -209,24 +253,30 @@ impl FakeApp {
     }
 }
 
-/// A design of two placements: the cage grounded at the origin, a lens in it 50 mm along.
-fn design_tree() -> Value {
-    let identity = json!([[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]]);
-    let along = json!([[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 50], [0, 0, 0, 1]]);
-    json!({ "active": 0, "active_path": [], "pending_moves": [], "components": [
-        { "id": 0, "name": "relay", "parent": null, "bodies": [], "features": [], "sketches": [],
-          "construction": [], "occurrences": [], "children": [
-            { "id": 1, "component": 1, "parent": 0, "name": "cage:1", "transform": identity, "grounded": true } ] },
-        { "id": 1, "name": "cage", "parent": 0, "bodies": ["Cage"], "features": [], "sketches": [],
-          "construction": [], "occurrences": [], "children": [
-            { "id": 2, "component": 2, "parent": 1, "name": "lens:1", "transform": along, "grounded": false } ] },
-        { "id": 2, "name": "lens", "parent": 1, "bodies": ["Lens"], "features": [], "sketches": [],
-          "construction": [], "occurrences": [], "children": [] } ] })
+/// The design: one component per placement, placed in the design (component 0).
+fn design_tree(placements: &[(String, [f64; 3])]) -> Value {
+    let mut components = vec![
+        json!({ "id": 0, "name": "relay", "parent": null, "bodies": [],
+        "features": [], "sketches": [], "construction": [], "occurrences": [],
+        "children": placements.iter().enumerate().map(|(k, (name, t))| json!({
+            "id": k + 1, "component": k + 1, "parent": 0, "name": name, "grounded": k == 0,
+            // As SolidCraft writes placements: the columns, the translation last.
+            "transform": [[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0], [t[0], t[1], t[2], 1]],
+        })).collect::<Vec<_>>() }),
+    ];
+    for (k, (name, _)) in placements.iter().enumerate() {
+        components.push(
+            json!({ "id": k + 1, "name": name.split(':').next(), "parent": 0,
+            "bodies": [name], "features": [], "sketches": [], "construction": [],
+            "occurrences": [], "children": [] }),
+        );
+    }
+    json!({ "active": 0, "active_path": [], "pending_moves": [], "components": components })
 }
 
 fn joints() -> Value {
     json!({ "conflicts": [], "errors": [], "links": [], "origins": [], "floating": [], "joints": [
-        { "id": 1, "name": "lens slide", "type": "slider", "a": 1, "b": 2, "flip": false,
+        { "id": 1, "name": "L2 slide", "type": "slider", "a": 4, "b": 2, "flip": false,
           "offset": 0.0, "offset_xy": [0.0, 0.0], "suppressed": false, "visible": true,
           "frame_a": null, "frame_b": null,
           "values": [ { "name": "slide", "value": 50.0, "unit": "mm", "limits": [40.0, 60.0] } ] } ] })
@@ -261,6 +311,10 @@ fn schema(command: &str) -> Option<Value> {
             json!({}),
             json!({ "properties": properties(&["parameters", "count"]),
                     "$defs": { "ParameterRow": { "properties": properties(&["name", "expression", "value", "unit", "source"]) } } }),
+        ),
+        "document.inspect" => (
+            json!({}),
+            json!({ "properties": properties(&["bodies", "timeline", "params", "revision"]) }),
         ),
         "file.export_step" => (
             json!({ "properties": properties(&["path", "bodies"]) }),

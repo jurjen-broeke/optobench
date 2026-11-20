@@ -57,6 +57,75 @@ pub struct Live {
     /// The exports still kept: the latest (the one the last update names, which a
     /// window may still be reading) and the one before it.
     exports: Vec<PathBuf>,
+    /// The design as the latest export has it: where its occurrences were then, and its
+    /// geometry fingerprint.
+    exported: Option<Snapshot>,
+}
+
+/// The first place two JSON values differ, as a path (`timeline[3].name`), with both
+/// values shortened; `None` when they are equal.
+fn first_difference(a: &Value, b: &Value, at: &str) -> Option<String> {
+    match (a, b) {
+        (Value::Object(x), Value::Object(y)) => {
+            for k in x.keys().chain(y.keys()) {
+                let (p, q) = (
+                    x.get(k).unwrap_or(&Value::Null),
+                    y.get(k).unwrap_or(&Value::Null),
+                );
+                if let Some(d) = first_difference(p, q, &format!("{at}.{k}")) {
+                    return Some(d);
+                }
+            }
+            None
+        }
+        (Value::Array(x), Value::Array(y)) if x.len() == y.len() => x
+            .iter()
+            .zip(y)
+            .enumerate()
+            .find_map(|(i, (p, q))| first_difference(p, q, &format!("{at}[{i}]"))),
+        _ if a == b => None,
+        _ => {
+            let short = |v: &Value| v.to_string().chars().take(80).collect::<String>();
+            Some(format!(
+                "{}: {} → {}",
+                at.trim_start_matches('.'),
+                short(a),
+                short(b)
+            ))
+        }
+    }
+}
+
+/// The moves that take the occurrences of `then` to where `now` has them: for each
+/// occurrence whose world placement changed, its path of names (joined by `/`, as a STEP
+/// export names them) and the move, `now · then⁻¹`. `None` when an occurrence of `now`
+/// was not in `then` (a part added: export again).
+fn moves_between(then: &Snapshot, now: &Snapshot) -> Option<Vec<Value>> {
+    let name = |path: &[u64]| -> Option<String> {
+        let names: Option<Vec<&str>> = (1..=path.len())
+            .map(|k| {
+                now.occurrences
+                    .iter()
+                    .find(|o| o.path == path[..k])
+                    .map(|o| o.name.as_str())
+            })
+            .collect();
+        names.map(|n| n.join("/"))
+    };
+    let mut moves = Vec::new();
+    for occurrence in &now.occurrences {
+        let before = then
+            .occurrences
+            .iter()
+            .find(|o| o.path == occurrence.path)?;
+        let delta = read::multiply(&occurrence.world, &read::inverse(&before.world));
+        let still =
+            (0..4).all(|i| (0..4).all(|j| (delta[i][j] - read::IDENTITY[i][j]).abs() < 1e-12));
+        if !still {
+            moves.push(json!({ "occurrence": name(&occurrence.path)?, "matrix": delta }));
+        }
+    }
+    Some(moves)
 }
 
 impl Drop for Live {
@@ -142,6 +211,7 @@ impl Live {
             parameters: parameters.clone(),
             traced: subscribed,
             exports: Vec::new(),
+            exported: None,
         };
         let first = live.trace_now(Instant::now())?;
         Ok((live, first))
@@ -162,12 +232,40 @@ impl Live {
         self.trace_now(noticed).map(Some)
     }
 
-    /// Reads the design, exports it and traces the sidecar against the export; the
-    /// seconds from `since` (the change noticed) to the trace done.
+    /// Reads the design and traces the sidecar against it; the seconds from `since` (the
+    /// change noticed) to the trace done. When only placements changed since the latest
+    /// export (the same geometry fingerprint), that export is traced with its occurrences
+    /// moved where SolidCraft has them now; otherwise the design is exported again.
     fn trace_now(&mut self, since: Instant) -> Result<Value, CommandError> {
         let snapshot = read::snapshot(&mut self.link).map_err(failed)?;
-        let name = format!("design-{}", snapshot.revision.revision);
-        let step = read::export_step(&mut self.link, &self.folder, &name).map_err(failed)?;
+        let fast = self
+            .exported
+            .as_ref()
+            .filter(|then| then.geometry == snapshot.geometry)
+            .and_then(|then| moves_between(then, &snapshot))
+            .zip(self.exports.last().cloned());
+        // Why it is exported again, in words.
+        let reason = match &self.exported {
+            None => "the first trace".to_owned(),
+            Some(then) => first_difference(&then.geometry, &snapshot.geometry, "")
+                .map(|d| format!("the geometry changed: {d}"))
+                .unwrap_or_else(|| "an occurrence was added".to_owned()),
+        };
+        let (step, moves, geometry) = match fast {
+            Some((moves, step)) => (step, moves, "moved"),
+            None => {
+                let name = format!("design-{}", snapshot.revision.revision);
+                let step =
+                    read::export_step(&mut self.link, &self.folder, &name).map_err(failed)?;
+                // The folder keeps the last two exports.
+                self.exports.push(step.clone());
+                while self.exports.len() > 2 {
+                    let _ = std::fs::remove_file(self.exports.remove(0));
+                }
+                self.exported = Some(snapshot.clone());
+                (step, Vec::new(), "exported")
+            }
+        };
         let mut parameters = Parameters::new();
         for key in ["path", "data_directory", "rays_drawn", "ray_paths"] {
             if let Some(v) = self.parameters.get(key) {
@@ -175,20 +273,22 @@ impl Live {
             }
         }
         parameters.insert("step".into(), json!(step.to_string_lossy()));
-        let traced = Registry::standard().run("trace", &Value::Object(parameters));
-        // The folder keeps the last two exports.
-        self.exports.push(step.clone());
-        while self.exports.len() > 2 {
-            let _ = std::fs::remove_file(self.exports.remove(0));
+        if !moves.is_empty() {
+            parameters.insert("moves".into(), json!(moves));
         }
-        let traced = traced?;
+        let traced = Registry::standard().run("trace", &Value::Object(parameters))?;
         self.traced = snapshot.revision.clone();
         Ok(json!({
             "revision": snapshot.revision.revision,
             "document_id": snapshot.revision.document_id,
             "seconds": since.elapsed().as_secs_f64(),
-            // The export traced, kept until two more have come.
+            // `exported`: the design exported again; `moved`: only placements changed, so
+            // the latest export traced with its occurrences moved (`moves`).
+            "geometry": geometry,
+            "reason": if geometry == "moved" { Value::Null } else { json!(reason) },
+            // The export traced, kept until two more have come, and the moves applied.
             "step": step.to_string_lossy(),
+            "moves": moves,
             "design": snapshot_json(&snapshot),
             "trace": traced,
         }))

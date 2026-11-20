@@ -74,7 +74,7 @@ fn the_design_is_traced_again_within_two_seconds_of_a_change() {
         .iter()
         .filter_map(|o| o["name"].as_str())
         .collect();
-    assert_eq!(names, ["cage:1", "lens:1"]);
+    assert_eq!(names[..2], ["pc-lens:1", "pc-lens:2"]);
     // Nothing changes: nothing is traced.
     assert!(
         live.next(Duration::from_millis(100))
@@ -143,6 +143,101 @@ fn a_changed_contract_or_a_layout_is_refused() {
         "{}",
         error.message
     );
+    let _ = std::fs::remove_dir_all(&control);
+    let _ = std::fs::remove_dir_all(&empty);
+}
+
+/// Numbers equal within 1e-12 absolute plus 1e-9 relative (a move applied in memory
+/// against one written to a STEP file and read back); everything else equal.
+fn close(a: &Value, b: &Value, at: &str) {
+    match (a, b) {
+        (Value::Object(x), Value::Object(y)) => {
+            assert_eq!(
+                x.keys().collect::<Vec<_>>(),
+                y.keys().collect::<Vec<_>>(),
+                "{at}"
+            );
+            for k in x.keys() {
+                close(&x[k], &y[k], &format!("{at}.{k}"));
+            }
+        }
+        (Value::Array(x), Value::Array(y)) => {
+            assert_eq!(x.len(), y.len(), "{at}");
+            for (i, (p, q)) in x.iter().zip(y).enumerate() {
+                close(p, q, &format!("{at}[{i}]"));
+            }
+        }
+        (Value::Number(p), Value::Number(q)) => {
+            let (p, q) = (p.as_f64().expect("a number"), q.as_f64().expect("a number"));
+            assert!(
+                (p - q).abs() <= 1e-12 + 1e-9 * p.abs().max(q.abs()),
+                "{at}: {p} vs {q}"
+            );
+        }
+        _ => assert_eq!(a, b, "{at}"),
+    }
+}
+
+#[test]
+fn a_move_is_traced_without_exporting_again() {
+    // The fast path (M12e): L2 and its cage plate moved 1 mm along z in SolidCraft (as
+    // the golden cage-relay-moved.json does) change placements only, so the first export
+    // is traced with those two occurrences moved, with no export, as the moved export
+    // traces. A change of geometry afterwards is exported again.
+    let fixtures = fixtures();
+    let app = FakeApp::start(&fixtures.join("cage-relay.step"));
+    let control = scratch("fast");
+    let empty = scratch("fast-data");
+    app.write_control_folder(&control);
+    let (mut live, first) = Live::start(&parameters(&control, &empty)).expect("started");
+    assert_eq!(first["geometry"], "exported");
+    let exports = |app: &FakeApp| {
+        app.served()
+            .iter()
+            .filter(|s| *s == "engine.execute file.export_step")
+            .count()
+    };
+    assert_eq!(exports(&app), 1);
+    let moved_step = fixtures.join("cage-relay-moved.step");
+    let started = std::time::Instant::now();
+    app.move_occurrence("pc-lens:2", [0.0, 0.0, 1.0], &moved_step);
+    app.move_occurrence("cage-plate:2", [0.0, 0.0, 1.0], &moved_step);
+    let update = live
+        .next(Duration::from_secs(5))
+        .expect("waited")
+        .expect("traced again");
+    let elapsed = started.elapsed().as_secs_f64();
+    assert_eq!(update["geometry"], "moved");
+    assert_eq!(exports(&app), 1, "no export for a move");
+    let moved: Vec<&str> = update["moves"]
+        .as_array()
+        .expect("moves")
+        .iter()
+        .filter_map(|m| m["occurrence"].as_str())
+        .collect();
+    assert_eq!(moved, ["pc-lens:2", "cage-plate:2"]);
+    let exported = plain_trace("cage-relay-moved.step", &empty);
+    close(
+        &update["trace"]["detectors"],
+        &exported["detectors"],
+        "detectors",
+    );
+    close(&update["trace"]["ledger"], &exported["ledger"], "ledger");
+    assert!(elapsed < 2.0, "{elapsed} s");
+    // A feature added: exported again.
+    app.change(&moved_step);
+    let update = live
+        .next(Duration::from_secs(5))
+        .expect("waited")
+        .expect("traced again");
+    assert_eq!(update["geometry"], "exported");
+    assert_eq!(exports(&app), 2);
+    close(
+        &update["trace"]["detectors"],
+        &exported["detectors"],
+        "detectors",
+    );
+    drop(live);
     let _ = std::fs::remove_dir_all(&control);
     let _ = std::fs::remove_dir_all(&empty);
 }

@@ -72,6 +72,43 @@ connect is on.
       through it) on a dark rounded square, the axis as the beam in the view's ray red;
       drawn in code at any size
 
+## M12e A move traced without exporting again
+
+Asked for by the user (2026-11-20) after the first runs against SolidCraft: on the
+Thorlabs expander periscope each update took 8–15 s, most of it SolidCraft's STEP export
+of the whole design (21 MB, 4.6 s and more) and optobench reading and converting it
+(1.4 s; the trace itself 0.07 s).
+
+- [x] A geometry fingerprint with every snapshot (`Snapshot::geometry`): the component
+      tree without its placements, the bodies with their features and visibility and the
+      timeline (`document.inspect` without measurements: 4 ms, where measuring takes 30 s
+      on that assembly), the parameters' expressions and values. `document.inspect`'s
+      contract is checked with the others
+- [x] When the fingerprint is the latest export's, only placements changed: that export
+      is traced with each occurrence whose world placement changed moved by
+      `now · then⁻¹` (its path of names, as the STEP export names occurrences), and
+      nothing is exported. Otherwise, or when an occurrence is new, the design is exported
+      again. Each update says which (`geometry`: `moved` or `exported`, with its `moves`)
+- [x] `trace`, `view`, `optimize` and `graph` take `moves`: `[{ "occurrence": "<names
+      joined by />", "matrix": [[4 × 4]] }]`, rigid moves in the assembly's frame applied
+      after the STEP file's placements, each body (and each of its faces, which carry
+      their own placements) taking the move of the deepest occurrence it is in; an
+      occurrence the file does not have, or a matrix that is not a rotation and a
+      translation, refused
+- [x] The STEP files read lately are kept converted in memory (the last two, by path,
+      size and time of change), so a fast-path trace, and every view and trace of an
+      unchanged file in the window, skips reading and converting it
+- [x] The window keeps an update's `moves` with its export, so the view and the traces
+      after edits place the parts as SolidCraft has them
+- [x] Checks: the golden relay's STEP file with the moves its moved re-export was made
+      with (`pc-lens:2` and `cage-plate:2` 1 mm along z) traces as the moved export does,
+      to 1e-12 mm plus 1e-9 relative (the export's coordinates went through STEP's
+      text); a missing occurrence and a stretch refused; against the stand-in, the same
+      two moves in "SolidCraft" traced with no export, as the moved export traces, in
+      under 2 s, and a feature added afterwards exported again; the fingerprint the same
+      after a move and changed by a feature; in the window, parts moved back are placed by
+      two moves
+
 ## Checks
 
 Against a stand-in for SolidCraft (`optobench_bridge::fake`: the protocol as documented,
@@ -100,9 +137,18 @@ the schemas cut down to the fields optobench reads; CI has no SolidCraft):
       the same way. Then the design read (occurrences, 6 parameters, no joints) in a few
       milliseconds, exported, and the corpus sidecar `expander-periscope.optobench`
       traced against it: 99.9 % of the laser on `out`, the ledger balanced to 6e-16
-- [ ] Time per update on that assembly: 8–15 s, of which SolidCraft's STEP export of the
-      whole design (21 MB) takes 4.6 s and more, and the trace 1.5–2 s (release build).
-      Within 2 s on the golden scene (the stand-in); not yet on a vendor assembly
+- [x] Time per update on that assembly: 8–15 s at first, of which SolidCraft's STEP export
+      of the whole design (21 MB) takes 4.6 s and more, and reading and converting it
+      1.4 s; hence M12e. With it (2026-11-20): L1 and its mount moved 5 mm along z in
+      SolidCraft traced in 0.17 s with no export, the result on `out` the same to every
+      digit printed (centroid (0.7736065, −0.0020996) mm, RMS radius 0.0650859 mm,
+      0.0998973 W) as a fresh export of that state traced the ordinary way. A change that
+      exports takes about 3.5 s
+- [x] Found on the way: SolidCraft writes placements as the columns of the matrix (the
+      translation in the last row); the reader and the stand-in had assumed rows. Some
+      earlier moves in that session left `MoveN` features in the design's root component
+      (how they were made is not known); a change of features counts as a change of
+      geometry and is exported again, with the reason given
 
 ## Next (M13, write-back)
 

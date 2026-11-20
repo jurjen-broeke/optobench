@@ -425,6 +425,9 @@ pub struct Document {
     /// While the live link runs: the latest STEP export of the design open in
     /// SolidCraft, read in place of the sidecar's own STEP file.
     pub live_step: Option<PathBuf>,
+    /// With it, the occurrences moved in SolidCraft since that export (the live link's
+    /// `moves`), applied when it is read.
+    pub live_moves: Value,
     /// What the next run follows (for the runs strip).
     changed: String,
     undoing: bool,
@@ -458,6 +461,7 @@ impl Document {
             runs: Vec::new(),
             optimised: None,
             live_step: None,
+            live_moves: Value::Null,
             changed: "opened".into(),
             undoing: false,
             repaint,
@@ -503,6 +507,9 @@ impl Document {
             (reads_step, &self.live_step, parameters.as_object_mut())
         {
             p.insert("step".into(), json!(step.to_string_lossy()));
+            if self.live_moves.as_array().is_some_and(|m| !m.is_empty()) {
+                p.insert("moves".into(), self.live_moves.clone());
+            }
         }
         Ok(parameters)
     }
@@ -651,8 +658,10 @@ impl Document {
     pub fn accept_live(&mut self, update: &Value) {
         let revision = update["revision"].as_u64().unwrap_or_default();
         let step = update["step"].as_str().map(PathBuf::from);
-        let moved = step.is_some() && step != self.live_step;
+        let moves = update["moves"].clone();
+        let moved = step.is_some() && (step != self.live_step || moves != self.live_moves);
         self.live_step = step;
+        self.live_moves = moves;
         self.changed = format!("SolidCraft revision {revision}");
         self.accept(Finished {
             command: "trace".into(),
@@ -1022,6 +1031,7 @@ mod tests {
             runs: Vec::new(),
             optimised: None,
             live_step: None,
+            live_moves: Value::Null,
             changed: String::new(),
             undoing: false,
             repaint: std::sync::Arc::new(|| {}),

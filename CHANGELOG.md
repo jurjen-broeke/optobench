@@ -19,6 +19,9 @@ Nothing yet.
   (CAD) does the same and shows the parts where SolidCraft has them. `trace`, `view`,
   `optimize` and `graph` take `step`, a STEP file read in place of the one a sidecar
   names. SolidCraft must have Preferences › Assistant › Let AI agents connect on.
+  When only placements changed (a part moved), the last export is traced with those
+  occurrences moved instead of exporting again (`trace`, `view`, `optimize` and `graph`
+  take `moves`), and the STEP files read lately stay converted in memory.
 - The application has an icon: the title bar's mark, a lens outline with the beam
   through it, on a dark rounded square.
 
