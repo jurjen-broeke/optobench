@@ -123,7 +123,9 @@ fn a_changed_contract_or_a_layout_is_refused() {
     );
     // Only the contract was asked for.
     assert!(
-        app.served().iter().all(|s| s == "engine.describe"),
+        app.served()
+            .iter()
+            .all(|s| s == "engine.execute engine.describe"),
         "{:?}",
         app.served()
     );

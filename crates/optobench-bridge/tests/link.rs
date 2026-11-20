@@ -51,7 +51,7 @@ fn the_design_is_found_checked_and_read() {
     // Read only: nothing but reads were asked for.
     assert!(
         app.served().iter().all(|s| {
-            s == "engine.describe"
+            s == "engine.execute engine.describe"
                 || s.starts_with("engine.execute document.")
                 || s.ends_with(".list")
         }),

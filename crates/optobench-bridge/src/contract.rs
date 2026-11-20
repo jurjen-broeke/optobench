@@ -1,4 +1,5 @@
-//! The commands M12 reads, checked against the app's own schemas (`engine.describe`)
+//! The commands M12 reads, checked against the app's own schemas (the engine command
+//! `engine.describe`, run through `engine.execute`)
 //! before anything is read: each must exist with a typed contract, and its schema must
 //! still have every field optobench reads. A SolidCraft whose contract changed is refused
 //! with the changes named, rather than read wrongly.
@@ -127,7 +128,8 @@ fn missing(schema: &Value, needed: &Needed) -> Vec<String> {
 pub fn check(connection: &mut Connection) -> Result<(), BridgeError> {
     let mut changes = Vec::new();
     for command in commands() {
-        match connection.call("engine.describe", json!({ "command": command })) {
+        // `engine.describe` is an engine command (through `engine.execute`), not a method.
+        match connection.execute("engine.describe", json!({ "command": command })) {
             Ok(schema) => {
                 for needed in NEEDED.iter().filter(|n| n.command == command) {
                     changes.extend(missing(&schema, needed));

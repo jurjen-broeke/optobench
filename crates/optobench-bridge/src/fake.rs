@@ -2,7 +2,8 @@
 //! speaks the protocol as `docs/control-protocol.md` describes it (JSON lines, the token
 //! on a connection's first request, replies by id, `design.changed` events after
 //! `control.subscribe`) and answers the commands M12 reads with the shapes SolidCraft
-//! 0.45.0's schemas give. Its "design" is a STEP file the test names; `file.export_step`
+//! 0.45.0's schemas give, `engine.describe` among the engine commands (through
+//! `engine.execute`) as in the app; an unknown method is refused. Its "design" is a STEP file the test names; `file.export_step`
 //! copies it where it is asked to, inside the request's `allow_paths`.
 
 use std::io::{BufRead, BufReader, Write};
@@ -150,16 +151,6 @@ impl FakeApp {
         };
         state.served.push(served);
         match method {
-            "engine.describe" => {
-                let command = params["command"].as_str().unwrap_or_default();
-                let mut schema = schema(command).ok_or(format!("unknown command `{command}`"))?;
-                for (c, p) in &state.removed {
-                    if c == command {
-                        remove_property(&mut schema, p);
-                    }
-                }
-                Ok(schema)
-            }
             "control.capabilities" => Ok(json!({ "param_check": ["off", "warn", "strict"] })),
             "control.subscribe" => {
                 let stream = writer.try_clone().map_err(|e| e.to_string())?;
@@ -170,6 +161,17 @@ impl FakeApp {
                 let command = params["command"].as_str().unwrap_or_default();
                 let inner = &params["params"];
                 match command {
+                    "engine.describe" => {
+                        let described = inner["command"].as_str().unwrap_or_default();
+                        let mut schema =
+                            schema(described).ok_or(format!("unknown command `{described}`"))?;
+                        for (c, p) in &state.removed {
+                            if c == described {
+                                remove_property(&mut schema, p);
+                            }
+                        }
+                        Ok(schema)
+                    }
                     "document.revision" => {
                         Ok(json!({ "document_id": state.document_id, "revision": state.revision }))
                     }

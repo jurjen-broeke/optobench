@@ -93,8 +93,16 @@ the schemas cut down to the fields optobench reads; CI has no SolidCraft):
 - [x] `optobench live` prints the trace, then the trace after a change, and ends after
       `"changes": 1`; in the window (`live_traces_the_design_open_in_solidcraft`), Live on
       traces, a change is traced again and shows, Live off is back to the sidecar's file
-- [ ] Against SolidCraft itself, by the user: Let AI agents connect on, the golden cage
-      relay open, `optobench live` on its sidecar, a lens moved
+- [x] Against SolidCraft 0.45.0 itself (2026-11-20, the Thorlabs beam-expander periscope
+      open, 22 occurrences): the first run was refused by the contract check, rightly:
+      `engine.describe` is an engine command run through `engine.execute`, not a method
+      of its own as read from the documentation; fixed, and the stand-in now answers it
+      the same way. Then the design read (occurrences, 6 parameters, no joints) in a few
+      milliseconds, exported, and the corpus sidecar `expander-periscope.optobench`
+      traced against it: 99.9 % of the laser on `out`, the ledger balanced to 6e-16
+- [ ] Time per update on that assembly: 8–15 s, of which SolidCraft's STEP export of the
+      whole design (21 MB) takes 4.6 s and more, and the trace 1.5–2 s (release build).
+      Within 2 s on the golden scene (the stand-in); not yet on a vendor assembly
 
 ## Next (M13, write-back)
 
