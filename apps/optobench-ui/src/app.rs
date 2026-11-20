@@ -375,6 +375,8 @@ impl App {
                 Action::AddMirror => self.start_adding(New::Mirror),
                 Action::AddSource => self.start_adding(New::Source),
                 Action::AddDetector => self.start_adding(New::Detector),
+                Action::AddIris => self.start_adding(New::Iris),
+                Action::AddTube => self.start_adding(New::Tube),
                 Action::TagLens | Action::TagMirror => {
                     if let Ok(op) = self.tagging(action == Action::TagMirror) {
                         self.apply(vec![op]);
@@ -992,7 +994,12 @@ impl App {
                 .map(|_| ())
                 .ok_or_else(|| "select an item of the design".into()),
             Control::Action(
-                Action::AddLens | Action::AddMirror | Action::AddSource | Action::AddDetector,
+                Action::AddLens
+                | Action::AddMirror
+                | Action::AddSource
+                | Action::AddDetector
+                | Action::AddIris
+                | Action::AddTube,
             ) => layout(),
             Control::Action(Action::TagLens) => self.tagging(false).map(|_| ()),
             Control::Action(Action::TagMirror) => self.tagging(true).map(|_| ()),
@@ -1442,6 +1449,32 @@ impl App {
                             row(ui, self, i, format!("{}  ·  {}", item.id, item.role));
                         }
                     });
+                // Proxies: an iris (a plate with a hole) or a tube, by the file's kind.
+                let proxies: Vec<(usize, String)> = scene
+                    .design["proxy"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|p| {
+                        let id = p["id"].as_str()?;
+                        let i = scene.items.iter().position(|it| it.kind == "proxy" && it.id == id)?;
+                        let kind = match p["kind"].as_str() {
+                            Some("plate") => "iris",
+                            Some(other) => other,
+                            None => "proxy",
+                        };
+                        Some((i, format!("{id}  ·  {kind}")))
+                    })
+                    .collect();
+                if !proxies.is_empty() {
+                    egui::CollapsingHeader::new(format!("Irises and tubes ({})", proxies.len()))
+                        .default_open(true)
+                        .show(ui, |ui| {
+                            for (i, label) in proxies {
+                                row(ui, self, i, label);
+                            }
+                        });
+                }
                 let detectors: Vec<usize> = (0..scene.items.len())
                     .filter(|&i| scene.items[i].role == "detector")
                     .collect();
@@ -2370,6 +2403,8 @@ impl eframe::App for App {
                             (New::Mirror, _) => "Mirror".into(),
                             (New::Source, _) => "Source".into(),
                             (New::Detector, _) => "Detector".into(),
+                            (New::Iris, _) => "Iris".into(),
+                            (New::Tube, _) => "Tube".into(),
                         },
                         height: editors::new_height(design),
                         pitch: design["table"]["pitch"].as_f64()?,
@@ -3321,5 +3356,81 @@ mod exit {
         let traced = trace(&path, &dir);
         let detected = traced["ledger"]["detected_w"].as_f64().expect("detected");
         assert!(detected > 0.9e-3, "{traced}");
+    }
+
+    #[test]
+    fn an_iris_is_placed_on_a_hole_and_clips_the_beam() {
+        // An 8 mm beam along x to a screen six holes on; Iris clicked on hole (3, 0): a
+        // plate with a 5 mm hole, facing along x, passes about (5/8)² of the power. Made
+        // a tube in Properties, its keys follow and the file still reads.
+        let dir = scratch("iris");
+        let path = dir.join("iris.optobench");
+        std::fs::write(
+            &path,
+            "format = \"optobench/1\"\nkind = \"layout\"\nlayout = \"table\"\n\n[table]\npitch = 25.0\n\n\
+             [[source]]\nid = \"S1\"\nkind = \"collimated\"\nwavelength_um = 0.633\npower_w = 0.001\ndiameter = 8.0\nhole = [0, 0]\nheight = 75.0\naxis = [1, 0, 0]\n\n\
+             [[detector]]\nid = \"D1\"\nhole = [6, 0]\nheight = 75.0\naxis = [1, 0, 0]\nsize = [20, 20]\npixels = [20, 20]\n",
+        )
+        .expect("written");
+        let mut h = window(Some(path.clone()), &dir);
+        settle(&mut h);
+        click(&mut h, "Workspace");
+        click(&mut h, "Layout");
+        click(&mut h, "Iris");
+        h.state_mut().camera.top();
+        h.step();
+        let at = {
+            let app = h.state();
+            let rect = app.view.rect.expect("drawn");
+            let (x, y) = app.camera.to_screen(
+                [75.0, 0.0, 0.0],
+                (rect.center().x as f64, rect.center().y as f64),
+                rect.height() as f64,
+            );
+            egui::pos2(x as f32, y as f32)
+        };
+        h.event(egui::Event::PointerMoved(at));
+        h.step();
+        for pressed in [true, false] {
+            h.event(egui::Event::PointerButton {
+                pos: at,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: egui::Modifiers::NONE,
+            });
+            h.step();
+        }
+        settle(&mut h);
+        let text = std::fs::read_to_string(&path).expect("written");
+        assert!(
+            text.contains("[[proxy]]\nid = \"I1\"\nkind = \"plate\"")
+                && text.contains("hole = [3, 0]"),
+            "{text}"
+        );
+        assert!(errors(&h).is_empty(), "{:?}", errors(&h));
+        let traced = trace(&path, &dir);
+        let passed = traced["ledger"]["detected_w"].as_f64().expect("detected") / 1e-3;
+        let expected = (5.0_f64 / 8.0).powi(2);
+        assert!(
+            (passed - expected).abs() < 0.1,
+            "{passed} against {expected}"
+        );
+        // Properties: the iris made a tube.
+        click(&mut h, "I1  ·  iris");
+        h.query_all_by_role(egui::accesskit::Role::ComboBox)
+            .find(|c| c.value().as_deref() == Some("plate"))
+            .expect("its kind")
+            .click();
+        h.step();
+        h.step();
+        click(&mut h, "tube");
+        let text = std::fs::read_to_string(&path).expect("written");
+        assert!(
+            text.contains("kind = \"tube\"")
+                && text.contains("length = 50")
+                && !text.contains("hole_diameter"),
+            "{text}"
+        );
+        assert!(errors(&h).is_empty(), "{:?}", errors(&h));
     }
 }

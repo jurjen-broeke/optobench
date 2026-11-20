@@ -23,11 +23,21 @@ a mount's name or a doublet's radii.
 
 ## M17b Proxies added from the interface
 
-- [ ] Add for proxies on a layout: an iris (a `plate` with a hole) and a tube, placed by
-      a click on a hole like the other items; `plate` among a proxy's kinds in
-      Properties
-- [ ] Checks: an iris added on a hole traces and clips; a tube added on a planar layout
-      runs between two places along the path
+- [x] Iris and Tube (Layout, ADD; Tube under the section's menu): an iris is a `plate`
+      with a 5 mm hole, 30 mm square; a tube 25.4 mm across, 50 mm long on a table
+      layout, from 50 mm to 100 mm past the last item on a planar one. On a table layout
+      they wait for a hole to be clicked like the other items
+- [x] The browser lists them (Irises and tubes: `I1 · iris`, `T1 · tube`); before, a
+      proxy could be selected only in the view
+- [x] `plate` among a proxy's kinds in Properties; a new kind replaces the old kind's
+      keys (a tube's bore and length or run, a plate's hole and size, a planar plate's
+      `at`) in one edit, so the design still reads
+- [x] Aim for lenses, irises, tubes and screens too: they face the light from the item
+      chosen (their axis along it)
+- [x] Checks: new irises and tubes on table and planar layouts, a planar tube made a
+      plate, facing; in the window (`an_iris_is_placed_on_a_hole_and_clips_the_beam`), an
+      iris clicked on hole (3, 0) in an 8 mm beam passes about (5/8)² of the power, and
+      made a tube in Properties the file still reads
 
 ## M17c Mounts from Properties
 

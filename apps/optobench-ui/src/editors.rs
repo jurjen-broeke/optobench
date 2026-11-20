@@ -54,7 +54,7 @@ fn choices(table: &str, key: &str) -> Option<&'static [&'static str]> {
             "diameter",
             "power",
         ]),
-        ("proxy", "kind") => Some(&["tube"]),
+        ("proxy", "kind") => Some(&["plate", "tube"]),
         _ => None,
     }
 }
@@ -277,8 +277,66 @@ pub fn aim(from: V3, at: V3, to: V3) -> Option<V3> {
     Some(normal.map(|x| ((x / largest) * 1e9).round() / 1e9 + 0.0))
 }
 
-/// Aim, for a mirror with an axis: where the light comes from and where it should go,
-/// chosen among the other items; returns the `set` of its axis.
+/// The axis of an item that faces light coming from `from` at `at` (a lens, an iris, a
+/// screen): along the light, scaled so its largest number is 1 and rounded to 1e-9.
+/// `None` when `from` is at its own place.
+pub fn facing(from: V3, at: V3) -> Option<V3> {
+    let d: V3 = std::array::from_fn(|k| at[k] - from[k]);
+    let largest = d.iter().fold(0.0_f64, |m, x| m.max(x.abs()));
+    (largest > 1e-9).then(|| d.map(|x| ((x / largest) * 1e9).round() / 1e9 + 0.0))
+}
+
+/// A proxy turned into another kind: its kind set and the keys of the old kind replaced
+/// by the new one's (a plate's hole and size, a tube's bore and length; on a planar
+/// layout a plate's `at` and a tube's `from` and `to`), so the design still reads.
+pub fn proxy_kind(target: &Value, entry: &Value, kind: &str) -> Vec<Value> {
+    let op = |op: &str, key: &str, value: Option<Value>| {
+        let mut o = target.clone();
+        o["op"] = json!(op);
+        o["key"] = json!(key);
+        if let Some(v) = value {
+            o["value"] = v;
+        }
+        o
+    };
+    let planar = entry["at"].is_number() || entry["from"].is_number();
+    let mut ops = vec![op("set", "kind", Some(json!(kind)))];
+    let unset = |ops: &mut Vec<Value>, keys: &[&str]| {
+        for k in keys {
+            if !entry[*k].is_null() {
+                ops.push(op("unset", k, None));
+            }
+        }
+    };
+    match kind {
+        "plate" => {
+            unset(&mut ops, &["inner_diameter", "length", "from", "to"]);
+            ops.push(op("set", "hole_diameter", Some(json!(5.0))));
+            ops.push(op("set", "size", Some(json!(30.0))));
+            if planar {
+                ops.push(op("set", "at", Some(entry["from"].clone())));
+            }
+        }
+        "tube" => {
+            unset(&mut ops, &["hole_diameter", "size", "at"]);
+            ops.push(op("set", "inner_diameter", Some(json!(25.4))));
+            if planar {
+                let at = entry["at"].as_f64().unwrap_or(0.0);
+                ops.push(op("set", "from", Some(tidy(at))));
+                ops.push(op("set", "to", Some(tidy(at + 50.0))));
+            } else {
+                ops.push(op("set", "length", Some(json!(50.0))));
+            }
+        }
+        _ => return Vec::new(),
+    }
+    ops
+}
+
+/// Aim, for an item with an axis: where the light comes from (any other item) and, for
+/// a mirror, where it should go; returns the `set` of its axis. A mirror's axis halves
+/// the turn ([`aim`]), anything else faces along the light ([`facing`]).
+#[allow(clippy::too_many_arguments)]
 fn aim_editor(
     ui: &mut Ui,
     drafts: &mut Drafts,
@@ -286,6 +344,7 @@ fn aim_editor(
     target: &Value,
     entry: &Value,
     origin: V3,
+    mirror: bool,
     context: &Context,
 ) -> Option<Value> {
     let own = entry["id"].as_str().unwrap_or_default();
@@ -296,8 +355,17 @@ fn aim_editor(
     let mut op = None;
     ui.horizontal_wrapped(|ui| {
         ui.label(RichText::new("aim").color(DARK.text_dim))
-            .on_hover_text("Set its axis from where the light comes from and where it should go");
-        for (label, key) in [("light from", "from"), ("to", "to")] {
+            .on_hover_text(if mirror {
+                "Set its axis from where the light comes from and where it should go"
+            } else {
+                "Turn it to face the light from an item"
+            });
+        let picks: &[(&str, &str)] = if mirror {
+            &[("light from", "from"), ("to", "to")]
+        } else {
+            &[("light from", "from")]
+        };
+        for &(label, key) in picks {
             ui.label(RichText::new(label).color(DARK.text_dim).size(11.0));
             let path = format!("{base}/aim/{key}");
             let current = drafts.texts.get(&path).cloned().unwrap_or_default();
@@ -317,12 +385,23 @@ fn aim_editor(
             others.iter().find(|(o, _)| o == id).map(|(_, p)| *p)
         };
         let (from, to) = (place("from"), place("to"));
+        let ready = from.is_some() && (to.is_some() || !mirror);
         if ui
-            .add_enabled(from.is_some() && to.is_some(), egui::Button::new("Aim"))
-            .on_hover_text("Turn it so the light from the first goes to the second")
+            .add_enabled(ready, egui::Button::new("Aim"))
+            .on_hover_text(if mirror {
+                "Turn it so the light from the first goes to the second"
+            } else {
+                "Turn it to face the light from that item"
+            })
             .clicked()
         {
-            match aim(from.unwrap_or_default(), origin, to.unwrap_or_default()) {
+            let from = from.unwrap_or_default();
+            let axis = if mirror {
+                aim(from, origin, to.unwrap_or_default())
+            } else {
+                facing(from, origin)
+            };
+            match axis {
                 Some(axis) => {
                     let mut set = target.clone();
                     set["op"] = json!("set");
@@ -334,7 +413,12 @@ fn aim_editor(
                 None => {
                     drafts.texts.insert(
                         format!("{base}/aim/note"),
-                        "No mirror lets light go straight on, or aims at its own place".into(),
+                        if mirror {
+                            "No mirror lets light go straight on, or aims at its own place"
+                        } else {
+                            "That item stands at its own place"
+                        }
+                        .into(),
                     );
                 }
             }
@@ -574,9 +658,12 @@ pub fn entry(
         operations.extend(lens_editor(ui, drafts, &base, &target, entry, lens));
     }
     operations.extend(position(ui, drafts, &base, &target, entry, origin, context));
-    if table == "element" && entry["kind"] == "mirror" && entry["axis"].is_array() {
+    if ["element", "detector", "proxy"].contains(&table) && entry["axis"].is_array() {
         if let Some(at) = origin {
-            operations.extend(aim_editor(ui, drafts, &base, &target, entry, at, context));
+            let mirror = table == "element" && entry["kind"] == "mirror";
+            operations.extend(aim_editor(
+                ui, drafts, &base, &target, entry, at, mirror, context,
+            ));
         }
     }
     if ["element", "source", "detector", "proxy"].contains(&table) && entry["id"].is_string() {
@@ -605,6 +692,12 @@ pub fn entry(
                 ui.label(RichText::new(&key).color(DARK.text_dim));
                 let path = format!("{base}/{key}");
                 if let Some(value) = field(ui, drafts, &path, table, &key, &entry[&key], context) {
+                    if table == "proxy" && key == "kind" {
+                        operations.extend(proxy_kind(&target, entry, value.as_str().unwrap_or("")));
+                        ui.label("");
+                        ui.end_row();
+                        continue;
+                    }
                     let mut op = target.clone();
                     op["op"] = json!("set");
                     op["key"] = json!(key);
@@ -1570,6 +1663,10 @@ pub enum New {
     Source,
     /// A screen.
     Detector,
+    /// An iris: a `plate` proxy with a round hole.
+    Iris,
+    /// A tube proxy.
+    Tube,
 }
 
 /// The height new items of a table layout get: the first source's, else 50 mm.
@@ -1612,7 +1709,12 @@ pub fn add_at(
         } else {
             0.0
         };
-        vec![("at".into(), json!(at))]
+        if new == New::Tube {
+            // A tube runs from `from` to `to` along the path.
+            vec![("from".into(), json!(at)), ("to".into(), json!(at + 50.0))]
+        } else {
+            vec![("at".into(), json!(at))]
+        }
     } else {
         let furthest = all().filter_map(|e| e["hole"][0].as_i64()).max();
         let hole = hole.unwrap_or((furthest.map_or(0, |x| x + 2), 0));
@@ -1695,6 +1797,38 @@ pub fn add_at(
             ]
             .concat(),
         ),
+        New::Iris => (
+            "proxy",
+            "I",
+            [
+                vec![
+                    ("kind".into(), json!("plate")),
+                    ("hole_diameter".into(), json!(5.0)),
+                    ("size".into(), json!(30.0)),
+                ],
+                place,
+                axis([1, 0, 0]),
+            ]
+            .concat(),
+        ),
+        New::Tube => (
+            "proxy",
+            "T",
+            [
+                vec![
+                    ("kind".into(), json!("tube")),
+                    ("inner_diameter".into(), json!(25.4)),
+                ],
+                place,
+                axis([1, 0, 0]),
+                if planar {
+                    Vec::new()
+                } else {
+                    vec![("length".into(), json!(50.0))]
+                },
+            ]
+            .concat(),
+        ),
     };
     // A library lens takes its kind, prescription, size and coating from its part.
     let fields: Vec<(String, Value)> = match (new, library) {
@@ -1748,6 +1882,51 @@ pub fn tag(design: &Value, solid: &str, mirror_face: Option<(V3, [V3; 3])>) -> O
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn irises_and_tubes_are_added_and_turned_into_each_other() {
+        let pairs = |op: &Value| op["entry"].as_array().expect("pairs").clone();
+        // On a table: an iris is a plate on the hole clicked, facing along x.
+        let table = json!({ "layout": "table", "source": [{ "id": "S1", "hole": [0, 0], "height": 75.0 }] });
+        let op = add_at(&table, New::Iris, Some((3, 0)), None).expect("an op");
+        assert_eq!(op["table"], "proxy");
+        let entry = pairs(&op);
+        for pair in [
+            json!(["id", "I1"]),
+            json!(["kind", "plate"]),
+            json!(["hole_diameter", 5.0]),
+            json!(["hole", [3, 0]]),
+            json!(["height", 75.0]),
+            json!(["axis", [1, 0, 0]]),
+        ] {
+            assert!(entry.contains(&pair), "{pair} in {entry:?}");
+        }
+        // A tube on a table has a length; on a planar layout it runs from, to.
+        let op = add_at(&table, New::Tube, Some((1, 0)), None).expect("an op");
+        assert!(pairs(&op).contains(&json!(["length", 50.0])));
+        let planar = json!({ "layout": "planar", "source": [{ "id": "S1", "at": 0.0 }],
+                             "detector": [{ "id": "D1", "at": 100.0 }] });
+        let entry = pairs(&add(&planar, New::Tube).expect("an op"));
+        assert!(entry.contains(&json!(["from", 150.0])) && entry.contains(&json!(["to", 200.0])));
+        assert!(!entry.iter().any(|p| p[0] == "axis" || p[0] == "at"));
+        // A planar tube made a plate: its bore and run replaced by a hole, size and `at`.
+        let target = json!({ "table": "proxy", "id": "T1" });
+        let tube = json!({ "id": "T1", "kind": "tube", "inner_diameter": 25.4, "from": 150.0, "to": 200.0 });
+        let ops = proxy_kind(&target, &tube, "plate");
+        let said = |op: &str, key: &str| ops.iter().any(|o| o["op"] == op && o["key"] == key);
+        assert!(said("set", "kind") && said("unset", "inner_diameter") && said("unset", "from"));
+        assert!(said("unset", "to") && said("set", "hole_diameter") && said("set", "size"));
+        assert!(ops.contains(
+            &json!({ "table": "proxy", "id": "T1", "op": "set", "key": "at", "value": 150.0 })
+        ));
+        // An iris that faces the light: along it, whatever its length.
+        assert_eq!(
+            facing([0.0, 0.0, 75.0], [0.0, 75.0, 75.0]),
+            Some([0.0, 1.0, 0.0])
+        );
+        assert_eq!(facing([0.0; 3], [-30.0, 30.0, 0.0]), Some([-1.0, 1.0, 0.0]));
+        assert_eq!(facing([1.0; 3], [1.0; 3]), None);
+    }
 
     #[test]
     fn a_mirror_is_aimed_by_the_law_of_reflection() {
