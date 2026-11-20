@@ -13,6 +13,7 @@ layer = "apps"
 
 [dependencies]
 optobench-commands.workspace = true
+optobench-bridge.workspace = true
 serde_json.workspace = true
 
 [lints]

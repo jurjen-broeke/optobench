@@ -7,6 +7,24 @@ with the release that introduced them.
 
 Nothing yet.
 
+## 0.3.0 (2026-11-20)
+
+- M12 the live link to SolidCraft, read only: `optobench-bridge` finds the running app
+  (its control folder's token files, or `SOLIDCRAFT_CONTROL_PORT` and
+  `SOLIDCRAFT_CONTROL_TOKEN`), checks the contracts of the commands it reads and refuses
+  a SolidCraft whose contract changed, and reads the design: occurrences with their
+  placements in the world, joints, parameters, its revision. `optobench live
+  {"path": "<sidecar>"}` traces the sidecar against a STEP export of the design open in
+  SolidCraft, again after each change (one JSON line per trace); in the window, Live
+  (CAD) does the same and shows the parts where SolidCraft has them. `trace`, `view`,
+  `optimize` and `graph` take `step`, a STEP file read in place of the one a sidecar
+  names. SolidCraft must have Preferences › Assistant › Let AI agents connect on.
+  When only placements changed (a part moved), the last export is traced with those
+  occurrences moved instead of exporting again (`trace`, `view`, `optimize` and `graph`
+  take `moves`), and the STEP files read lately stay converted in memory.
+- The application has an icon: the title bar's mark, a lens outline with the beam
+  through it, on a dark rounded square.
+
 ## 0.2.0 (2026-11-20)
 
 - M17 table layouts, follow-ups: Aim in Properties turns a mirror so the light from one

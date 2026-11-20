@@ -13,6 +13,8 @@ mod editors;
 mod graphs;
 mod icons;
 mod lens;
+mod live;
+mod logo;
 mod moving;
 mod render;
 mod screenshot;
@@ -40,7 +42,12 @@ fn main() -> eframe::Result {
             .with_title("optobench")
             .with_inner_size([1440.0, 900.0])
             .with_min_inner_size([960.0, 600.0])
-            .with_drag_and_drop(true),
+            .with_drag_and_drop(true)
+            .with_icon(std::sync::Arc::new(egui::IconData {
+                rgba: logo::rgba(256),
+                width: 256,
+                height: 256,
+            })),
         ..Default::default()
     };
     eframe::run_native(

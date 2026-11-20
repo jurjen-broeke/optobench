@@ -532,6 +532,20 @@ pub fn draw(painter: &Painter, rect: Rect, id: &str, enabled: bool) {
                 c.badge(true);
             }
         }
+        "live" => {
+            // A beam into a lens, with the link's two arrows going round: traced again
+            // whenever SolidCraft changes.
+            let iso = Iso::at(0.6, 30.0, 34.0);
+            c.disc(iso, -1.5, 1.5, 16.0, r.a2, r.a1);
+            let middle = iso.p(0.0, 0.0, 12.0);
+            c.line(&[pos2(4.0, middle.y), middle], ACTION, r.beam);
+            let ring = c.arc(pos2(32.0, 32.0), 26.0, 200.0, 330.0);
+            c.line(&ring, ACTION, r.a3);
+            c.arrow(ring[ring.len() - 2], ring[ring.len() - 1], ACTION, r.a3);
+            let back = c.arc(pos2(32.0, 32.0), 26.0, 20.0, 150.0);
+            c.line(&back, ACTION, r.a3);
+            c.arrow(back[back.len() - 2], back[back.len() - 1], ACTION, r.a3);
+        }
         "trace" => {
             let iso = Iso::at(0.75, 32.0, 34.0);
             let rays = [
@@ -940,6 +954,7 @@ pub const ALL: &[&str] = &[
     "tube",
     "add-tube",
     "trace",
+    "live",
     "optimise",
     "focus",
     "gaussian",

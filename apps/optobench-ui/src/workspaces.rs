@@ -60,6 +60,8 @@ pub enum Action {
     Apply,
     /// Move or turn the selected layout item with handles in the view.
     Move,
+    /// Trace the sidecar against the design open in SolidCraft, again after each change.
+    Live,
 }
 
 impl Action {
@@ -87,6 +89,7 @@ impl Action {
             Action::TagMirror => "Tag Mirror",
             Action::Apply => "Apply",
             Action::Move => "Move",
+            Action::Live => "Live",
         }
     }
 
@@ -114,6 +117,7 @@ impl Action {
             Action::TagMirror => "tag-mirror",
             Action::Apply => "apply",
             Action::Move => "move",
+            Action::Live => "live",
         }
     }
 
@@ -143,6 +147,9 @@ impl Action {
             Action::Apply => "write the optimised values into the design's degrees of freedom",
             Action::Move => {
                 "move or turn the selected item: drag an arrow along x, y or z, or a ring about it"
+            }
+            Action::Live => {
+                "trace against the design open in SolidCraft, again after each change (read only; SolidCraft's Preferences › Assistant › Let AI agents connect must be on)"
             }
         }
     }
@@ -318,6 +325,10 @@ pub const WORKSPACES: [Workspace; 3] = [
                             button(command("trace")),
                             button(command("graph")),
                         ],
+                    },
+                    Section {
+                        name: "SOLIDCRAFT",
+                        items: &[button(Control::Action(Action::Live))],
                     },
                     VIEW_SECTION,
                 ],

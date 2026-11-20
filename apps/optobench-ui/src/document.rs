@@ -422,6 +422,12 @@ pub struct Document {
     /// Edits made to the design since it was opened (graphs drawn before the last are
     /// out of date).
     pub edits: u64,
+    /// While the live link runs: the latest STEP export of the design open in
+    /// SolidCraft, read in place of the sidecar's own STEP file.
+    pub live_step: Option<PathBuf>,
+    /// With it, the occurrences moved in SolidCraft since that export (the live link's
+    /// `moves`), applied when it is read.
+    pub live_moves: Value,
     /// What the next run follows (for the runs strip).
     changed: String,
     undoing: bool,
@@ -454,6 +460,8 @@ impl Document {
             undo: Vec::new(),
             runs: Vec::new(),
             optimised: None,
+            live_step: None,
+            live_moves: Value::Null,
             changed: "opened".into(),
             undoing: false,
             repaint,
@@ -493,6 +501,15 @@ impl Document {
             (uses_data, &self.data_directory, parameters.as_object_mut())
         {
             p.insert("data_directory".into(), json!(data.to_string_lossy()));
+        }
+        let reads_step = matches!(command, "view" | "trace" | "optimize" | "graph");
+        if let (true, Some(step), Some(p)) =
+            (reads_step, &self.live_step, parameters.as_object_mut())
+        {
+            p.insert("step".into(), json!(step.to_string_lossy()));
+            if self.live_moves.as_array().is_some_and(|m| !m.is_empty()) {
+                p.insert("moves".into(), self.live_moves.clone());
+            }
         }
         Ok(parameters)
     }
@@ -634,6 +651,27 @@ impl Document {
             });
             repaint();
         });
+    }
+
+    /// Takes in an update of the live link: its trace as a trace, after a change in
+    /// SolidCraft; the scene read again from its export when the design moved.
+    pub fn accept_live(&mut self, update: &Value) {
+        let revision = update["revision"].as_u64().unwrap_or_default();
+        let step = update["step"].as_str().map(PathBuf::from);
+        let moves = update["moves"].clone();
+        let moved = step.is_some() && (step != self.live_step || moves != self.live_moves);
+        self.live_step = step;
+        self.live_moves = moves;
+        self.changed = format!("SolidCraft revision {revision}");
+        self.accept(Finished {
+            command: "trace".into(),
+            of: None,
+            result: Ok(update["trace"].clone()),
+            scene: None,
+        });
+        if moved {
+            self.start("view", json!({}));
+        }
     }
 
     /// Takes in the results that arrived.
@@ -992,6 +1030,8 @@ mod tests {
             undo: Vec::new(),
             runs: Vec::new(),
             optimised: None,
+            live_step: None,
+            live_moves: Value::Null,
             changed: String::new(),
             undoing: false,
             repaint: std::sync::Arc::new(|| {}),

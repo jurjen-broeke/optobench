@@ -140,6 +140,63 @@ pub(crate) fn dofs_json(scene: &optobench_scene::Scene) -> Value {
     )
 }
 
+/// A sidecar's `moves`: `[{ "occurrence": "<names joined by />", "matrix": [[4 × 4]] }]`,
+/// rigid moves of the assembly's occurrences in its frame (row-major, mm), applied after
+/// the STEP file's placements: the live link's parts moved in SolidCraft since its export.
+#[allow(clippy::type_complexity)]
+fn moves(
+    parameters: &Parameters,
+) -> Result<Vec<(String, optobench_math::Transform)>, CommandError> {
+    use optobench_math::{Frame, Vec3};
+    let invalid = |m: String| CommandError::new(ErrorCode::InvalidParameters, m);
+    let Some(list) = parameters.get("moves") else {
+        return Ok(Vec::new());
+    };
+    let list = list
+        .as_array()
+        .ok_or_else(|| invalid("`moves` is a list of { occurrence, matrix }".into()))?;
+    list.iter()
+        .map(|m| {
+            let occurrence = m["occurrence"]
+                .as_str()
+                .ok_or_else(|| invalid("a move needs its `occurrence`".into()))?;
+            let entry = |i: usize, j: usize| m["matrix"].get(i)?.get(j)?.as_f64();
+            let mut a = [[0.0; 4]; 4];
+            for (i, row) in a.iter_mut().enumerate() {
+                for (j, value) in row.iter_mut().enumerate() {
+                    *value = entry(i, j).ok_or_else(|| {
+                        invalid(format!(
+                            "the move of `{occurrence}`: `matrix` is 4 rows of 4 numbers"
+                        ))
+                    })?;
+                }
+            }
+            // A rotation (orthonormal columns, determinant +1) and a translation.
+            let column = |j: usize| Vec3::new(a[0][j], a[1][j], a[2][j]);
+            let (x, y, z) = (column(0), column(1), column(2));
+            let rigid = a[3]
+                .iter()
+                .zip([0.0, 0.0, 0.0, 1.0])
+                .all(|(v, w)| (v - w).abs() < 1e-12)
+                && [x.dot(x), y.dot(y), z.dot(z)]
+                    .iter()
+                    .all(|n| (n - 1.0).abs() < 1e-9)
+                && [x.dot(y), y.dot(z), z.dot(x)]
+                    .iter()
+                    .all(|d| d.abs() < 1e-9)
+                && (x.cross(y).dot(z) - 1.0).abs() < 1e-9;
+            let frame = Frame::new(Vec3::new(a[0][3], a[1][3], a[2][3]), z, x)
+                .filter(|_| rigid)
+                .ok_or_else(|| {
+                    invalid(format!(
+                        "the move of `{occurrence}` is not rigid (a rotation and a translation)"
+                    ))
+                })?;
+            Ok((occurrence.to_owned(), frame.transform()))
+        })
+        .collect()
+}
+
 /// A design file read with the user's data: its scene, the library parts it matched,
 /// its text and the data directory used (the `data_directory` parameter or the
 /// platform's).
@@ -192,9 +249,25 @@ pub(crate) fn load_text(
         curves: &curves,
         library: &library,
     };
+    let step = text(parameters, "step")?.map(Path::new);
+    let moves = moves(parameters)?;
+    let moves: Vec<sidecar::Move> = moves
+        .iter()
+        .map(|(occurrence, transform)| sidecar::Move {
+            occurrence,
+            transform: *transform,
+        })
+        .collect();
     let (scene, parts) = match sidecar::kind_of(&source).as_deref() {
         Some("sidecar") => {
-            sidecar::read(&source, Path::new(path), &lookups).map(|read| (read.scene, read.parts))
+            sidecar::read_with_step(&source, Path::new(path), step, &moves, &lookups)
+                .map(|read| (read.scene, read.parts))
+        }
+        _ if step.is_some() || !moves.is_empty() => {
+            return Err(CommandError::new(
+                ErrorCode::InvalidParameters,
+                "`step` and `moves` are for a sidecar: a layout has no STEP file",
+            ));
         }
         _ => scene_file::parse_with(&source, &lookups).map(|scene| (scene, Vec::new())),
     }
@@ -206,12 +279,15 @@ pub(crate) fn load_text(
 /// and optionally `data_directory`
 /// (for imported materials), `svg` (where to write the layout view), `view` (`top` or
 /// `side`), `rays_drawn` (default 200) and `dofs` (`{ "<name>": value }`, mm or degrees,
-/// in place of the file's values).
+/// in place of the file's values), and `step` (a sidecar's assembly read from this STEP
+/// file instead of the one it names: the live link's fresh export).
 pub(crate) fn trace(parameters: &Parameters) -> Result<Value, CommandError> {
     check_keys(
         parameters,
         &[
             "path",
+            "step",
+            "moves",
             "data_directory",
             "svg",
             "view",
@@ -410,7 +486,15 @@ pub(crate) fn view(parameters: &Parameters) -> Result<Value, CommandError> {
     use optobench_scene::{ElementKind, SolidRole};
     check_keys(
         parameters,
-        &["path", "data_directory", "dofs", "max_points", "mesh"],
+        &[
+            "path",
+            "data_directory",
+            "dofs",
+            "max_points",
+            "mesh",
+            "step",
+            "moves",
+        ],
     )?;
     let path = text(parameters, "path")?.ok_or_else(|| {
         CommandError::new(ErrorCode::InvalidParameters, "missing parameter `path`")

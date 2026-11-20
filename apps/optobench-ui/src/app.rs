@@ -70,6 +70,10 @@ pub struct App {
     lens_import: Option<LensImport>,
     /// The parts library's mounts, read again after each change to the design.
     library_mounts: Option<Vec<Value>>,
+    /// The live link to SolidCraft, while it runs.
+    live: Option<crate::live::Link>,
+    /// SolidCraft's control folder, when not its usual place (tests).
+    control_directory: Option<PathBuf>,
 }
 
 /// A lens's STEP file being made a library part.
@@ -274,6 +278,8 @@ impl App {
             lens_chooser: None,
             lens_import: None,
             library_mounts: None,
+            live: None,
+            control_directory: None,
         };
         if let Some(path) = path {
             app.open(path);
@@ -352,6 +358,7 @@ impl App {
                 Action::Right => self.camera.right(),
                 Action::Isometric => self.camera.isometric(),
                 Action::Rays => self.show_rays = !self.show_rays,
+                Action::Live => self.toggle_live(),
                 Action::New => self.new_dialog = Some(25.0),
                 Action::Undo => {
                     if let Some(doc) = &mut self.doc {
@@ -433,6 +440,78 @@ impl App {
         let what = describe(&operations);
         if let Some(doc) = &mut self.doc {
             doc.edit(operations, what);
+        }
+    }
+
+    /// Live on: a link to SolidCraft traces the sidecar against the design open there,
+    /// again after each change. Live off: the sidecar's own STEP file again.
+    fn toggle_live(&mut self) {
+        if self.live.take().is_some() {
+            self.end_live(
+                "Live: off; reading the sidecar's own STEP file again".into(),
+                false,
+            );
+            return;
+        }
+        let Some(doc) = &self.doc else { return };
+        let mut parameters = json!({
+            "path": doc.path.to_string_lossy(),
+            "ray_paths": crate::document::RAYS_DRAWN,
+        });
+        if let Some(data) = &doc.data_directory {
+            parameters["data_directory"] = json!(data.to_string_lossy());
+        }
+        if let Some(control) = &self.control_directory {
+            parameters["control_directory"] = json!(control.to_string_lossy());
+        }
+        let ctx = self.ctx.clone();
+        self.live = Some(crate::live::Link::start(
+            parameters,
+            std::sync::Arc::new(move || ctx.request_repaint()),
+        ));
+        self.notice = Some((false, "Live: connecting to SolidCraft…".into()));
+    }
+
+    /// Back to the sidecar's own STEP file: the scene read again, traced again if it was.
+    fn end_live(&mut self, why: String, error: bool) {
+        self.live = None;
+        self.notice = Some((error, why));
+        if let Some(doc) = &mut self.doc {
+            doc.live_moves = Value::Null;
+            if doc.live_step.take().is_some() {
+                doc.start("view", json!({}));
+                if doc.trace.is_some() {
+                    doc.start("trace", json!({}));
+                }
+            }
+        }
+    }
+
+    /// Takes in what the live link sent.
+    fn poll_live(&mut self) {
+        let Some(link) = &mut self.live else { return };
+        let mut ended = None;
+        for message in link.poll() {
+            match message {
+                crate::live::Message::Update(update) => {
+                    link.revision = update["revision"].as_u64();
+                    let seconds = update["seconds"].as_f64().unwrap_or(0.0);
+                    if let Some(doc) = &mut self.doc {
+                        doc.accept_live(&update);
+                    }
+                    self.notice = Some((
+                        false,
+                        format!(
+                            "Live: SolidCraft revision {}, traced in {seconds:.2} s",
+                            link.revision.unwrap_or_default()
+                        ),
+                    ));
+                }
+                crate::live::Message::Ended(why) => ended = Some(why),
+            }
+        }
+        if let Some(why) = ended {
+            self.end_live(format!("Live: {why}"), true);
         }
     }
 
@@ -1004,6 +1083,11 @@ impl App {
                 | Action::AddIris
                 | Action::AddTube,
             ) => layout(),
+            Control::Action(Action::Live) => match self.design() {
+                Some(d) if d["kind"] == "sidecar" => Ok(()),
+                Some(_) => Err("the live link traces a CAD design: open its sidecar".into()),
+                None => Err("open a sidecar first".into()),
+            },
             Control::Action(Action::TagLens) => self.tagging(false).map(|_| ()),
             Control::Action(Action::TagMirror) => self.tagging(true).map(|_| ()),
             Control::Action(_) => self
@@ -1182,7 +1266,11 @@ impl App {
         let icon = Vec2::new(26.0, 26.0);
         let icon_rect =
             egui::Rect::from_center_size(rect.center_top() + Vec2::new(0.0, 18.0), icon);
-        let active = matches!(item.control, Control::Action(Action::Rays)) && self.show_rays;
+        let active = match item.control {
+            Control::Action(Action::Rays) => self.show_rays,
+            Control::Action(Action::Live) => self.live.is_some(),
+            _ => false,
+        };
         if active {
             ui.painter().rect_filled(
                 icon_rect.expand(3.0),
@@ -2342,6 +2430,7 @@ impl eframe::App for App {
         if let Some(doc) = &mut self.doc {
             doc.poll();
         }
+        self.poll_live();
         // A design dropped on the window opens.
         let dropped: Vec<PathBuf> = ctx.input(|i| {
             i.raw
@@ -3642,5 +3731,88 @@ mod exit {
             .as_f64()
             .expect("direct");
         assert!((screen / 1e-3 - 0.9216).abs() < 1e-6, "{screen}");
+    }
+
+    #[test]
+    fn live_traces_the_design_open_in_solidcraft() {
+        // Against a stand-in for SolidCraft: Live on the golden cage relay's sidecar traces
+        // the design as it is; a lens moved there is traced again and the scene read from
+        // the new export; Live off reads the sidecar's own STEP file again.
+        let fixtures =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../crates/optobench-io/tests/step");
+        let app = optobench_bridge::fake::FakeApp::start(&fixtures.join("cage-relay.step"));
+        let dir = scratch("live");
+        app.write_control_folder(&dir.join("control"));
+        let mut h = window(Some(fixtures.join("cage-relay.optobench")), &dir);
+        h.state_mut().control_directory = Some(dir.join("control"));
+        settle(&mut h);
+        let wait = |h: &mut Harness<'static, App>, until: &dyn Fn(&App) -> bool| {
+            for _ in 0..500 {
+                h.step();
+                settle(h);
+                if until(h.state()) {
+                    return;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            panic!("waited in vain: {:?}", h.state().notice);
+        };
+        let image = |app: &App| -> Option<Value> {
+            app.doc.as_ref()?.trace.as_ref()?.report["detectors"]
+                .as_array()?
+                .iter()
+                .find(|d| d["id"] == "image")
+                .map(|d| d["direct_centroid_mm"].clone())
+        };
+        click(&mut h, "Live");
+        wait(&mut h, &|a| {
+            a.live.as_ref().is_some_and(|l| l.revision == Some(1)) && image(a).is_some()
+        });
+        let first = image(h.state()).expect("traced");
+        assert!(h.state().doc.as_ref().expect("open").live_step.is_some());
+        app.change(&fixtures.join("cage-relay-moved.step"));
+        wait(&mut h, &|a| {
+            a.live.as_ref().is_some_and(|l| l.revision == Some(2))
+        });
+        settle(&mut h);
+        let moved = image(h.state()).expect("traced again");
+        assert_ne!(moved, first, "the move shows");
+        // Moved back in SolidCraft: no export, the parts placed by moves, as at first.
+        app.move_occurrence(
+            "pc-lens:2",
+            [0.0, 0.0, -1.0],
+            &fixtures.join("cage-relay.step"),
+        );
+        app.move_occurrence(
+            "cage-plate:2",
+            [0.0, 0.0, -1.0],
+            &fixtures.join("cage-relay.step"),
+        );
+        wait(&mut h, &|a| {
+            a.live.as_ref().is_some_and(|l| l.revision == Some(4))
+        });
+        settle(&mut h);
+        let doc = h.state().doc.as_ref().expect("open");
+        assert_eq!(
+            doc.live_moves.as_array().map(Vec::len),
+            Some(2),
+            "{}",
+            doc.live_moves
+        );
+        assert!(
+            h.state()
+                .notice
+                .as_ref()
+                .is_some_and(|(e, t)| !e && t.contains("revision 4")),
+            "{:?}",
+            h.state().notice
+        );
+        assert!(errors(&h).is_empty(), "{:?}", errors(&h));
+        // Live off: the sidecar's own STEP file, traced as before.
+        click(&mut h, "Live");
+        settle(&mut h);
+        assert!(h.state().live.is_none());
+        assert!(h.state().doc.as_ref().expect("open").live_step.is_none());
+        assert_eq!(image(h.state()).expect("traced"), first);
     }
 }
