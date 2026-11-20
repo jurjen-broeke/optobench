@@ -1,0 +1,42 @@
+# The SolidCraft contract test (M13d; docs/milestones/M13-live-write-back.md): every engine
+# command the live link reads and writes with, run by the latest SolidCraft release's
+# `solidcraft-cli` on a design built for it, and read by the bridge's own readers. Nightly,
+# so a SolidCraft release that changes a contract shows up before anyone's write-back does.
+
+name: SolidCraft contract
+
+on:
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  contract:
+    name: contract test (latest SolidCraft)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install toolchain
+        run: rustup toolchain install stable --profile minimal
+      - uses: Swatinem/rust-cache@v2
+      - name: Download the latest SolidCraft release (Linux x86_64)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/solidcraft"
+          cd "$RUNNER_TEMP/solidcraft"
+          gh release download -R tangency-labs/solidcraft --pattern 'solidcraft-*-linux-x86_64.tar.gz' --pattern 'SHA256SUMS.txt'
+          grep -- '-linux-x86_64.tar.gz' SHA256SUMS.txt | grep -v '^$' | sha256sum --check --ignore-missing
+          tar xzf solidcraft-*-linux-x86_64.tar.gz
+          cli="$(find "$PWD" -path '*/bin/solidcraft-cli' -type f | head -n 1)"
+          echo "OPTOBENCH_SOLIDCRAFT_CLI=$cli" >> "$GITHUB_ENV"
+          "$cli" --version
+          ldd "$cli" | grep 'not found' || true
+      - name: Contract test
+        run: cargo test -p optobench-bridge --test contract -- --ignored

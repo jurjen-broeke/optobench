@@ -74,6 +74,18 @@ What SolidCraft does, checked before the design (SolidCraft 0.45.0, 2026-11-20, 
 
 ## M13d The contract test
 
-- [ ] A test of every command M12 and M13 send, on a design built for it, run against an
-      installed SolidCraft (`solidcraft-cli run`); nightly in CI against the latest
-      release
+- [x] `optobench-bridge` `tests/contract.rs` (ignored unless asked for, with
+      `OPTOBENCH_SOLIDCRAFT_CLI`): a design built by `solidcraft-cli run` (a base, a lens
+      placed at `10 mm + L_z`, a carriage on a slider `stage`), then every engine command
+      M12 and M13 send, with the parameters the bridge sends: each command's
+      `engine.describe` checked by `contract::differences`, the reads read by the
+      bridge's readers, and on the saved design a checkpoint, a world move (the geometry
+      fingerprint unchanged: the fast path's premise), `parameters.change`, `joint.drive`
+      by the joint's id, the read-back of each, and the checkpoint restored
+- [x] Passed against SolidCraft 0.45.0 (macOS, 2026-11-20). `engine.batch` and
+      `control.subscribe` are methods of the running app's channel, which a script cannot
+      call: checked by the stand-in's tests and against the app by hand
+- [x] Nightly in CI (`.github/workflows/solidcraft-contract.yml`, and by hand from the
+      Actions tab): the latest release's Linux build downloaded, checked against its
+      `SHA256SUMS.txt`, and the contract test run with its `solidcraft-cli`
+- [ ] Exit: green every night for 4 weeks (from the first run after this is merged)

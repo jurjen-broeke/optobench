@@ -179,6 +179,18 @@ fn missing(schema: &Value, needed: &Needed) -> Vec<String> {
         .collect()
 }
 
+/// What differs from what optobench reads and writes in `schema`, `command`'s
+/// `engine.describe` reply (for the contract test, which gets the replies without a
+/// connection).
+pub fn differences(command: &str, schema: &Value) -> Vec<String> {
+    NEEDED
+        .iter()
+        .chain(NEEDED_FOR_WRITING)
+        .filter(|n| n.command == command)
+        .flat_map(|n| missing(schema, n))
+        .collect()
+}
+
 /// Checks the app's contracts for every command M12 reads; [`BridgeError::Contract`]
 /// lists every difference.
 pub fn check(connection: &mut Connection) -> Result<(), BridgeError> {
