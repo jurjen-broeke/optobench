@@ -503,6 +503,35 @@ pub fn draw(painter: &Painter, rect: Rect, id: &str, enabled: bool) {
                 c.badge(true);
             }
         }
+        "iris" | "add-iris" => {
+            let iso = Iso::at(0.85, 32.0, 32.0);
+            // A beam through a plate's hole: behind it, the plate, the hole, in front.
+            let hole = iso.circle([2.0, 0.0, 13.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0], 6.0);
+            let centre = iso.p(2.0, 0.0, 13.0);
+            c.line(&[pos2(2.0, centre.y - 10.0), centre], ACTION, r.beam);
+            c.cuboid(iso, [-2.0, -14.0, 0.0], [2.0, 14.0, 26.0], false);
+            c.face(&hole, r.ink);
+            c.line(&[centre, pos2(62.0, centre.y + 10.0)], ACTION, r.beam);
+            if id == "add-iris" {
+                c.badge(true);
+            }
+        }
+        "tube" | "add-tube" => {
+            let iso = Iso::at(0.85, 32.0, 34.0);
+            let (u, v) = ([0.0, 1.0, 0.0], [0.0, 0.0, 1.0]);
+            let back = iso.circle([-18.0, 0.0, 12.0], u, v, 11.0);
+            let front = iso.circle([18.0, 0.0, 12.0], u, v, 11.0);
+            let mut all = back.clone();
+            all.extend(front.iter().copied());
+            c.face(&hull(all), r.p2);
+            c.face(&front, r.p1);
+            c.face(&iso.circle([18.0, 0.0, 12.0], u, v, 7.5), r.ink);
+            let mouth = iso.p(18.0, 0.0, 12.0);
+            c.line(&[mouth, pos2(62.0, mouth.y + 8.0)], ACTION, r.beam);
+            if id == "add-tube" {
+                c.badge(true);
+            }
+        }
         "trace" => {
             let iso = Iso::at(0.75, 32.0, 34.0);
             let rays = [
@@ -906,6 +935,10 @@ pub const ALL: &[&str] = &[
     "add-source",
     "detector",
     "add-detector",
+    "iris",
+    "add-iris",
+    "tube",
+    "add-tube",
     "trace",
     "optimise",
     "focus",

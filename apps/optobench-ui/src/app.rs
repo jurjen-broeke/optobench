@@ -68,6 +68,8 @@ pub struct App {
     /// A lens's STEP file dropped on the window: its prescription and what is typed to
     /// make it a library part.
     lens_import: Option<LensImport>,
+    /// The parts library's mounts, read again after each change to the design.
+    library_mounts: Option<Vec<Value>>,
 }
 
 /// A lens's STEP file being made a library part.
@@ -271,6 +273,7 @@ impl App {
             placing: None,
             lens_chooser: None,
             lens_import: None,
+            library_mounts: None,
         };
         if let Some(path) = path {
             app.open(path);
@@ -375,6 +378,8 @@ impl App {
                 Action::AddMirror => self.start_adding(New::Mirror),
                 Action::AddSource => self.start_adding(New::Source),
                 Action::AddDetector => self.start_adding(New::Detector),
+                Action::AddIris => self.start_adding(New::Iris),
+                Action::AddTube => self.start_adding(New::Tube),
                 Action::TagLens | Action::TagMirror => {
                     if let Ok(op) = self.tagging(action == Action::TagMirror) {
                         self.apply(vec![op]);
@@ -992,7 +997,12 @@ impl App {
                 .map(|_| ())
                 .ok_or_else(|| "select an item of the design".into()),
             Control::Action(
-                Action::AddLens | Action::AddMirror | Action::AddSource | Action::AddDetector,
+                Action::AddLens
+                | Action::AddMirror
+                | Action::AddSource
+                | Action::AddDetector
+                | Action::AddIris
+                | Action::AddTube,
             ) => layout(),
             Control::Action(Action::TagLens) => self.tagging(false).map(|_| ()),
             Control::Action(Action::TagMirror) => self.tagging(true).map(|_| ()),
@@ -1442,6 +1452,32 @@ impl App {
                             row(ui, self, i, format!("{}  ·  {}", item.id, item.role));
                         }
                     });
+                // Proxies: an iris (a plate with a hole) or a tube, by the file's kind.
+                let proxies: Vec<(usize, String)> = scene
+                    .design["proxy"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|p| {
+                        let id = p["id"].as_str()?;
+                        let i = scene.items.iter().position(|it| it.kind == "proxy" && it.id == id)?;
+                        let kind = match p["kind"].as_str() {
+                            Some("plate") => "iris",
+                            Some(other) => other,
+                            None => "proxy",
+                        };
+                        Some((i, format!("{id}  ·  {kind}")))
+                    })
+                    .collect();
+                if !proxies.is_empty() {
+                    egui::CollapsingHeader::new(format!("Irises and tubes ({})", proxies.len()))
+                        .default_open(true)
+                        .show(ui, |ui| {
+                            for (i, label) in proxies {
+                                row(ui, self, i, label);
+                            }
+                        });
+                }
                 let detectors: Vec<usize> = (0..scene.items.len())
                     .filter(|&i| scene.items[i].role == "detector")
                     .collect();
@@ -1457,9 +1493,8 @@ impl App {
                     .as_array()
                     .cloned()
                     .unwrap_or_default();
-                let first_detector = scene.design["detector"][0]["id"]
-                    .as_str()
-                    .map(str::to_owned);
+                let first_detector = editors::first_detector(&scene.design);
+                let backscatter = editors::backscatter_term(&scene.design);
                 egui::CollapsingHeader::new(format!("Merit ({})", merit.len()))
                     .default_open(true)
                     .show(ui, |ui| {
@@ -1481,6 +1516,18 @@ impl App {
                             }
                         }
                         ui.menu_button("Add a term", |ui| {
+                            if let Some(ops) = &backscatter {
+                                if ui
+                                    .button("backscatter")
+                                    .on_hover_text("as little light as possible coming back into the laser (%): measured on a returning detector at the laser, added there when there is none")
+                                    .clicked()
+                                {
+                                    self.apply(ops.clone());
+                                    self.focus = Some(("merit".into(), merit.len().to_string()));
+                                    self.selected = None;
+                                    ui.close();
+                                }
+                            }
                             let Some(detector) = &first_detector else {
                                 ui.label(
                                     RichText::new("Add a detector first: terms are measured on one")
@@ -1572,7 +1619,24 @@ impl App {
             if doc.scene_version != self.drafts_version {
                 self.drafts.clear();
                 self.drafts_version = doc.scene_version;
+                self.library_mounts = None;
             }
+        }
+        if self.library_mounts.is_none() {
+            let mut parameters = json!({});
+            if let (Some(p), Some(d)) = (
+                parameters.as_object_mut(),
+                self.data_parameter().as_object(),
+            ) {
+                p.extend(d.clone());
+            }
+            let parts = optobench_commands::Registry::standard()
+                .run("parts", &parameters)
+                .ok()
+                .and_then(|v| v["parts"].as_array().cloned())
+                .unwrap_or_default();
+            self.library_mounts =
+                Some(parts.into_iter().filter(|p| p["type"] == "mount").collect());
         }
         let mut operations = Vec::new();
         egui::ScrollArea::vertical()
@@ -1598,8 +1662,13 @@ impl App {
         let Some(design) = self.design().cloned() else {
             return Vec::new();
         };
-        let context = editors::Context::of(&design);
         let scene = self.doc.as_ref().and_then(|d| d.scene.clone());
+        let library = self.library_mounts.clone().unwrap_or_default();
+        let context = match &scene {
+            Some(scene) => editors::Context::of(&design).with_places(scene),
+            None => editors::Context::of(&design),
+        }
+        .with_mounts(&design, &library);
         let mut operations = Vec::new();
         let list = design[table].as_array().cloned().unwrap_or_default();
         ui.label(RichText::new(format!("{title} ({})", list.len())).strong());
@@ -1682,9 +1751,14 @@ impl App {
                 let more = self.table_editor(ui, "detector", "Detectors");
                 operations.extend(more);
                 ui.separator();
-                let first = design["detector"][0]["id"].as_str().map(str::to_owned);
+                let first = editors::first_detector(&design);
                 ui.horizontal_wrapped(|ui| {
                     ui.label(RichText::new("Add merit").color(DARK.text_dim));
+                    if let Some(ops) = editors::backscatter_term(&design) {
+                        if ui.small_button("backscatter").clicked() {
+                            operations.extend(ops);
+                        }
+                    }
                     for kind in [
                         "focus",
                         "centring",
@@ -1731,7 +1805,9 @@ impl App {
             return Vec::new();
         };
         let design = scene.design.clone();
-        let context = editors::Context::of(&design);
+        let context = editors::Context::of(&design)
+            .with_places(scene)
+            .with_mounts(&design, self.library_mounts.as_deref().unwrap_or_default());
         if self.focus.as_ref().is_some_and(|(t, _)| t == "table") {
             if let Some(board) = crate::board::Board::of(&design, scene) {
                 return editors::board(ui, &mut self.drafts, &board);
@@ -2367,6 +2443,8 @@ impl eframe::App for App {
                             (New::Mirror, _) => "Mirror".into(),
                             (New::Source, _) => "Source".into(),
                             (New::Detector, _) => "Detector".into(),
+                            (New::Iris, _) => "Iris".into(),
+                            (New::Tube, _) => "Tube".into(),
                         },
                         height: editors::new_height(design),
                         pitch: design["table"]["pitch"].as_f64()?,
@@ -3286,5 +3364,283 @@ mod exit {
         let detected = after["ledger"]["detected_w"].as_f64().expect("detected")
             / after["ledger"]["launched_w"].as_f64().expect("launched");
         assert!((detected - 1.0).abs() < 1e-6, "{detected}");
+    }
+
+    #[test]
+    fn a_mirror_is_aimed_from_its_properties() {
+        // A source along +x, a mirror two holes on facing back along x (wrong), a screen
+        // two holes up in y: the light from S1 to D1 turns from +x to +y, so Aim writes
+        // the axis (−1, 1, 0), and the beam reaches the screen.
+        let dir = scratch("aim");
+        let path = dir.join("fold.optobench");
+        std::fs::write(
+            &path,
+            "format = \"optobench/1\"\nkind = \"layout\"\nlayout = \"table\"\n\n[table]\npitch = 25.0\n\n\
+             [[source]]\nid = \"S1\"\nkind = \"collimated\"\nwavelength_um = 0.633\npower_w = 0.001\ndiameter = 2.0\nhole = [0, 0]\nheight = 75.0\naxis = [1, 0, 0]\n\n\
+             [[element]]\nid = \"M1\"\nkind = \"mirror\"\nhole = [2, 0]\nheight = 75.0\naxis = [-1, 0, 0]\ndiameter = 25.4\nclear_aperture = 22.9\n\n\
+             [[detector]]\nid = \"D1\"\nhole = [2, 2]\nheight = 75.0\naxis = [0, 1, 0]\nsize = [20, 20]\npixels = [20, 20]\n",
+        )
+        .expect("written");
+        let mut h = window(Some(path.clone()), &dir);
+        settle(&mut h);
+        click(&mut h, "Workspace");
+        click(&mut h, "Layout");
+        click(&mut h, "M1  ·  mirror");
+        assert!(h.query_by_label("Aim").is_some(), "Aim in its Properties");
+        h.state_mut().drafts.set_text("element/M1/aim/from", "S1");
+        h.state_mut().drafts.set_text("element/M1/aim/to", "D1");
+        click(&mut h, "Aim");
+        let text = std::fs::read_to_string(&path).expect("written");
+        assert!(text.contains("axis = [-1, 1, 0]"), "{text}");
+        assert!(errors(&h).is_empty(), "{:?}", errors(&h));
+        let traced = trace(&path, &dir);
+        let detected = traced["ledger"]["detected_w"].as_f64().expect("detected");
+        assert!(detected > 0.9e-3, "{traced}");
+    }
+
+    #[test]
+    fn an_iris_is_placed_on_a_hole_and_clips_the_beam() {
+        // An 8 mm beam along x to a screen six holes on; Iris clicked on hole (3, 0): a
+        // plate with a 5 mm hole, facing along x, passes about (5/8)² of the power. Made
+        // a tube in Properties, its keys follow and the file still reads.
+        let dir = scratch("iris");
+        let path = dir.join("iris.optobench");
+        std::fs::write(
+            &path,
+            "format = \"optobench/1\"\nkind = \"layout\"\nlayout = \"table\"\n\n[table]\npitch = 25.0\n\n\
+             [[source]]\nid = \"S1\"\nkind = \"collimated\"\nwavelength_um = 0.633\npower_w = 0.001\ndiameter = 8.0\nhole = [0, 0]\nheight = 75.0\naxis = [1, 0, 0]\n\n\
+             [[detector]]\nid = \"D1\"\nhole = [6, 0]\nheight = 75.0\naxis = [1, 0, 0]\nsize = [20, 20]\npixels = [20, 20]\n",
+        )
+        .expect("written");
+        let mut h = window(Some(path.clone()), &dir);
+        settle(&mut h);
+        click(&mut h, "Workspace");
+        click(&mut h, "Layout");
+        click(&mut h, "Iris");
+        h.state_mut().camera.top();
+        h.step();
+        let at = {
+            let app = h.state();
+            let rect = app.view.rect.expect("drawn");
+            let (x, y) = app.camera.to_screen(
+                [75.0, 0.0, 0.0],
+                (rect.center().x as f64, rect.center().y as f64),
+                rect.height() as f64,
+            );
+            egui::pos2(x as f32, y as f32)
+        };
+        h.event(egui::Event::PointerMoved(at));
+        h.step();
+        for pressed in [true, false] {
+            h.event(egui::Event::PointerButton {
+                pos: at,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: egui::Modifiers::NONE,
+            });
+            h.step();
+        }
+        settle(&mut h);
+        let text = std::fs::read_to_string(&path).expect("written");
+        assert!(
+            text.contains("[[proxy]]\nid = \"I1\"\nkind = \"plate\"")
+                && text.contains("hole = [3, 0]"),
+            "{text}"
+        );
+        assert!(errors(&h).is_empty(), "{:?}", errors(&h));
+        let traced = trace(&path, &dir);
+        let passed = traced["ledger"]["detected_w"].as_f64().expect("detected") / 1e-3;
+        let expected = (5.0_f64 / 8.0).powi(2);
+        assert!(
+            (passed - expected).abs() < 0.1,
+            "{passed} against {expected}"
+        );
+        // Properties: the iris made a tube.
+        click(&mut h, "I1  ·  iris");
+        h.query_all_by_role(egui::accesskit::Role::ComboBox)
+            .find(|c| c.value().as_deref() == Some("plate"))
+            .expect("its kind")
+            .click();
+        h.step();
+        h.step();
+        click(&mut h, "tube");
+        let text = std::fs::read_to_string(&path).expect("written");
+        assert!(
+            text.contains("kind = \"tube\"")
+                && text.contains("length = 50")
+                && !text.contains("hole_diameter"),
+            "{text}"
+        );
+        assert!(errors(&h).is_empty(), "{:?}", errors(&h));
+    }
+
+    #[test]
+    fn a_mount_is_chosen_from_the_parts_library() {
+        // A kinematic mount (±4° tip and tilt) in the library; M1's Properties list it,
+        // and choosing it writes its key: the scene's M1 gets M1_tip and M1_tilt.
+        let dir = scratch("mount");
+        let part = dir.join("km1.toml");
+        std::fs::write(
+            &part,
+            "format = \"optobench/1\"\nkind = \"part\"\nvendor = \"Example\"\ntype = \"mount\"\npart = \"KM1\"\n\
+             source = \"kinematic mirror mount: ±4° tip and tilt\"\n\
+             adjusters = [ { name = \"tip\", kind = \"tilt\", axis = \"x\", range = [-4, 4] },\n\
+                           { name = \"tilt\", kind = \"tilt\", axis = \"y\", range = [-4, 4] } ]\n",
+        )
+        .expect("written");
+        optobench_commands::Registry::standard()
+            .run(
+                "import-part",
+                &json!({ "path": part.to_string_lossy(), "data_directory": dir.to_string_lossy() }),
+            )
+            .expect("imported");
+        let path = dir.join("mirror.optobench");
+        std::fs::write(
+            &path,
+            "format = \"optobench/1\"\nkind = \"layout\"\nlayout = \"table\"\n\n[table]\npitch = 25.0\n\n\
+             [[source]]\nid = \"S1\"\nkind = \"collimated\"\nwavelength_um = 0.633\npower_w = 0.001\ndiameter = 2.0\nhole = [0, 0]\nheight = 75.0\naxis = [1, 0, 0]\n\n\
+             [[element]]\nid = \"M1\"\nkind = \"mirror\"\nhole = [2, 0]\nheight = 75.0\naxis = [-1, 1, 0]\ndiameter = 25.4\nclear_aperture = 22.9\n",
+        )
+        .expect("written");
+        let mut h = window(Some(path.clone()), &dir);
+        settle(&mut h);
+        click(&mut h, "Workspace");
+        click(&mut h, "Layout");
+        click(&mut h, "M1  ·  mirror");
+        h.query_all_by_role(egui::accesskit::Role::ComboBox)
+            .filter(|c| c.value().as_deref() == Some("none"))
+            .nth(1)
+            .expect("the mount list, after the group's")
+            .click();
+        h.step();
+        h.step();
+        click(&mut h, "example/KM1");
+        let text = std::fs::read_to_string(&path).expect("written");
+        assert!(text.contains("mount = \"example/KM1\""), "{text}");
+        assert!(errors(&h).is_empty(), "{:?}", errors(&h));
+        let names: Vec<String> = h
+            .state()
+            .doc
+            .as_ref()
+            .and_then(|d| d.scene.as_ref())
+            .expect("a scene")
+            .dofs
+            .iter()
+            .filter_map(|d| d["name"].as_str().map(str::to_owned))
+            .collect();
+        assert_eq!(names, ["M1_tip", "M1_tilt"]);
+        assert!(
+            h.query_by_label("    M1_tip: tilt about x, -4 to 4°")
+                .is_some(),
+            "what it gives"
+        );
+    }
+
+    #[test]
+    fn a_singlet_becomes_an_achromat_of_the_same_focal_length() {
+        // A biconvex singlet (R ±50, n 1.5, 4 mm: f 50.67 mm at any wavelength) made an
+        // achromat from the type list: a crown and a flint by nd and Vd, f 50.67 mm at the
+        // d line; the engine's own paraxial trace (`view`) finds that f at d and one f at
+        // the F and C lines.
+        let dir = scratch("achromat");
+        let path = dir.join("achromat.optobench");
+        let file = |wavelength: f64| {
+            format!(
+                "format = \"optobench/1\"\nkind = \"layout\"\nlayout = \"table\"\n\n[table]\npitch = 25.0\n\n\
+                 [[source]]\nid = \"S1\"\nkind = \"collimated\"\nwavelength_um = {wavelength}\npower_w = 0.001\ndiameter = 2.0\nhole = [0, 0]\nheight = 75.0\naxis = [1, 0, 0]\n\n\
+                 [[element]]\nid = \"L1\"\nkind = \"lens\"\nhole = [2, 0]\nheight = 75.0\naxis = [1, 0, 0]\n\
+                 surfaces = [{{ radius = 50.0 }}, {{ radius = -50.0 }}]\nthickness = [4.0]\nmaterial = [1.5]\ndiameter = 25.4\nclear_aperture = 22.9\n"
+            )
+        };
+        std::fs::write(&path, file(optobench_materials::LINE_D)).expect("written");
+        let mut h = window(Some(path.clone()), &dir);
+        settle(&mut h);
+        click(&mut h, "Workspace");
+        click(&mut h, "Layout");
+        click(&mut h, "L1  ·  lens");
+        h.query_all_by_role(egui::accesskit::Role::ComboBox)
+            .next()
+            .expect("the type list")
+            .click();
+        h.step();
+        h.step();
+        click(&mut h, "achromat (cemented doublet)");
+        assert!(errors(&h).is_empty(), "{:?}", errors(&h));
+        let text = std::fs::read_to_string(&path).expect("written");
+        assert!(
+            text.contains("material = [{ nd = 1.5168, vd = 64.17 }, { nd = 1.6727, vd = 32.25 }]")
+                && text.contains("thickness = [6, 2.5]"),
+            "{text}"
+        );
+        assert!(h.query_by_label("Achromat").is_some(), "its own editor");
+        let f_at = |wavelength: f64| {
+            let changed = text.replace(
+                &format!("wavelength_um = {}", optobench_materials::LINE_D),
+                &format!("wavelength_um = {wavelength}"),
+            );
+            std::fs::write(&path, changed).expect("written");
+            let view = optobench_commands::Registry::standard()
+                .run("view", &json!({ "path": path.to_string_lossy(), "data_directory": dir.to_string_lossy() }))
+                .expect("viewed");
+            view["items"]
+                .as_array()
+                .and_then(|items| items.iter().find(|i| i["id"] == "L1"))
+                .and_then(|i| i["lens"]["focal_length_mm"].as_f64())
+                .expect("its focal length")
+        };
+        let singlet = 1.0 / (0.5 * (2.0 / 50.0 - 0.5 * 4.0 / (1.5 * 2500.0)));
+        let d = f_at(optobench_materials::LINE_D);
+        assert!((d - singlet).abs() < 1e-4, "{d} against {singlet}");
+        let (blue, red) = (
+            f_at(optobench_materials::LINE_F),
+            f_at(optobench_materials::LINE_C),
+        );
+        assert!((blue - red).abs() < 1e-4, "F {blue}, C {red}");
+    }
+
+    #[test]
+    fn backscatter_is_added_with_a_detector_at_the_laser() {
+        // A 2 mm beam through an uncoated window square to it: Add a term, backscatter,
+        // puts a returning detector R1 at the laser, 2 mm wide, and the term on it; the
+        // trace then weighs the reflections coming back (a few per cent of the beam).
+        let dir = scratch("backscatter");
+        let path = dir.join("window.optobench");
+        std::fs::write(
+            &path,
+            "format = \"optobench/1\"\nkind = \"layout\"\nlayout = \"table\"\n\n[table]\npitch = 25.0\n\n\
+             [[source]]\nid = \"S1\"\nkind = \"collimated\"\nwavelength_um = 0.633\npower_w = 0.001\ndiameter = 2.0\nhole = [0, 0]\nheight = 75.0\naxis = [1, 0, 0]\n\n\
+             [[element]]\nid = \"W1\"\nkind = \"lens\"\nhole = [4, 0]\nheight = 75.0\naxis = [1, 0, 0]\n\
+             surfaces = [{ radius = \"inf\" }, { radius = \"inf\" }]\nthickness = [5.0]\nmaterial = [1.5]\ndiameter = 25.4\nclear_aperture = 22.9\n\n\
+             [[detector]]\nid = \"D1\"\nhole = [10, 0]\nheight = 75.0\naxis = [1, 0, 0]\nsize = [20, 20]\npixels = [20, 20]\n",
+        )
+        .expect("written");
+        let mut h = window(Some(path.clone()), &dir);
+        settle(&mut h);
+        click(&mut h, "Workspace");
+        click(&mut h, "Layout");
+        click(&mut h, "Add a term");
+        click(&mut h, "backscatter");
+        assert!(errors(&h).is_empty(), "{:?}", errors(&h));
+        let text = std::fs::read_to_string(&path).expect("written");
+        assert!(
+            text.contains("id = \"R1\"\nhole = [0, 0]") && text.contains("returning = true"),
+            "{text}"
+        );
+        assert!(
+            text.contains("kind = \"backscatter\"\ndetector = \"R1\""),
+            "{text}"
+        );
+        let traced = trace(&path, &dir);
+        let back = traced["detectors"]
+            .as_array()
+            .and_then(|l| l.iter().find(|d| d["id"] == "R1"))
+            .expect("R1");
+        let percent = back["returned_percent"].as_f64().expect("%");
+        assert!(percent > 2.0 && percent < 7.7, "{percent} %");
+        // R1 stops nothing: the screen gets the beam through both faces.
+        let screen = traced["detectors"][0]["direct_power_w"]
+            .as_f64()
+            .expect("direct");
+        assert!((screen / 1e-3 - 0.9216).abs() < 1e-6, "{screen}");
     }
 }

@@ -7,6 +7,26 @@ with the release that introduced them.
 
 Nothing yet.
 
+## 0.2.0 (2026-11-20)
+
+- M17 table layouts, follow-ups: Aim in Properties turns a mirror so the light from one
+  item goes to another (its normal halves the turn), and lenses, irises, tubes and
+  screens to face the light from an item. Iris and Tube are added from the Layout's ADD
+  section like the other items (on a clicked hole on a table layout), the browser lists
+  them, and a proxy switches between plate and tube in Properties. An item's `mount` is
+  chosen in Properties from the file's `[[mount]]` tables and the parts library, with
+  the degrees of freedom it gives listed. A glass can be given by its catalogue numbers,
+  `material = { nd = …, vd = … }` (a two-term Cauchy model); `view` gives each lens
+  glass's nd and Vd. The lens editor designs a cemented achromat from its focal length
+  and two glasses (thin-lens powers, then corrected for the thicknesses on the paraxial
+  trace: f at the d line, one f at F and C). No file-format change: older versions refuse
+  `{ nd, vd }` rather than misread it. A detector with `returning = true` stops nothing
+  and records the light coming back across its plane (placed at a laser, what returns
+  into it), with a Gaussian-weighted `returned` power; merit term `backscatter` (% of the
+  launched power) makes the optimiser tilt or move faces until their reflections pass
+  the laser by. Added from the window's Add a term, with a returning detector at the
+  first source when there is none.
+
 ## 0.1.0 (2026-11-14)
 
 The first numbered version: everything up to and including M16. From here each merged

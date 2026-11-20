@@ -227,7 +227,8 @@ table layout slid it across (the item's own axes, z along its optical axis) and 
 
 ## Next, from the same test
 
-Noted while reading the code before the user's test; not yet confirmed by it:
+Noted while reading the code before the user's test; not yet confirmed by it. All four
+done in M17 (`M17-table-layout-follow-ups.md`):
 
 - A mirror's normal worked out from where the beam comes from and should go
 - An achromatic doublet designed from its focal length (needs the glasses' dispersion)

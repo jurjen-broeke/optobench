@@ -33,6 +33,12 @@ impl Drafts {
         self.numbers.clear();
         self.texts.clear();
     }
+
+    /// Sets a text being typed or chosen, as a test would by hand.
+    #[cfg(test)]
+    pub fn set_text(&mut self, path: &str, text: &str) {
+        self.texts.insert(path.to_owned(), text.to_owned());
+    }
 }
 
 /// The choices for keys that take one of a few words.
@@ -47,8 +53,9 @@ fn choices(table: &str, key: &str) -> Option<&'static [&'static str]> {
             "collimation",
             "diameter",
             "power",
+            "backscatter",
         ]),
-        ("proxy", "kind") => Some(&["tube"]),
+        ("proxy", "kind") => Some(&["plate", "tube"]),
         _ => None,
     }
 }
@@ -209,6 +216,195 @@ pub struct Context {
     pub pitch: Option<f64>,
     /// The groups items are in, and those the file declares.
     pub groups: Vec<String>,
+    /// Where each item and source with an id stands (mm, scene frame), for aiming
+    /// mirrors.
+    pub places: Vec<(String, V3)>,
+    /// The mounts an item can be given: the file's `[[mount]]` tables, then the parts
+    /// library's.
+    pub mounts: Vec<Mount>,
+}
+
+/// A mount an item can name: its id (the file's) or key (the library's), where its
+/// ranges come from, and its adjusters (`dof` entries without an item).
+#[derive(Debug, Clone, PartialEq)]
+pub struct Mount {
+    /// What `mount = "…"` names.
+    pub name: String,
+    /// Its `source`.
+    pub source: String,
+    /// Its adjusters as written.
+    pub adjusters: Vec<Value>,
+    /// Whether it comes from the parts library.
+    pub library: bool,
+}
+
+/// The mounts of a design: its own `[[mount]]` tables first, then the library's (`parts`
+/// entries of type `mount`) except those a table of the same id (any case) stands in
+/// for.
+pub fn mounts_of(design: &Value, library: &[Value]) -> Vec<Mount> {
+    let mut own: Vec<Mount> = design["mount"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|m| {
+            Some(Mount {
+                name: m["id"].as_str()?.to_owned(),
+                source: m["source"].as_str().unwrap_or_default().to_owned(),
+                adjusters: m["adjusters"].as_array().cloned().unwrap_or_default(),
+                library: false,
+            })
+        })
+        .collect();
+    let theirs: Vec<Mount> = library
+        .iter()
+        .filter_map(|p| {
+            let key = p["key"].as_str()?;
+            if own.iter().any(|m| m.name.eq_ignore_ascii_case(key)) {
+                return None;
+            }
+            Some(Mount {
+                name: key.to_owned(),
+                source: p["source"].as_str().unwrap_or_default().to_owned(),
+                adjusters: p["adjusters"].as_array().cloned().unwrap_or_default(),
+                library: true,
+            })
+        })
+        .collect();
+    own.extend(theirs);
+    own
+}
+
+/// An adjuster in words: `slide along x, −1 to 1 mm`, `tilt about z, unlimited`.
+fn adjuster_text(adjuster: &Value) -> String {
+    let tilt = adjuster["kind"] == "tilt";
+    let axis = match &adjuster["axis"] {
+        Value::String(a) => a.clone(),
+        Value::Array(v) => {
+            let names = ["x", "y", "z"];
+            let numbers: Vec<f64> = v.iter().filter_map(Value::as_f64).collect();
+            match numbers
+                .iter()
+                .enumerate()
+                .filter(|(_, x)| **x != 0.0)
+                .collect::<Vec<_>>()
+                .as_slice()
+            {
+                [(k, x)] => {
+                    format!("{}{}", if **x < 0.0 { "−" } else { "" }, names[*k])
+                }
+                _ => format!("{numbers:?}"),
+            }
+        }
+        _ => "?".into(),
+    };
+    let unit = if tilt { "°" } else { " mm" };
+    let reach = match (&adjuster["range"], adjuster["travel"].as_f64()) {
+        (_, Some(t)) => format!("{t}{unit} of travel"),
+        (Value::Array(r), _) if r.len() == 2 => format!(
+            "{} to {}{unit}",
+            r[0].as_f64().unwrap_or(0.0),
+            r[1].as_f64().unwrap_or(0.0)
+        ),
+        _ => "unlimited".into(),
+    };
+    format!(
+        "{} {axis}, {reach}",
+        if tilt { "tilt about" } else { "slide along" }
+    )
+}
+
+/// The mount an item stands in: none, or one of the design's or the library's, and the
+/// degrees of freedom it gives (`<id>_<name>`). A stack of mounts (a list) is shown and
+/// kept until one mount is chosen in its place.
+fn mount_field(
+    ui: &mut Ui,
+    base: &str,
+    target: &Value,
+    entry: &Value,
+    context: &Context,
+) -> Option<Value> {
+    let names: Vec<String> = match &entry["mount"] {
+        Value::String(s) => vec![s.clone()],
+        Value::Array(a) => a
+            .iter()
+            .filter_map(|m| m.as_str().map(str::to_owned))
+            .collect(),
+        _ => Vec::new(),
+    };
+    if context.mounts.is_empty() && names.is_empty() {
+        return None;
+    }
+    let shown = if names.is_empty() {
+        "none".to_owned()
+    } else {
+        names.join(" on ")
+    };
+    let mut chosen: Option<Option<String>> = None;
+    ui.horizontal(|ui| {
+        ui.label(RichText::new("mount").color(DARK.text_dim))
+            .on_hover_text("What it stands in: a mount's adjusters become its degrees of freedom");
+        egui::ComboBox::from_id_salt(format!("{base}/mount"))
+            .selected_text(&shown)
+            .show_ui(ui, |ui| {
+                if ui.selectable_label(names.is_empty(), "none").clicked() {
+                    chosen = Some(None);
+                }
+                for m in &context.mounts {
+                    let on = names.len() == 1 && names[0].eq_ignore_ascii_case(&m.name);
+                    let mut response = ui.selectable_label(on, &m.name);
+                    if !m.source.is_empty() {
+                        response = response.on_hover_text(&m.source);
+                    }
+                    if response.clicked() {
+                        chosen = Some(Some(m.name.clone()));
+                    }
+                }
+            });
+    });
+    let id = entry["id"].as_str().unwrap_or_default();
+    for name in &names {
+        match context
+            .mounts
+            .iter()
+            .find(|m| m.name.eq_ignore_ascii_case(name))
+        {
+            Some(m) => {
+                for a in &m.adjusters {
+                    ui.label(
+                        RichText::new(format!(
+                            "    {id}_{}: {}",
+                            a["name"].as_str().unwrap_or("?"),
+                            adjuster_text(a)
+                        ))
+                        .color(DARK.text_dim)
+                        .size(11.0),
+                    );
+                }
+            }
+            None => {
+                ui.label(
+                    RichText::new(format!("    {name}: not in the file or the parts library"))
+                        .color(DARK.warning)
+                        .size(11.0),
+                );
+            }
+        }
+    }
+    let mut op = target.clone();
+    match chosen? {
+        None if !names.is_empty() => {
+            op["op"] = json!("unset");
+            op["key"] = json!("mount");
+            Some(op)
+        }
+        Some(name) if !(names.len() == 1 && names[0] == name) => {
+            op["op"] = json!("set");
+            op["key"] = json!("mount");
+            op["value"] = json!(name);
+            Some(op)
+        }
+        _ => None,
+    }
 }
 
 impl Context {
@@ -228,8 +424,204 @@ impl Context {
                 .then(|| design["table"]["pitch"].as_f64())
                 .flatten(),
             groups: groups_of(design),
+            places: Vec::new(),
+            mounts: Vec::new(),
         }
     }
+
+    /// As [`Context::of`], with the mounts items can be given ([`mounts_of`]).
+    pub fn with_mounts(mut self, design: &Value, library: &[Value]) -> Self {
+        self.mounts = mounts_of(design, library);
+        self
+    }
+
+    /// As [`Context::of`], with where the scene placed each item and source.
+    pub fn with_places(mut self, scene: &crate::document::Scene) -> Self {
+        let mut places: Vec<(String, V3)> = scene
+            .items
+            .iter()
+            .filter(|i| !i.id.is_empty())
+            .filter_map(|i| Some((i.id.clone(), i.origin?)))
+            .chain(scene.sources.iter().map(|s| (s.id.clone(), s.origin)))
+            .collect();
+        places.dedup_by(|a, b| a.0 == b.0);
+        self.places = places;
+        self
+    }
+}
+
+/// A mirror's axis (its normal, towards the light) that reflects light coming from
+/// `from` at `at` towards `to`: the outgoing direction minus the incoming one (the law of
+/// reflection: the normal halves the turn), scaled so its largest number is 1 and rounded
+/// to 1e-9. `None` when the light would go straight on (no mirror does that), or a place
+/// is the mirror's own.
+pub fn aim(from: V3, at: V3, to: V3) -> Option<V3> {
+    let unit = |a: V3, b: V3| {
+        let d = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
+        let length = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
+        (length > 1e-9).then(|| d.map(|x| x / length))
+    };
+    let incoming = unit(from, at)?;
+    let outgoing = unit(at, to)?;
+    let normal: V3 = std::array::from_fn(|k| outgoing[k] - incoming[k]);
+    let largest = normal.iter().fold(0.0_f64, |m, x| m.max(x.abs()));
+    if largest < 1e-6 {
+        return None;
+    }
+    Some(normal.map(|x| ((x / largest) * 1e9).round() / 1e9 + 0.0))
+}
+
+/// The axis of an item that faces light coming from `from` at `at` (a lens, an iris, a
+/// screen): along the light, scaled so its largest number is 1 and rounded to 1e-9.
+/// `None` when `from` is at its own place.
+pub fn facing(from: V3, at: V3) -> Option<V3> {
+    let d: V3 = std::array::from_fn(|k| at[k] - from[k]);
+    let largest = d.iter().fold(0.0_f64, |m, x| m.max(x.abs()));
+    (largest > 1e-9).then(|| d.map(|x| ((x / largest) * 1e9).round() / 1e9 + 0.0))
+}
+
+/// A proxy turned into another kind: its kind set and the keys of the old kind replaced
+/// by the new one's (a plate's hole and size, a tube's bore and length; on a planar
+/// layout a plate's `at` and a tube's `from` and `to`), so the design still reads.
+pub fn proxy_kind(target: &Value, entry: &Value, kind: &str) -> Vec<Value> {
+    let op = |op: &str, key: &str, value: Option<Value>| {
+        let mut o = target.clone();
+        o["op"] = json!(op);
+        o["key"] = json!(key);
+        if let Some(v) = value {
+            o["value"] = v;
+        }
+        o
+    };
+    let planar = entry["at"].is_number() || entry["from"].is_number();
+    let mut ops = vec![op("set", "kind", Some(json!(kind)))];
+    let unset = |ops: &mut Vec<Value>, keys: &[&str]| {
+        for k in keys {
+            if !entry[*k].is_null() {
+                ops.push(op("unset", k, None));
+            }
+        }
+    };
+    match kind {
+        "plate" => {
+            unset(&mut ops, &["inner_diameter", "length", "from", "to"]);
+            ops.push(op("set", "hole_diameter", Some(json!(5.0))));
+            ops.push(op("set", "size", Some(json!(30.0))));
+            if planar {
+                ops.push(op("set", "at", Some(entry["from"].clone())));
+            }
+        }
+        "tube" => {
+            unset(&mut ops, &["hole_diameter", "size", "at"]);
+            ops.push(op("set", "inner_diameter", Some(json!(25.4))));
+            if planar {
+                let at = entry["at"].as_f64().unwrap_or(0.0);
+                ops.push(op("set", "from", Some(tidy(at))));
+                ops.push(op("set", "to", Some(tidy(at + 50.0))));
+            } else {
+                ops.push(op("set", "length", Some(json!(50.0))));
+            }
+        }
+        _ => return Vec::new(),
+    }
+    ops
+}
+
+/// Aim, for an item with an axis: where the light comes from (any other item) and, for
+/// a mirror, where it should go; returns the `set` of its axis. A mirror's axis halves
+/// the turn ([`aim`]), anything else faces along the light ([`facing`]).
+#[allow(clippy::too_many_arguments)]
+fn aim_editor(
+    ui: &mut Ui,
+    drafts: &mut Drafts,
+    base: &str,
+    target: &Value,
+    entry: &Value,
+    origin: V3,
+    mirror: bool,
+    context: &Context,
+) -> Option<Value> {
+    let own = entry["id"].as_str().unwrap_or_default();
+    let others: Vec<&(String, V3)> = context.places.iter().filter(|(id, _)| id != own).collect();
+    if others.is_empty() {
+        return None;
+    }
+    let mut op = None;
+    ui.horizontal_wrapped(|ui| {
+        ui.label(RichText::new("aim").color(DARK.text_dim))
+            .on_hover_text(if mirror {
+                "Set its axis from where the light comes from and where it should go"
+            } else {
+                "Turn it to face the light from an item"
+            });
+        let picks: &[(&str, &str)] = if mirror {
+            &[("light from", "from"), ("to", "to")]
+        } else {
+            &[("light from", "from")]
+        };
+        for &(label, key) in picks {
+            ui.label(RichText::new(label).color(DARK.text_dim).size(11.0));
+            let path = format!("{base}/aim/{key}");
+            let current = drafts.texts.get(&path).cloned().unwrap_or_default();
+            egui::ComboBox::from_id_salt(&path)
+                .selected_text(if current.is_empty() { "…" } else { &current })
+                .width(70.0)
+                .show_ui(ui, |ui| {
+                    for (id, _) in &others {
+                        if ui.selectable_label(*id == current, id.as_str()).clicked() {
+                            drafts.texts.insert(path.clone(), id.clone());
+                        }
+                    }
+                });
+        }
+        let place = |key: &str| {
+            let id = drafts.texts.get(&format!("{base}/aim/{key}"))?;
+            others.iter().find(|(o, _)| o == id).map(|(_, p)| *p)
+        };
+        let (from, to) = (place("from"), place("to"));
+        let ready = from.is_some() && (to.is_some() || !mirror);
+        if ui
+            .add_enabled(ready, egui::Button::new("Aim"))
+            .on_hover_text(if mirror {
+                "Turn it so the light from the first goes to the second"
+            } else {
+                "Turn it to face the light from that item"
+            })
+            .clicked()
+        {
+            let from = from.unwrap_or_default();
+            let axis = if mirror {
+                aim(from, origin, to.unwrap_or_default())
+            } else {
+                facing(from, origin)
+            };
+            match axis {
+                Some(axis) => {
+                    let mut set = target.clone();
+                    set["op"] = json!("set");
+                    set["key"] = json!("axis");
+                    set["value"] = json!(axis.map(tidy));
+                    op = Some(set);
+                    drafts.texts.remove(&format!("{base}/aim/note"));
+                }
+                None => {
+                    drafts.texts.insert(
+                        format!("{base}/aim/note"),
+                        if mirror {
+                            "No mirror lets light go straight on, or aims at its own place"
+                        } else {
+                            "That item stands at its own place"
+                        }
+                        .into(),
+                    );
+                }
+            }
+        }
+    });
+    if let Some(note) = drafts.texts.get(&format!("{base}/aim/note")) {
+        ui.label(RichText::new(note).color(DARK.warning).size(11.0));
+    }
+    op
 }
 
 /// Every group of a design: those items are in and those `[[group]]` declares, sorted.
@@ -460,8 +852,19 @@ pub fn entry(
         operations.extend(lens_editor(ui, drafts, &base, &target, entry, lens));
     }
     operations.extend(position(ui, drafts, &base, &target, entry, origin, context));
+    if ["element", "detector", "proxy"].contains(&table) && entry["axis"].is_array() {
+        if let Some(at) = origin {
+            let mirror = table == "element" && entry["kind"] == "mirror";
+            operations.extend(aim_editor(
+                ui, drafts, &base, &target, entry, at, mirror, context,
+            ));
+        }
+    }
     if ["element", "source", "detector", "proxy"].contains(&table) && entry["id"].is_string() {
         operations.extend(group_field(ui, drafts, &base, &target, entry, context));
+    }
+    if ["element", "source", "detector"].contains(&table) && entry["id"].is_string() {
+        operations.extend(mount_field(ui, &base, &target, entry, context));
     }
     // On a table layout the height is the position's Z.
     let shown_as_z = context.pitch.is_some() && entry["hole"].is_array();
@@ -470,7 +873,9 @@ pub fn entry(
         .spacing([10.0, 4.0])
         .show(ui, |ui| {
             for key in keys(entry) {
-                if (shown_as_z && key == "height") || key == "group" || key == "id" {
+                if (shown_as_z && key == "height")
+                    || ["group", "id", "mount"].contains(&key.as_str())
+                {
                     continue;
                 }
                 let in_lens_editor = matches!(
@@ -486,6 +891,12 @@ pub fn entry(
                 ui.label(RichText::new(&key).color(DARK.text_dim));
                 let path = format!("{base}/{key}");
                 if let Some(value) = field(ui, drafts, &path, table, &key, &entry[&key], context) {
+                    if table == "proxy" && key == "kind" {
+                        operations.extend(proxy_kind(&target, entry, value.as_str().unwrap_or("")));
+                        ui.label("");
+                        ui.end_row();
+                        continue;
+                    }
                     let mut op = target.clone();
                     op["op"] = json!("set");
                     op["key"] = json!(key);
@@ -757,9 +1168,13 @@ fn lens_editor(
     let (shape, flipped) = now.map_or((Shape::Biconvex, false), |l| l.shape());
     let glass = material.first().cloned().unwrap_or(json!(1.5));
     let mut chosen: Option<Option<Shape>> = None;
+    let mut achromat_chosen = false;
+    let doublet = surfaces.len() == 3 && material.len() == 2;
     ui.horizontal(|ui| {
         ui.label(RichText::new("type").color(DARK.text_dim));
-        let shown = if custom {
+        let shown = if doublet {
+            "cemented doublet"
+        } else if custom {
             "custom (radius by radius)"
         } else {
             shape.name()
@@ -776,7 +1191,16 @@ fn lens_editor(
                     }
                 }
                 if ui
-                    .selectable_label(custom, "custom (radius by radius)")
+                    .selectable_label(false, "achromat (cemented doublet)")
+                    .on_hover_text(
+                        "A crown and a flint glass cemented: one focal length for red and blue",
+                    )
+                    .clicked()
+                {
+                    achromat_chosen = true;
+                }
+                if ui
+                    .selectable_label(custom && !doublet, "custom (radius by radius)")
                     .clicked()
                 {
                     chosen = Some(None);
@@ -843,6 +1267,41 @@ fn lens_editor(
         None => {}
     }
 
+    // An achromat: from the lens's focal length (100 mm without one) and two glasses.
+    let current_f = shown("focal_length_mm")
+        .filter(|f| f.is_finite() && *f > 0.0)
+        .or_else(|| {
+            now.map(|l| l.focal_length().abs())
+                .filter(|f| f.is_finite())
+        })
+        .unwrap_or(100.0);
+    if achromat_chosen {
+        drafts.texts.remove(&custom_path);
+        operations.extend(write_achromat(
+            drafts,
+            base,
+            &set,
+            current_f,
+            [
+                (
+                    DEFAULT_CROWN,
+                    json!({ "nd": DEFAULT_CROWN.0, "vd": DEFAULT_CROWN.1 }),
+                ),
+                (
+                    DEFAULT_FLINT,
+                    json!({ "nd": DEFAULT_FLINT.0, "vd": DEFAULT_FLINT.1 }),
+                ),
+            ],
+            [6.0, 2.5],
+            diameter,
+            clear,
+        ));
+    }
+    if doublet && !achromat_chosen {
+        operations.extend(achromat_editor(
+            ui, drafts, base, &set, &thickness, &material, lens, current_f, diameter, clear,
+        ));
+    }
     if custom {
         operations.extend(prescription_editor(
             ui, drafts, base, &set, &surfaces, &thickness, &material,
@@ -1019,6 +1478,175 @@ fn lens_editor(
     operations
 }
 
+/// The glasses an achromat starts from: a crown (nd 1.5168, Vd 64.17) and a dense flint
+/// (nd 1.6727, Vd 32.25), typical catalogue values.
+const DEFAULT_CROWN: (f64, f64) = (1.5168, 64.17);
+const DEFAULT_FLINT: (f64, f64) = (1.6727, 32.25);
+
+/// Writes an achromat of focal length `f` from two glasses, each (nd, Vd) with what to
+/// write as its material, and two thicknesses; its diameter kept where both glasses keep
+/// an edge. A note when no achromat comes of it.
+#[allow(clippy::too_many_arguments)]
+fn write_achromat(
+    drafts: &mut Drafts,
+    base: &str,
+    set: &dyn Fn(&str, Value) -> Value,
+    f: f64,
+    glasses: [((f64, f64), Value); 2],
+    t: [f64; 2],
+    diameter: f64,
+    clear: f64,
+) -> Vec<Value> {
+    let [(crown, crown_material), (flint, flint_material)] = glasses;
+    let Some(design) = crate::lens::Achromat::design(f, crown, flint, t) else {
+        drafts.texts.insert(
+            format!("{base}/note"),
+            format!(
+                "No achromat of f {f:.1} mm from these glasses: their Abbe numbers must differ (crown first, the larger)"
+            ),
+        );
+        return Vec::new();
+    };
+    let mut operations = vec![
+        set(
+            "surfaces",
+            json!(design.radii.map(|r| json!({ "radius": radius_value(r) }))),
+        ),
+        set("thickness", json!(t.map(tidy))),
+        set("material", json!([crown_material, flint_material])),
+    ];
+    let largest = design.max_diameter();
+    if diameter > largest && largest > 0.0 {
+        operations.push(set("diameter", tidy(largest)));
+        operations.push(set(
+            "clear_aperture",
+            tidy((clear.min(0.9 * largest) * 10.0).floor() / 10.0),
+        ));
+        drafts.texts.insert(
+            format!("{base}/note"),
+            format!(
+                "Ø kept to {largest} mm: beyond it an edge would be thinner than {} mm",
+                crate::lens::MIN_EDGE
+            ),
+        );
+    }
+    operations
+}
+
+/// An achromat's own editor, for a cemented doublet: its focal length and its two
+/// glasses by nd and Vd (a named glass's from the scene); a change designs it again,
+/// keeping its thicknesses. A glass whose numbers are typed becomes a model glass
+/// `{ nd, vd }`; one left as it was keeps its name.
+#[allow(clippy::too_many_arguments)]
+fn achromat_editor(
+    ui: &mut Ui,
+    drafts: &mut Drafts,
+    base: &str,
+    set: &dyn Fn(&str, Value) -> Value,
+    thickness: &[Value],
+    material: &[Value],
+    lens: Option<&Value>,
+    f: f64,
+    diameter: f64,
+    clear: f64,
+) -> Vec<Value> {
+    // Each glass's numbers: its own { nd, vd }, else what the scene found.
+    let numbers = |k: usize| -> Option<(f64, f64)> {
+        let m = &material[k];
+        if let (Some(nd), Some(vd)) = (m["nd"].as_f64(), m["vd"].as_f64()) {
+            return Some((nd, vd));
+        }
+        let abbe = &lens?["abbe"][k];
+        Some((abbe[0].as_f64()?, abbe[1].as_f64()?))
+    };
+    let t = [
+        thickness.first().and_then(Value::as_f64).unwrap_or(6.0),
+        thickness.get(1).and_then(Value::as_f64).unwrap_or(2.5),
+    ];
+    let mut glasses = [
+        numbers(0).map(|g| (g, material[0].clone())),
+        numbers(1).map(|g| (g, material[1].clone())),
+    ];
+    let mut target_f = f;
+    let mut changed = false;
+    ui.label(RichText::new("Achromat").strong()).on_hover_text(
+        "Designed from its focal length and two glasses: an equi-convex crown cemented to a flint, one focal length at the F and C lines",
+    );
+    egui::Grid::new(format!("achromat-{base}"))
+        .num_columns(5)
+        .spacing([8.0, 4.0])
+        .show(ui, |ui| {
+            ui.label(RichText::new("f").color(DARK.text_dim))
+                .on_hover_text(
+                    "focal length at the d line (587.6 nm), from the rear principal plane",
+                );
+            if let Some(v) = number(
+                ui,
+                drafts,
+                &format!("{base}/achromat/f"),
+                (f * 1e4).round() / 1e4,
+            ) {
+                if v > 0.0 {
+                    target_f = v;
+                    changed = true;
+                }
+            }
+            ui.label(RichText::new("mm").color(DARK.text_dim).size(11.0));
+            ui.label("");
+            ui.label("");
+            ui.end_row();
+            for (k, name) in ["crown", "flint"].into_iter().enumerate() {
+                ui.label(RichText::new(name).color(DARK.text_dim))
+                    .on_hover_text(if k == 0 {
+                        "the first glass: low dispersion, a high Abbe number"
+                    } else {
+                        "the second glass: high dispersion, a low Abbe number"
+                    });
+                match glasses[k].clone() {
+                    Some(((nd, vd), _)) => {
+                        ui.label(RichText::new("nd").color(DARK.text_dim).size(11.0));
+                        let typed_nd = number(ui, drafts, &format!("{base}/achromat/{k}/nd"), nd);
+                        ui.label(RichText::new("Vd").color(DARK.text_dim).size(11.0));
+                        let typed_vd = number(ui, drafts, &format!("{base}/achromat/{k}/vd"), vd);
+                        if typed_nd.is_some() || typed_vd.is_some() {
+                            let g = (typed_nd.unwrap_or(nd), typed_vd.unwrap_or(vd));
+                            glasses[k] = Some((g, json!({ "nd": tidy(g.0), "vd": tidy(g.1) })));
+                            changed = true;
+                        }
+                    }
+                    None => {
+                        ui.label(
+                            RichText::new("its dispersion is not known: type nd and Vd")
+                                .color(DARK.warning)
+                                .size(11.0),
+                        );
+                        if ui.small_button("Use a typical one").clicked() {
+                            let g = if k == 0 { DEFAULT_CROWN } else { DEFAULT_FLINT };
+                            glasses[k] = Some((g, json!({ "nd": g.0, "vd": g.1 })));
+                            changed = true;
+                        }
+                        ui.label("");
+                        ui.label("");
+                    }
+                }
+                ui.end_row();
+            }
+        });
+    match (changed, glasses) {
+        (true, [Some(crown), Some(flint)]) => write_achromat(
+            drafts,
+            base,
+            set,
+            target_f,
+            [crown, flint],
+            t,
+            diameter,
+            clear,
+        ),
+        _ => Vec::new(),
+    }
+}
+
 /// A lens's prescription radius by radius (R1…Rn, flat or not), with each glass's centre
 /// thickness and material between them; a cemented glass added or taken away.
 fn prescription_editor(
@@ -1074,10 +1702,16 @@ fn prescription_editor(
                         other => other.to_string(),
                     };
                     if let Some(typed) = text(ui, drafts, &format!("{base}/glass/{k}"), &shown, 90.0) {
-                        let value = typed
-                            .trim()
-                            .parse::<f64>()
-                            .map_or_else(|_| json!(typed.trim()), |n| json!(n));
+                        let typed = typed.trim();
+                        let value = typed.parse::<f64>().map_or_else(
+                            |_| {
+                                serde_json::from_str::<Value>(typed)
+                                    .ok()
+                                    .filter(Value::is_object)
+                                    .unwrap_or_else(|| json!(typed))
+                            },
+                            |n| json!(n),
+                        );
                         let mut new = material.to_vec();
                         new.resize(surfaces.len() - 1, json!(1.5));
                         new[k] = value;
@@ -1426,6 +2060,60 @@ fn dofs(
     operations
 }
 
+/// The first detector that is not a returning one: where terms other than `backscatter`
+/// are measured.
+pub fn first_detector(design: &Value) -> Option<String> {
+    design["detector"]
+        .as_array()?
+        .iter()
+        .find(|d| d["returning"] != true)
+        .and_then(|d| d["id"].as_str())
+        .map(str::to_owned)
+}
+
+/// The operations that add a `backscatter` term: on the design's first returning
+/// detector or, without one, on a new one at the first source, facing along its beam and
+/// as wide as it (so the light it weighs is what a mode of the beam's size takes in).
+/// `None` without either.
+pub fn backscatter_term(design: &Value) -> Option<Vec<Value>> {
+    let existing = design["detector"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .find(|d| d["returning"] == true)
+        .and_then(|d| d["id"].as_str())
+        .map(str::to_owned);
+    let mut operations = Vec::new();
+    let id = match existing {
+        Some(id) => id,
+        None => {
+            let source = design["source"].get(0)?;
+            let width = source["diameter"]
+                .as_f64()
+                .or_else(|| source["waist_diameter"].as_f64())
+                .or_else(|| source["core_diameter"].as_f64())
+                .unwrap_or(2.0);
+            let id = next_id(design, "R");
+            let mut entry = vec![json!(["id", id])];
+            for key in ["at", "hole", "height", "axis"] {
+                if !source[key].is_null() {
+                    entry.push(json!([key, source[key]]));
+                }
+            }
+            entry.push(json!(["size", [tidy(width), tidy(width)]]));
+            entry.push(json!(["pixels", [32, 32]]));
+            entry.push(json!(["returning", true]));
+            operations.push(json!({ "op": "add", "table": "detector", "entry": entry }));
+            id
+        }
+    };
+    operations.push(json!({
+        "op": "add", "table": "merit",
+        "entry": [["kind", "backscatter"], ["detector", id]],
+    }));
+    Some(operations)
+}
+
 /// The next free id with a prefix: `L1`, `L2`, …
 pub fn next_id(design: &Value, prefix: &str) -> String {
     let used: Vec<&str> = ["element", "source", "detector", "proxy"]
@@ -1451,6 +2139,10 @@ pub enum New {
     Source,
     /// A screen.
     Detector,
+    /// An iris: a `plate` proxy with a round hole.
+    Iris,
+    /// A tube proxy.
+    Tube,
 }
 
 /// The height new items of a table layout get: the first source's, else 50 mm.
@@ -1493,7 +2185,12 @@ pub fn add_at(
         } else {
             0.0
         };
-        vec![("at".into(), json!(at))]
+        if new == New::Tube {
+            // A tube runs from `from` to `to` along the path.
+            vec![("from".into(), json!(at)), ("to".into(), json!(at + 50.0))]
+        } else {
+            vec![("at".into(), json!(at))]
+        }
     } else {
         let furthest = all().filter_map(|e| e["hole"][0].as_i64()).max();
         let hole = hole.unwrap_or((furthest.map_or(0, |x| x + 2), 0));
@@ -1576,6 +2273,38 @@ pub fn add_at(
             ]
             .concat(),
         ),
+        New::Iris => (
+            "proxy",
+            "I",
+            [
+                vec![
+                    ("kind".into(), json!("plate")),
+                    ("hole_diameter".into(), json!(5.0)),
+                    ("size".into(), json!(30.0)),
+                ],
+                place,
+                axis([1, 0, 0]),
+            ]
+            .concat(),
+        ),
+        New::Tube => (
+            "proxy",
+            "T",
+            [
+                vec![
+                    ("kind".into(), json!("tube")),
+                    ("inner_diameter".into(), json!(25.4)),
+                ],
+                place,
+                axis([1, 0, 0]),
+                if planar {
+                    Vec::new()
+                } else {
+                    vec![("length".into(), json!(50.0))]
+                },
+            ]
+            .concat(),
+        ),
     };
     // A library lens takes its kind, prescription, size and coating from its part.
     let fields: Vec<(String, Value)> = match (new, library) {
@@ -1629,6 +2358,151 @@ pub fn tag(design: &Value, solid: &str, mirror_face: Option<(V3, [V3; 3])>) -> O
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn irises_and_tubes_are_added_and_turned_into_each_other() {
+        let pairs = |op: &Value| op["entry"].as_array().expect("pairs").clone();
+        // On a table: an iris is a plate on the hole clicked, facing along x.
+        let table = json!({ "layout": "table", "source": [{ "id": "S1", "hole": [0, 0], "height": 75.0 }] });
+        let op = add_at(&table, New::Iris, Some((3, 0)), None).expect("an op");
+        assert_eq!(op["table"], "proxy");
+        let entry = pairs(&op);
+        for pair in [
+            json!(["id", "I1"]),
+            json!(["kind", "plate"]),
+            json!(["hole_diameter", 5.0]),
+            json!(["hole", [3, 0]]),
+            json!(["height", 75.0]),
+            json!(["axis", [1, 0, 0]]),
+        ] {
+            assert!(entry.contains(&pair), "{pair} in {entry:?}");
+        }
+        // A tube on a table has a length; on a planar layout it runs from, to.
+        let op = add_at(&table, New::Tube, Some((1, 0)), None).expect("an op");
+        assert!(pairs(&op).contains(&json!(["length", 50.0])));
+        let planar = json!({ "layout": "planar", "source": [{ "id": "S1", "at": 0.0 }],
+                             "detector": [{ "id": "D1", "at": 100.0 }] });
+        let entry = pairs(&add(&planar, New::Tube).expect("an op"));
+        assert!(entry.contains(&json!(["from", 150.0])) && entry.contains(&json!(["to", 200.0])));
+        assert!(!entry.iter().any(|p| p[0] == "axis" || p[0] == "at"));
+        // A planar tube made a plate: its bore and run replaced by a hole, size and `at`.
+        let target = json!({ "table": "proxy", "id": "T1" });
+        let tube = json!({ "id": "T1", "kind": "tube", "inner_diameter": 25.4, "from": 150.0, "to": 200.0 });
+        let ops = proxy_kind(&target, &tube, "plate");
+        let said = |op: &str, key: &str| ops.iter().any(|o| o["op"] == op && o["key"] == key);
+        assert!(said("set", "kind") && said("unset", "inner_diameter") && said("unset", "from"));
+        assert!(said("unset", "to") && said("set", "hole_diameter") && said("set", "size"));
+        assert!(ops.contains(
+            &json!({ "table": "proxy", "id": "T1", "op": "set", "key": "at", "value": 150.0 })
+        ));
+        // An iris that faces the light: along it, whatever its length.
+        assert_eq!(
+            facing([0.0, 0.0, 75.0], [0.0, 75.0, 75.0]),
+            Some([0.0, 1.0, 0.0])
+        );
+        assert_eq!(facing([0.0; 3], [-30.0, 30.0, 0.0]), Some([-1.0, 1.0, 0.0]));
+        assert_eq!(facing([1.0; 3], [1.0; 3]), None);
+    }
+
+    #[test]
+    fn mounts_come_from_the_file_then_the_library() {
+        let design = json!({ "mount": [{ "id": "Example/XY1", "source": "own",
+            "adjusters": [{ "name": "x", "kind": "slide", "axis": "x", "range": [-1, 1] }] }] });
+        let library = [
+            json!({ "key": "example/XY1", "type": "mount", "source": "library", "adjusters": [] }),
+            json!({ "key": "example/KM1", "type": "mount", "source": "kinematic",
+                    "adjusters": [{ "name": "tip", "kind": "tilt", "axis": [1.0, 0.0, 0.0], "range": [-4.0, 4.0] },
+                                  { "name": "coarse", "kind": "tilt", "axis": [0.0, 0.0, -1.0], "range": null },
+                                  { "name": "z", "kind": "slide", "axis": [0.0, 0.0, 1.0], "range": [-6.35, 6.35], "travel": 12.7 }] }),
+        ];
+        let mounts = mounts_of(&design, &library);
+        // The file's XY1 stands in for the library's (keys ignore case).
+        let names: Vec<&str> = mounts.iter().map(|m| m.name.as_str()).collect();
+        assert_eq!(names, ["Example/XY1", "example/KM1"]);
+        assert_eq!(mounts[0].source, "own");
+        assert!(!mounts[0].library && mounts[1].library);
+        let words: Vec<String> = mounts[1].adjusters.iter().map(adjuster_text).collect();
+        assert_eq!(
+            words,
+            [
+                "tilt about x, -4 to 4°",
+                "tilt about −z, unlimited",
+                "slide along z, 12.7 mm of travel"
+            ]
+        );
+        assert_eq!(
+            adjuster_text(&mounts[0].adjusters[0]),
+            "slide along x, -1 to 1 mm"
+        );
+    }
+
+    #[test]
+    fn backscatter_is_measured_at_the_laser() {
+        // Without a returning detector, one is added at the first source, facing along
+        // its beam and as wide as it; terms other than backscatter keep to the others.
+        let design = json!({ "layout": "table",
+            "source": [{ "id": "S1", "kind": "gaussian", "waist_diameter": 1.5, "hole": [0, 0], "height": 75.0, "axis": [1, 0, 0] }],
+            "detector": [{ "id": "D1", "hole": [9, 0] }] });
+        let ops = backscatter_term(&design).expect("ops");
+        assert_eq!(ops.len(), 2);
+        let entry = ops[0]["entry"].as_array().expect("pairs");
+        for pair in [
+            json!(["id", "R1"]),
+            json!(["hole", [0, 0]]),
+            json!(["height", 75.0]),
+            json!(["axis", [1, 0, 0]]),
+            json!(["size", [1.5, 1.5]]),
+            json!(["returning", true]),
+        ] {
+            assert!(entry.contains(&pair), "{pair} in {entry:?}");
+        }
+        assert_eq!(
+            ops[1]["entry"],
+            json!([["kind", "backscatter"], ["detector", "R1"]])
+        );
+        // With one, the term goes on it; it is never the first detector of other terms.
+        let with = json!({ "detector": [{ "id": "back", "returning": true }, { "id": "D1" }] });
+        let ops = backscatter_term(&with).expect("ops");
+        assert_eq!(ops.len(), 1);
+        assert_eq!(ops[0]["entry"][1], json!(["detector", "back"]));
+        assert_eq!(first_detector(&with).as_deref(), Some("D1"));
+        // Neither a source nor a returning detector: nothing to measure on.
+        assert!(backscatter_term(&json!({ "detector": [{ "id": "D1" }] })).is_none());
+    }
+
+    #[test]
+    fn a_mirror_is_aimed_by_the_law_of_reflection() {
+        // A fold from +y to −x (a hand-built layout's first mirror, 25 mm pitch).
+        let axis = aim(
+            [175.0, -25.0, 50.0],
+            [175.0, 300.0, 50.0],
+            [-50.0, 300.0, 50.0],
+        );
+        assert_eq!(axis, Some([-1.0, -1.0, 0.0]));
+        // From −y up to +z: a periscope's lower mirror.
+        let axis = aim(
+            [-50.0, 125.0, 50.0],
+            [-50.0, 25.0, 50.0],
+            [-50.0, 25.0, 200.0],
+        );
+        assert_eq!(axis, Some([0.0, 1.0, 1.0]));
+        // A 60° turn in the plane: the normal halves it, so the light leaves at the same
+        // angle to it as it came in.
+        let to = [100.0 + 50.0 * 0.5, 50.0 * 3f64.sqrt() / 2.0, 0.0];
+        let n = aim([0.0, 0.0, 0.0], [100.0, 0.0, 0.0], to).expect("a normal");
+        let length = n.iter().map(|x| x * x).sum::<f64>().sqrt();
+        let cos_in = -n[0] / length;
+        let cos_out = (n[0] * 0.5 + n[1] * 3f64.sqrt() / 2.0) / length;
+        assert!((cos_in - cos_out).abs() < 1e-9, "{cos_in} {cos_out}");
+        // Straight back: the mirror faces the light.
+        assert_eq!(
+            aim([0.0; 3], [100.0, 0.0, 0.0], [0.0; 3]),
+            Some([-1.0, 0.0, 0.0])
+        );
+        // Straight on, and a place at the mirror's own: refused.
+        assert_eq!(aim([0.0; 3], [100.0, 0.0, 0.0], [200.0, 0.0, 0.0]), None);
+        assert_eq!(aim([0.0; 3], [100.0, 0.0, 0.0], [100.0, 0.0, 0.0]), None);
+    }
 
     #[test]
     fn new_entries_get_free_ids_and_places_after_the_rest() {

@@ -35,6 +35,7 @@ fn term_json(merit: &Merit, start: &[f64], end: &[f64]) -> Value {
         Term::Pointing { .. } | Term::Collimation => "mrad",
         Term::Diameter { .. } => "mm",
         Term::Power => "fraction",
+        Term::Backscatter => "%",
         Term::Headroom => "half range",
     };
     json!({

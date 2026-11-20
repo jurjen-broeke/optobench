@@ -48,6 +48,10 @@ pub enum Action {
     AddSource,
     /// Add a detector to a layout.
     AddDetector,
+    /// Add an iris (a plate with a hole) to a layout.
+    AddIris,
+    /// Add a tube to a layout.
+    AddTube,
     /// Tag the selected CAD body as a lens.
     TagLens,
     /// Tag the selected CAD body as a mirror reflecting on the face clicked.
@@ -77,6 +81,8 @@ impl Action {
             Action::AddMirror => "Mirror",
             Action::AddSource => "Source",
             Action::AddDetector => "Detector",
+            Action::AddIris => "Iris",
+            Action::AddTube => "Tube",
             Action::TagLens => "Tag Lens",
             Action::TagMirror => "Tag Mirror",
             Action::Apply => "Apply",
@@ -102,6 +108,8 @@ impl Action {
             Action::AddMirror => "add-mirror",
             Action::AddSource => "add-source",
             Action::AddDetector => "add-detector",
+            Action::AddIris => "add-iris",
+            Action::AddTube => "add-tube",
             Action::TagLens => "tag-lens",
             Action::TagMirror => "tag-mirror",
             Action::Apply => "apply",
@@ -126,6 +134,8 @@ impl Action {
             Action::AddMirror => "add a flat mirror after the last item",
             Action::AddSource => "add a collimated beam",
             Action::AddDetector => "add a screen after the last item",
+            Action::AddIris => "add an iris: a plate with a round hole that clips the beam",
+            Action::AddTube => "add a tube: its inner wall clips the beam",
             Action::TagLens => "make the selected CAD body a lens (glass, n = 1.5 to start)",
             Action::TagMirror => {
                 "make the selected CAD body a mirror reflecting on the face you clicked"
@@ -259,6 +269,8 @@ const ADD_SECTION: Section = Section {
         button(Control::Action(Action::AddMirror)),
         button(Control::Action(Action::AddSource)),
         button(Control::Action(Action::AddDetector)),
+        button(Control::Action(Action::AddIris)),
+        menu(Control::Action(Action::AddTube)),
         menu(Control::Action(Action::Remove)),
     ],
 };

@@ -61,6 +61,7 @@
 //! size = [10, 10]
 //! pixels = [100, 100]
 //! # quantum_efficiency = { value = 0.3, source = "…" }   # optional, as in layout files
+//! # returning = true                 # optional, as in layout files: light coming back
 //!
 //! [[merit]]                         # what `optimize` aligns for, as in layout files
 //! kind = "centring"
@@ -1165,7 +1166,14 @@ pub fn read(text: &str, sidecar: &Path, lookups: &Lookups) -> Result<Read, FileE
             item.table,
             &with(
                 &position,
-                &["id", "size", "pixels", "quantum_efficiency", "dof"],
+                &[
+                    "id",
+                    "size",
+                    "pixels",
+                    "quantum_efficiency",
+                    "dof",
+                    "returning",
+                ],
             ),
             &item.context,
         )?;
@@ -1180,6 +1188,7 @@ pub fn read(text: &str, sidecar: &Path, lookups: &Lookups) -> Result<Read, FileE
             size,
             pixels: item.count_pair("pixels")?,
             quantum_efficiency: crate::scene_file::quantum_efficiency(&item)?,
+            returning: crate::scene_file::returning(&item)?,
         });
         let target = Target::Detector(item.text("id")?.to_owned());
         scene

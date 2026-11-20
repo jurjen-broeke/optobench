@@ -4,7 +4,8 @@
 //! ```toml
 //! [[merit]]
 //! kind = "centring"                 # or "focus", "pointing", "collimation", "diameter",
-//!                                   # "power"
+//!                                   # "power", "backscatter" (at a returning detector:
+//!                                   # the light coming back, % of the launched power)
 //! detector = "screen"
 //! target = [0, 0]                   # centring: mm in the detector's frame; pointing: mrad
 //! weight = 1.0                      # optional; residuals are mm, mrad or a fraction
@@ -66,9 +67,10 @@ pub(crate) fn term(item: &Item) -> Result<Merit, FileError> {
         "collimation" => Term::Collimation,
         "diameter" => Term::Diameter { target: target.0 },
         "power" => Term::Power,
+        "backscatter" => Term::Backscatter,
         other => {
             return Err(error(format!(
-                "{}: merit kind `{other}` is not known; use \"focus\", \"centring\", \"pointing\", \"collimation\", \"diameter\", \"power\" or \"headroom\"",
+                "{}: merit kind `{other}` is not known; use \"focus\", \"centring\", \"pointing\", \"collimation\", \"diameter\", \"power\", \"backscatter\" or \"headroom\"",
                 item.context
             )));
         }
