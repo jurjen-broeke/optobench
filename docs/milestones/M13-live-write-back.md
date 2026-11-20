@@ -30,8 +30,12 @@ What SolidCraft does, checked before the design (SolidCraft 0.45.0, 2026-11-20, 
       several values); otherwise its part is moved. The DOFs of one part are all bound or
       none
 - [x] `cad-moves`: for DOF values asked for, each CAD occurrence's move in the assembly
-      frame (from the file's values), and for bound DOFs the parameter and joint changes;
-      sources and detectors of a sidecar, which are not CAD parts, left to the file
+      frame, and for bound DOFs the parameter and joint changes; sources and detectors of
+      a sidecar, which are not CAD parts, left to the file. Moves and changes are from 0:
+      a DOF's value in the file is what optobench adds to the design, which stands where
+      every DOF is 0 (found by M13c's test: from the file's values, a part at 0.5 mm in
+      the file asked to 2 mm moved only 1.5 mm). A part whose DOFs are not asked for
+      moves by the file's values, so the design comes to match the model
 - [x] Checks (commands `tests/golden.rs`): on the golden relay, L2's unbound 2 mm slide
       is its occurrence moved 2 mm along z; L1's 1.5° tilt bound to a joint's second value
       is that joint changed by 1.5°; the screen's slide skipped; a part half bound, and a
@@ -55,11 +59,18 @@ What SolidCraft does, checked before the design (SolidCraft 0.45.0, 2026-11-20, 
 
 ## M13c Writing from the live link
 
-- [ ] `Live::write`: DOF values written to the design open in SolidCraft, then the
+- [x] `Live::write`: DOF values written to the design open in SolidCraft, then the
       written DOFs' values in the sidecar set back to 0 (the design now has the move);
       the next trace follows from the change
-- [ ] `optobench write-back {"path", "dofs"}`, and the window's Apply in SolidCraft after
+- [x] `optobench write-back {"path", "dofs"}`, and the window's Apply in SolidCraft after
       Optimise with Live on, asked first
+- [x] Checks, against the stand-in: `Live::write` of L2_z = 2 (0.5 in the file) and a
+      screen's slide = 1 moves L2 2 mm, sets L2_z to 0 and the screen's to 1 in the
+      sidecar, and the next trace (no export) is the design traced with those values (all
+      but the power by angle, whose bins jump at a ray on a bin's edge, to 1e-12 mm plus
+      1e-9 relative); `optobench write-back` moves L2 and prints the trace after; in the
+      window (`optimised_values_are_written_into_solidcraft`), Apply in SolidCraft asks
+      first, writes, logs it, and the design is traced again
 
 ## M13d The contract test
 

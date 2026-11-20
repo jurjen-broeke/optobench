@@ -5,7 +5,7 @@
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{Receiver, channel};
+use std::sync::mpsc::{Receiver, Sender, channel};
 use std::time::Duration;
 
 use serde_json::Value;
@@ -17,11 +17,17 @@ pub enum Message {
     Update(Value),
     /// The link failed or ended, and why.
     Ended(String),
+    /// DOF values were made in the design (`Live::write`'s result).
+    Written(Value),
+    /// A write was refused or taken back, and why; the link goes on.
+    NotWritten(String),
 }
 
 /// A running link.
 pub struct Link {
     receiver: Receiver<Message>,
+    /// DOF values to write, `{ "<name>": value }`.
+    writes: Sender<Value>,
     stop: Arc<AtomicBool>,
     /// The revision traced last, for the status.
     pub revision: Option<u64>,
@@ -32,6 +38,7 @@ impl Link {
     /// called whenever a message is sent.
     pub fn start(parameters: Value, repaint: crate::document::Repaint) -> Self {
         let (sender, receiver) = channel();
+        let (writes, to_write) = channel::<Value>();
         let stop = Arc::new(AtomicBool::new(false));
         let stopping = stop.clone();
         std::thread::spawn(move || {
@@ -48,6 +55,13 @@ impl Link {
             };
             send(Message::Update(first));
             while !stopping.load(Ordering::Relaxed) {
+                // Writes between waits, on the link's own connection.
+                while let Ok(dofs) = to_write.try_recv() {
+                    match live.write(&dofs) {
+                        Ok(done) => send(Message::Written(done)),
+                        Err(e) => send(Message::NotWritten(e.message)),
+                    }
+                }
                 match live.next(Duration::from_millis(300)) {
                     Ok(Some(update)) => send(Message::Update(update)),
                     Ok(None) => {}
@@ -57,9 +71,16 @@ impl Link {
         });
         Self {
             receiver,
+            writes,
             stop,
             revision: None,
         }
+    }
+
+    /// Asks for DOF values (`{ "<name>": value }`, mm or degrees) to be made in the design;
+    /// the answer comes as [`Message::Written`] or [`Message::NotWritten`].
+    pub fn write(&self, dofs: Value) {
+        let _ = self.writes.send(dofs);
     }
 
     /// The messages that arrived.

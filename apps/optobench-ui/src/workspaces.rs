@@ -62,6 +62,8 @@ pub enum Action {
     Move,
     /// Trace the sidecar against the design open in SolidCraft, again after each change.
     Live,
+    /// Make the last optimisation's values in the design open in SolidCraft.
+    ApplyLive,
 }
 
 impl Action {
@@ -90,6 +92,7 @@ impl Action {
             Action::Apply => "Apply",
             Action::Move => "Move",
             Action::Live => "Live",
+            Action::ApplyLive => "Apply in SolidCraft",
         }
     }
 
@@ -118,6 +121,7 @@ impl Action {
             Action::Apply => "apply",
             Action::Move => "move",
             Action::Live => "live",
+            Action::ApplyLive => "apply-live",
         }
     }
 
@@ -150,6 +154,9 @@ impl Action {
             }
             Action::Live => {
                 "trace against the design open in SolidCraft, again after each change (read only; SolidCraft's Preferences › Assistant › Let AI agents connect must be on)"
+            }
+            Action::ApplyLive => {
+                "make the optimised values in the design open in SolidCraft: its parts moved (or its bound parameters and joints set), read back, taken back if anything differs"
             }
         }
     }
@@ -341,6 +348,7 @@ pub const WORKSPACES: [Workspace; 3] = [
                         items: &[
                             button(command("optimize")),
                             button(Control::Action(Action::Apply)),
+                            button(Control::Action(Action::ApplyLive)),
                             button(command("check-moves")),
                         ],
                     },

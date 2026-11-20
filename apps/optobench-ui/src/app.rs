@@ -74,6 +74,8 @@ pub struct App {
     live: Option<crate::live::Link>,
     /// SolidCraft's control folder, when not its usual place (tests).
     control_directory: Option<PathBuf>,
+    /// DOF values waiting to be confirmed for writing into SolidCraft.
+    confirm_write: Option<Value>,
 }
 
 /// A lens's STEP file being made a library part.
@@ -280,6 +282,7 @@ impl App {
             library_mounts: None,
             live: None,
             control_directory: None,
+            confirm_write: None,
         };
         if let Some(path) = path {
             app.open(path);
@@ -359,6 +362,26 @@ impl App {
                 Action::Isometric => self.camera.isometric(),
                 Action::Rays => self.show_rays = !self.show_rays,
                 Action::Live => self.toggle_live(),
+                Action::ApplyLive => {
+                    // The optimised values, asked about first.
+                    self.confirm_write = self
+                        .doc
+                        .as_ref()
+                        .and_then(|d| d.optimised.as_ref())
+                        .and_then(|o| o["dofs"].as_array())
+                        .map(|dofs| {
+                            Value::Object(
+                                dofs.iter()
+                                    .filter_map(|d| {
+                                        Some((
+                                            d["name"].as_str()?.to_owned(),
+                                            d["suggested"].clone(),
+                                        ))
+                                    })
+                                    .collect(),
+                            )
+                        });
+                }
                 Action::New => self.new_dialog = Some(25.0),
                 Action::Undo => {
                     if let Some(doc) = &mut self.doc {
@@ -508,6 +531,32 @@ impl App {
                     ));
                 }
                 crate::live::Message::Ended(why) => ended = Some(why),
+                crate::live::Message::Written(done) => {
+                    let n = done["written"]["written"].as_u64().unwrap_or(0);
+                    let reset = done["sidecar"].as_array().map_or(0, Vec::len);
+                    let text = format!(
+                        "Written into SolidCraft: {n} change{}, read back as asked; {reset} value{} in the sidecar set",
+                        if n == 1 { "" } else { "s" },
+                        if reset == 1 { "" } else { "s" },
+                    );
+                    self.notice = Some((false, text.clone()));
+                    if let Some(doc) = &mut self.doc {
+                        doc.messages
+                            .push(crate::document::Message { error: false, text });
+                        // The sidecar was changed: read it again (the trace follows the
+                        // design's change).
+                        doc.optimised = None;
+                        doc.start("view", json!({}));
+                    }
+                }
+                crate::live::Message::NotWritten(why) => {
+                    let text = format!("Not written into SolidCraft: {why}");
+                    self.notice = Some((true, text.clone()));
+                    if let Some(doc) = &mut self.doc {
+                        doc.messages
+                            .push(crate::document::Message { error: true, text });
+                    }
+                }
             }
         }
         if let Some(why) = ended {
@@ -538,6 +587,54 @@ impl App {
             .and_then(|d| editors::add_at(d, new, None, library.as_deref()))
         {
             self.apply(vec![op]);
+        }
+    }
+
+    /// Apply in SolidCraft, asked first: the values to write, and what writing does.
+    fn confirm_write_window(&mut self, ctx: &egui::Context) {
+        let Some(dofs) = self.confirm_write.clone() else {
+            return;
+        };
+        let mut choice = None;
+        egui::Window::new("Write into SolidCraft")
+            .collapsible(false)
+            .resizable(false)
+            .anchor(egui::Align2::CENTER_CENTER, Vec2::ZERO)
+            .show(ctx, |ui| {
+                ui.label("These values are made in the design open in SolidCraft:");
+                egui::Grid::new("write-values").num_columns(2).show(ui, |ui| {
+                    for (name, value) in dofs.as_object().into_iter().flatten() {
+                        ui.label(RichText::new(name).color(DARK.text_dim));
+                        ui.label(format!("{:.4}", value.as_f64().unwrap_or(f64::NAN)));
+                        ui.end_row();
+                    }
+                });
+                ui.label(
+                    RichText::new(
+                        "Parts move (or their bound parameters and joints are set), each change one undo step in SolidCraft. Everything is read back; if anything is not as asked, the design is put back as it was. The sidecar's values for those parts are set back to 0.",
+                    )
+                    .color(DARK.text_dim)
+                    .size(11.0),
+                );
+                ui.horizontal(|ui| {
+                    if ui.button("Write").clicked() {
+                        choice = Some(true);
+                    }
+                    if ui.button("Cancel").clicked() {
+                        choice = Some(false);
+                    }
+                });
+            });
+        match choice {
+            Some(true) => {
+                self.confirm_write = None;
+                if let Some(link) = &self.live {
+                    link.write(dofs);
+                    self.notice = Some((false, "Writing into SolidCraft…".into()));
+                }
+            }
+            Some(false) => self.confirm_write = None,
+            None => {}
         }
     }
 
@@ -1083,6 +1180,13 @@ impl App {
                 | Action::AddIris
                 | Action::AddTube,
             ) => layout(),
+            Control::Action(Action::ApplyLive) => match (&self.live, &self.doc) {
+                (None, _) => {
+                    Err("turn Live on first: it writes into the design open in SolidCraft".into())
+                }
+                (Some(_), Some(doc)) if doc.optimised.is_some() => Ok(()),
+                _ => Err("optimise first".into()),
+            },
             Control::Action(Action::Live) => match self.design() {
                 Some(d) if d["kind"] == "sidecar" => Ok(()),
                 Some(_) => Err("the live link traces a CAD design: open its sidecar".into()),
@@ -2622,6 +2726,7 @@ impl eframe::App for App {
         self.graph_dialog(&ctx);
         self.new_dialog(&ctx);
         self.lens_chooser(&ctx);
+        self.confirm_write_window(&ctx);
         self.lens_import_dialog(&ctx);
         self.screenshot(&ctx);
     }
@@ -3814,5 +3919,71 @@ mod exit {
         assert!(h.state().live.is_none());
         assert!(h.state().doc.as_ref().expect("open").live_step.is_none());
         assert_eq!(image(h.state()).expect("traced"), first);
+    }
+
+    #[test]
+    fn optimised_values_are_written_into_solidcraft() {
+        // Against a stand-in for SolidCraft: the golden relay with L2 on a slide, Live on,
+        // an optimisation that asks L2_z = 1 mm; Apply in SolidCraft asks first, then
+        // moves L2 1 mm there and the design is traced again.
+        let fixtures =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../crates/optobench-io/tests/step");
+        let app = optobench_bridge::fake::FakeApp::start(&fixtures.join("cage-relay.step"));
+        let dir = scratch("write-live");
+        app.write_control_folder(&dir.join("control"));
+        let text = std::fs::read_to_string(fixtures.join("cage-relay.optobench"))
+            .expect("read")
+            .replace(
+                "kind = \"sidecar\"\n",
+                &format!("kind = \"sidecar\"\nstep = \"{}\"\n", fixtures.join("cage-relay.step").to_string_lossy()),
+            )
+            .replace(
+                "body = { product = \"pc-lens\", occurrence = \"pc-lens:2\" }",
+                "body = { product = \"pc-lens\", occurrence = \"pc-lens:2\" }\ndof = [ { name = \"L2_z\", kind = \"slide\", axis = [0, 0, 1], range = [-5, 5] } ]",
+            );
+        let sidecar = dir.join("relay.optobench");
+        std::fs::write(&sidecar, text).expect("written");
+        let mut h = window(Some(sidecar.clone()), &dir);
+        h.state_mut().control_directory = Some(dir.join("control"));
+        settle(&mut h);
+        let wait = |h: &mut Harness<'static, App>, until: &dyn Fn(&App) -> bool| {
+            for _ in 0..500 {
+                h.step();
+                settle(h);
+                if until(h.state()) {
+                    return;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            panic!("waited in vain: {:?}", h.state().notice);
+        };
+        click(&mut h, "Live");
+        wait(&mut h, &|a| {
+            a.live.as_ref().is_some_and(|l| l.revision == Some(1))
+        });
+        h.state_mut().doc.as_mut().expect("open").optimised =
+            Some(json!({ "dofs": [{ "name": "L2_z", "suggested": 1.0 }] }));
+        click(&mut h, "Align");
+        click(&mut h, "Apply in SolidCraft");
+        assert!(
+            h.query_by_label("Write into SolidCraft").is_some(),
+            "asked first"
+        );
+        click(&mut h, "Write");
+        wait(&mut h, &|a| {
+            a.doc.as_ref().is_some_and(|d| {
+                d.messages
+                    .iter()
+                    .any(|m| m.text.starts_with("Written into SolidCraft"))
+            })
+        });
+        assert!((app.world("pc-lens:2")[2][3] - 1.0).abs() < 1e-12);
+        wait(&mut h, &|a| {
+            a.live
+                .as_ref()
+                .is_some_and(|l| l.revision.is_some_and(|r| r > 1))
+        });
+        assert!(h.state().doc.as_ref().expect("open").optimised.is_none());
+        assert!(errors(&h).is_empty(), "{:?}", errors(&h));
     }
 }

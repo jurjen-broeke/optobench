@@ -409,11 +409,16 @@ pub(crate) fn check_moves(parameters: &Parameters) -> Result<Value, CommandError
 /// `cad-moves` (M13): for DOF values asked for, what to change in the CAD design. Parameters
 /// `path` (a sidecar), `dofs` (`{ "<name>": value }`, mm for slides, degrees for tilts;
 /// others keep the file's), and `data_directory`, `step` and `moves` as `trace` takes them.
-/// For each CAD occurrence a DOF moves: its move in the assembly frame from where the
-/// file's values put it (a 4 × 4 row-major matrix, with its translation and rotation in
-/// words), and for DOFs with a `binding` the parameter or joint change instead; the DOFs
-/// of one part are all bound or none. Sources and detectors of a sidecar are not CAD
-/// parts: listed under `skipped`, their DOFs stay in the file.
+/// A DOF's value in the file is what optobench adds to the CAD design, which stands where
+/// every DOF is 0 (the STEP file's pose). So for each CAD occurrence a DOF moves: its
+/// move in the assembly frame from that pose to where the values put it (a 4 × 4
+/// row-major matrix, with its translation and rotation in words; `changed` when it moves
+/// at all), and for DOFs with a `binding` the parameter or joint change, the DOF's value
+/// itself; the DOFs of one part are all bound or none. A part whose DOFs are not asked
+/// for moves by the file's values, so the design comes to match the model. Sources and
+/// detectors of a sidecar are not CAD parts: listed under `skipped` (`changed` when a
+/// value asked for differs from the file's), their DOFs stay in the file. `current` gives
+/// the file's values, `values` those asked for (mm or degrees).
 pub(crate) fn cad_moves(parameters: &Parameters) -> Result<Value, CommandError> {
     use optobench_scene::dof::{Binding, Motion};
     check_keys(
@@ -456,21 +461,24 @@ pub(crate) fn cad_moves(parameters: &Parameters) -> Result<Value, CommandError> 
         .dof_values(&overrides)
         .map_err(|e| invalid(e.to_string()))?;
     // A change in the DOF's own unit: mm, or degrees for a tilt.
+    // A CAD part's change: from 0, where the design stands, in mm or degrees.
     let change = |name: &str| {
-        let c = wanted[name] - current[name];
+        let c = wanted[name];
         if degrees(name) { c.to_degrees() } else { c }
     };
+    let zero = zeros(&scene);
     let mut items = Vec::new();
     let mut skipped = Vec::new();
     for target in scene.dof_targets() {
         let dofs: Vec<&optobench_scene::dof::Dof> =
             scene.dofs.iter().filter(|d| d.target == target).collect();
         let names: Vec<&str> = dofs.iter().map(|d| d.name.as_str()).collect();
-        let changed = names.iter().any(|n| change(n).abs() > 0.0);
+        let changed = names.iter().any(|n| wanted[*n].abs() > 0.0);
         let Target::Occurrence(occurrence) = &target else {
             let (kind, name) = target_json(&target);
+            let differs = names.iter().any(|n| (wanted[*n] - current[*n]).abs() > 0.0);
             skipped.push(json!({
-                "kind": kind, "name": name, "dofs": names, "changed": changed,
+                "kind": kind, "name": name, "dofs": names, "changed": differs,
                 "why": "not a CAD part: its degrees of freedom stay in the file",
             }));
             continue;
@@ -482,7 +490,7 @@ pub(crate) fn cad_moves(parameters: &Parameters) -> Result<Value, CommandError> 
                 names.join(", ")
             )));
         }
-        let t = scene.movement(&target, &current, &wanted);
+        let t = scene.movement(&target, &zero, &wanted);
         let m = matrix(&t);
         let (axis, angle) = axis_angle(&t);
         let bindings: Value = if bound == 0 {
@@ -519,14 +527,21 @@ pub(crate) fn cad_moves(parameters: &Parameters) -> Result<Value, CommandError> 
             "bindings": bindings,
         }));
     }
-    let values: serde_json::Map<String, Value> = wanted
-        .iter()
-        .map(|(n, w)| {
-            (
-                n.clone(),
-                json!(if degrees(n) { w.to_degrees() } else { *w }),
-            )
-        })
-        .collect();
-    Ok(json!({ "items": items, "skipped": skipped, "values": values }))
+    let in_units = |values: &BTreeMap<String, f64>| -> serde_json::Map<String, Value> {
+        values
+            .iter()
+            .map(|(n, w)| {
+                (
+                    n.clone(),
+                    json!(if degrees(n) { w.to_degrees() } else { *w }),
+                )
+            })
+            .collect()
+    };
+    Ok(json!({
+        "items": items,
+        "skipped": skipped,
+        "values": in_units(&wanted),
+        "current": in_units(&current),
+    }))
 }

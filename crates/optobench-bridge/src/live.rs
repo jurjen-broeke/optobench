@@ -60,6 +60,8 @@ pub struct Live {
     /// The design as the latest export has it: where its occurrences were then, and its
     /// geometry fingerprint.
     exported: Option<Snapshot>,
+    /// The moves the last trace applied to that export.
+    moved: Vec<Value>,
 }
 
 /// The first place two JSON values differ, as a path (`timeline[3].name`), with both
@@ -212,6 +214,7 @@ impl Live {
             traced: subscribed,
             exports: Vec::new(),
             exported: None,
+            moved: Vec::new(),
         };
         let first = live.trace_now(Instant::now())?;
         Ok((live, first))
@@ -278,6 +281,7 @@ impl Live {
         }
         let traced = Registry::standard().run("trace", &Value::Object(parameters))?;
         self.traced = snapshot.revision.clone();
+        self.moved = moves.clone();
         Ok(json!({
             "revision": snapshot.revision.revision,
             "document_id": snapshot.revision.document_id,
@@ -292,5 +296,70 @@ impl Live {
             "design": snapshot_json(&snapshot),
             "trace": traced,
         }))
+    }
+
+    /// Makes DOF values (`{ "<name>": value }`, mm or degrees; others keep the file's) in
+    /// the design open in SolidCraft (M13): `cad-moves` against the design as the last
+    /// trace had it, where every DOF is 0, written in one batch and read back
+    /// (`write::write`; taken back whole when anything differs). Then the sidecar: the
+    /// CAD parts' DOFs back to 0, since the design now has their moves, and the DOFs of
+    /// sources and detectors, which are not CAD parts, set to the values asked. The
+    /// design's change is traced by the next [`Live::next`].
+    pub fn write(&mut self, dofs: &Value) -> Result<Value, CommandError> {
+        let mut parameters = Parameters::new();
+        for key in ["path", "data_directory"] {
+            if let Some(v) = self.parameters.get(key) {
+                parameters.insert(key.into(), v.clone());
+            }
+        }
+        if let Some(step) = self.exports.last() {
+            parameters.insert("step".into(), json!(step.to_string_lossy()));
+        }
+        if !self.moved.is_empty() {
+            parameters.insert("moves".into(), json!(self.moved));
+        }
+        parameters.insert("dofs".into(), dofs.clone());
+        let plan = Registry::standard().run("cad-moves", &Value::Object(parameters))?;
+        let written =
+            crate::write::write(&mut self.link, &plan, crate::write::Tolerance::default())
+                .map_err(failed)?;
+        // The sidecar: what the design now has goes back to 0; the rest is set there.
+        let mut operations = Vec::new();
+        let current = |name: &str| plan["current"][name].as_f64().unwrap_or(0.0);
+        for item in plan["items"].as_array().into_iter().flatten() {
+            for name in item["dofs"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(Value::as_str)
+            {
+                if current(name) != 0.0 {
+                    operations
+                        .push(json!({ "op": "set", "dof": name, "key": "value", "value": 0 }));
+                }
+            }
+        }
+        for item in plan["skipped"].as_array().into_iter().flatten() {
+            if item["changed"] != true {
+                continue;
+            }
+            for name in item["dofs"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(Value::as_str)
+            {
+                operations.push(json!({
+                    "op": "set", "dof": name, "key": "value", "value": plan["values"][name],
+                }));
+            }
+        }
+        if !operations.is_empty() {
+            Registry::standard().run(
+                "edit",
+                &json!({ "path": self.parameters["path"], "operations": operations }),
+            )?;
+        }
+        Ok(json!({ "written": written, "sidecar": operations, "plan": plan }))
     }
 }
