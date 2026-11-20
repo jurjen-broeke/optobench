@@ -218,6 +218,192 @@ pub struct Context {
     /// Where each item and source with an id stands (mm, scene frame), for aiming
     /// mirrors.
     pub places: Vec<(String, V3)>,
+    /// The mounts an item can be given: the file's `[[mount]]` tables, then the parts
+    /// library's.
+    pub mounts: Vec<Mount>,
+}
+
+/// A mount an item can name: its id (the file's) or key (the library's), where its
+/// ranges come from, and its adjusters (`dof` entries without an item).
+#[derive(Debug, Clone, PartialEq)]
+pub struct Mount {
+    /// What `mount = "…"` names.
+    pub name: String,
+    /// Its `source`.
+    pub source: String,
+    /// Its adjusters as written.
+    pub adjusters: Vec<Value>,
+    /// Whether it comes from the parts library.
+    pub library: bool,
+}
+
+/// The mounts of a design: its own `[[mount]]` tables first, then the library's (`parts`
+/// entries of type `mount`) except those a table of the same id (any case) stands in
+/// for.
+pub fn mounts_of(design: &Value, library: &[Value]) -> Vec<Mount> {
+    let mut own: Vec<Mount> = design["mount"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|m| {
+            Some(Mount {
+                name: m["id"].as_str()?.to_owned(),
+                source: m["source"].as_str().unwrap_or_default().to_owned(),
+                adjusters: m["adjusters"].as_array().cloned().unwrap_or_default(),
+                library: false,
+            })
+        })
+        .collect();
+    let theirs: Vec<Mount> = library
+        .iter()
+        .filter_map(|p| {
+            let key = p["key"].as_str()?;
+            if own.iter().any(|m| m.name.eq_ignore_ascii_case(key)) {
+                return None;
+            }
+            Some(Mount {
+                name: key.to_owned(),
+                source: p["source"].as_str().unwrap_or_default().to_owned(),
+                adjusters: p["adjusters"].as_array().cloned().unwrap_or_default(),
+                library: true,
+            })
+        })
+        .collect();
+    own.extend(theirs);
+    own
+}
+
+/// An adjuster in words: `slide along x, −1 to 1 mm`, `tilt about z, unlimited`.
+fn adjuster_text(adjuster: &Value) -> String {
+    let tilt = adjuster["kind"] == "tilt";
+    let axis = match &adjuster["axis"] {
+        Value::String(a) => a.clone(),
+        Value::Array(v) => {
+            let names = ["x", "y", "z"];
+            let numbers: Vec<f64> = v.iter().filter_map(Value::as_f64).collect();
+            match numbers
+                .iter()
+                .enumerate()
+                .filter(|(_, x)| **x != 0.0)
+                .collect::<Vec<_>>()
+                .as_slice()
+            {
+                [(k, x)] => {
+                    format!("{}{}", if **x < 0.0 { "−" } else { "" }, names[*k])
+                }
+                _ => format!("{numbers:?}"),
+            }
+        }
+        _ => "?".into(),
+    };
+    let unit = if tilt { "°" } else { " mm" };
+    let reach = match (&adjuster["range"], adjuster["travel"].as_f64()) {
+        (_, Some(t)) => format!("{t}{unit} of travel"),
+        (Value::Array(r), _) if r.len() == 2 => format!(
+            "{} to {}{unit}",
+            r[0].as_f64().unwrap_or(0.0),
+            r[1].as_f64().unwrap_or(0.0)
+        ),
+        _ => "unlimited".into(),
+    };
+    format!(
+        "{} {axis}, {reach}",
+        if tilt { "tilt about" } else { "slide along" }
+    )
+}
+
+/// The mount an item stands in: none, or one of the design's or the library's, and the
+/// degrees of freedom it gives (`<id>_<name>`). A stack of mounts (a list) is shown and
+/// kept until one mount is chosen in its place.
+fn mount_field(
+    ui: &mut Ui,
+    base: &str,
+    target: &Value,
+    entry: &Value,
+    context: &Context,
+) -> Option<Value> {
+    let names: Vec<String> = match &entry["mount"] {
+        Value::String(s) => vec![s.clone()],
+        Value::Array(a) => a
+            .iter()
+            .filter_map(|m| m.as_str().map(str::to_owned))
+            .collect(),
+        _ => Vec::new(),
+    };
+    if context.mounts.is_empty() && names.is_empty() {
+        return None;
+    }
+    let shown = if names.is_empty() {
+        "none".to_owned()
+    } else {
+        names.join(" on ")
+    };
+    let mut chosen: Option<Option<String>> = None;
+    ui.horizontal(|ui| {
+        ui.label(RichText::new("mount").color(DARK.text_dim))
+            .on_hover_text("What it stands in: a mount's adjusters become its degrees of freedom");
+        egui::ComboBox::from_id_salt(format!("{base}/mount"))
+            .selected_text(&shown)
+            .show_ui(ui, |ui| {
+                if ui.selectable_label(names.is_empty(), "none").clicked() {
+                    chosen = Some(None);
+                }
+                for m in &context.mounts {
+                    let on = names.len() == 1 && names[0].eq_ignore_ascii_case(&m.name);
+                    let mut response = ui.selectable_label(on, &m.name);
+                    if !m.source.is_empty() {
+                        response = response.on_hover_text(&m.source);
+                    }
+                    if response.clicked() {
+                        chosen = Some(Some(m.name.clone()));
+                    }
+                }
+            });
+    });
+    let id = entry["id"].as_str().unwrap_or_default();
+    for name in &names {
+        match context
+            .mounts
+            .iter()
+            .find(|m| m.name.eq_ignore_ascii_case(name))
+        {
+            Some(m) => {
+                for a in &m.adjusters {
+                    ui.label(
+                        RichText::new(format!(
+                            "    {id}_{}: {}",
+                            a["name"].as_str().unwrap_or("?"),
+                            adjuster_text(a)
+                        ))
+                        .color(DARK.text_dim)
+                        .size(11.0),
+                    );
+                }
+            }
+            None => {
+                ui.label(
+                    RichText::new(format!("    {name}: not in the file or the parts library"))
+                        .color(DARK.warning)
+                        .size(11.0),
+                );
+            }
+        }
+    }
+    let mut op = target.clone();
+    match chosen? {
+        None if !names.is_empty() => {
+            op["op"] = json!("unset");
+            op["key"] = json!("mount");
+            Some(op)
+        }
+        Some(name) if !(names.len() == 1 && names[0] == name) => {
+            op["op"] = json!("set");
+            op["key"] = json!("mount");
+            op["value"] = json!(name);
+            Some(op)
+        }
+        _ => None,
+    }
 }
 
 impl Context {
@@ -238,7 +424,14 @@ impl Context {
                 .flatten(),
             groups: groups_of(design),
             places: Vec::new(),
+            mounts: Vec::new(),
         }
+    }
+
+    /// As [`Context::of`], with the mounts items can be given ([`mounts_of`]).
+    pub fn with_mounts(mut self, design: &Value, library: &[Value]) -> Self {
+        self.mounts = mounts_of(design, library);
+        self
     }
 
     /// As [`Context::of`], with where the scene placed each item and source.
@@ -669,6 +862,9 @@ pub fn entry(
     if ["element", "source", "detector", "proxy"].contains(&table) && entry["id"].is_string() {
         operations.extend(group_field(ui, drafts, &base, &target, entry, context));
     }
+    if ["element", "source", "detector"].contains(&table) && entry["id"].is_string() {
+        operations.extend(mount_field(ui, &base, &target, entry, context));
+    }
     // On a table layout the height is the position's Z.
     let shown_as_z = context.pitch.is_some() && entry["hole"].is_array();
     egui::Grid::new(format!("entry-{base}"))
@@ -676,7 +872,9 @@ pub fn entry(
         .spacing([10.0, 4.0])
         .show(ui, |ui| {
             for key in keys(entry) {
-                if (shown_as_z && key == "height") || key == "group" || key == "id" {
+                if (shown_as_z && key == "height")
+                    || ["group", "id", "mount"].contains(&key.as_str())
+                {
                     continue;
                 }
                 let in_lens_editor = matches!(
@@ -1926,6 +2124,38 @@ mod tests {
         );
         assert_eq!(facing([0.0; 3], [-30.0, 30.0, 0.0]), Some([-1.0, 1.0, 0.0]));
         assert_eq!(facing([1.0; 3], [1.0; 3]), None);
+    }
+
+    #[test]
+    fn mounts_come_from_the_file_then_the_library() {
+        let design = json!({ "mount": [{ "id": "Example/XY1", "source": "own",
+            "adjusters": [{ "name": "x", "kind": "slide", "axis": "x", "range": [-1, 1] }] }] });
+        let library = [
+            json!({ "key": "example/XY1", "type": "mount", "source": "library", "adjusters": [] }),
+            json!({ "key": "example/KM1", "type": "mount", "source": "kinematic",
+                    "adjusters": [{ "name": "tip", "kind": "tilt", "axis": [1.0, 0.0, 0.0], "range": [-4.0, 4.0] },
+                                  { "name": "coarse", "kind": "tilt", "axis": [0.0, 0.0, -1.0], "range": null },
+                                  { "name": "z", "kind": "slide", "axis": [0.0, 0.0, 1.0], "range": [-6.35, 6.35], "travel": 12.7 }] }),
+        ];
+        let mounts = mounts_of(&design, &library);
+        // The file's XY1 stands in for the library's (keys ignore case).
+        let names: Vec<&str> = mounts.iter().map(|m| m.name.as_str()).collect();
+        assert_eq!(names, ["Example/XY1", "example/KM1"]);
+        assert_eq!(mounts[0].source, "own");
+        assert!(!mounts[0].library && mounts[1].library);
+        let words: Vec<String> = mounts[1].adjusters.iter().map(adjuster_text).collect();
+        assert_eq!(
+            words,
+            [
+                "tilt about x, -4 to 4°",
+                "tilt about −z, unlimited",
+                "slide along z, 12.7 mm of travel"
+            ]
+        );
+        assert_eq!(
+            adjuster_text(&mounts[0].adjusters[0]),
+            "slide along x, -1 to 1 mm"
+        );
     }
 
     #[test]

@@ -68,6 +68,8 @@ pub struct App {
     /// A lens's STEP file dropped on the window: its prescription and what is typed to
     /// make it a library part.
     lens_import: Option<LensImport>,
+    /// The parts library's mounts, read again after each change to the design.
+    library_mounts: Option<Vec<Value>>,
 }
 
 /// A lens's STEP file being made a library part.
@@ -271,6 +273,7 @@ impl App {
             placing: None,
             lens_chooser: None,
             lens_import: None,
+            library_mounts: None,
         };
         if let Some(path) = path {
             app.open(path);
@@ -1605,7 +1608,24 @@ impl App {
             if doc.scene_version != self.drafts_version {
                 self.drafts.clear();
                 self.drafts_version = doc.scene_version;
+                self.library_mounts = None;
             }
+        }
+        if self.library_mounts.is_none() {
+            let mut parameters = json!({});
+            if let (Some(p), Some(d)) = (
+                parameters.as_object_mut(),
+                self.data_parameter().as_object(),
+            ) {
+                p.extend(d.clone());
+            }
+            let parts = optobench_commands::Registry::standard()
+                .run("parts", &parameters)
+                .ok()
+                .and_then(|v| v["parts"].as_array().cloned())
+                .unwrap_or_default();
+            self.library_mounts =
+                Some(parts.into_iter().filter(|p| p["type"] == "mount").collect());
         }
         let mut operations = Vec::new();
         egui::ScrollArea::vertical()
@@ -1632,10 +1652,12 @@ impl App {
             return Vec::new();
         };
         let scene = self.doc.as_ref().and_then(|d| d.scene.clone());
+        let library = self.library_mounts.clone().unwrap_or_default();
         let context = match &scene {
             Some(scene) => editors::Context::of(&design).with_places(scene),
             None => editors::Context::of(&design),
-        };
+        }
+        .with_mounts(&design, &library);
         let mut operations = Vec::new();
         let list = design[table].as_array().cloned().unwrap_or_default();
         ui.label(RichText::new(format!("{title} ({})", list.len())).strong());
@@ -1767,7 +1789,9 @@ impl App {
             return Vec::new();
         };
         let design = scene.design.clone();
-        let context = editors::Context::of(&design).with_places(scene);
+        let context = editors::Context::of(&design)
+            .with_places(scene)
+            .with_mounts(&design, self.library_mounts.as_deref().unwrap_or_default());
         if self.focus.as_ref().is_some_and(|(t, _)| t == "table") {
             if let Some(board) = crate::board::Board::of(&design, scene) {
                 return editors::board(ui, &mut self.drafts, &board);
@@ -3432,5 +3456,67 @@ mod exit {
             "{text}"
         );
         assert!(errors(&h).is_empty(), "{:?}", errors(&h));
+    }
+
+    #[test]
+    fn a_mount_is_chosen_from_the_parts_library() {
+        // A kinematic mount (±4° tip and tilt) in the library; M1's Properties list it,
+        // and choosing it writes its key: the scene's M1 gets M1_tip and M1_tilt.
+        let dir = scratch("mount");
+        let part = dir.join("km1.toml");
+        std::fs::write(
+            &part,
+            "format = \"optobench/1\"\nkind = \"part\"\nvendor = \"Example\"\ntype = \"mount\"\npart = \"KM1\"\n\
+             source = \"kinematic mirror mount: ±4° tip and tilt\"\n\
+             adjusters = [ { name = \"tip\", kind = \"tilt\", axis = \"x\", range = [-4, 4] },\n\
+                           { name = \"tilt\", kind = \"tilt\", axis = \"y\", range = [-4, 4] } ]\n",
+        )
+        .expect("written");
+        optobench_commands::Registry::standard()
+            .run(
+                "import-part",
+                &json!({ "path": part.to_string_lossy(), "data_directory": dir.to_string_lossy() }),
+            )
+            .expect("imported");
+        let path = dir.join("mirror.optobench");
+        std::fs::write(
+            &path,
+            "format = \"optobench/1\"\nkind = \"layout\"\nlayout = \"table\"\n\n[table]\npitch = 25.0\n\n\
+             [[source]]\nid = \"S1\"\nkind = \"collimated\"\nwavelength_um = 0.633\npower_w = 0.001\ndiameter = 2.0\nhole = [0, 0]\nheight = 75.0\naxis = [1, 0, 0]\n\n\
+             [[element]]\nid = \"M1\"\nkind = \"mirror\"\nhole = [2, 0]\nheight = 75.0\naxis = [-1, 1, 0]\ndiameter = 25.4\nclear_aperture = 22.9\n",
+        )
+        .expect("written");
+        let mut h = window(Some(path.clone()), &dir);
+        settle(&mut h);
+        click(&mut h, "Workspace");
+        click(&mut h, "Layout");
+        click(&mut h, "M1  ·  mirror");
+        h.query_all_by_role(egui::accesskit::Role::ComboBox)
+            .filter(|c| c.value().as_deref() == Some("none"))
+            .nth(1)
+            .expect("the mount list, after the group's")
+            .click();
+        h.step();
+        h.step();
+        click(&mut h, "example/KM1");
+        let text = std::fs::read_to_string(&path).expect("written");
+        assert!(text.contains("mount = \"example/KM1\""), "{text}");
+        assert!(errors(&h).is_empty(), "{:?}", errors(&h));
+        let names: Vec<String> = h
+            .state()
+            .doc
+            .as_ref()
+            .and_then(|d| d.scene.as_ref())
+            .expect("a scene")
+            .dofs
+            .iter()
+            .filter_map(|d| d["name"].as_str().map(str::to_owned))
+            .collect();
+        assert_eq!(names, ["M1_tip", "M1_tilt"]);
+        assert!(
+            h.query_by_label("    M1_tip: tilt about x, -4 to 4°")
+                .is_some(),
+            "what it gives"
+        );
     }
 }

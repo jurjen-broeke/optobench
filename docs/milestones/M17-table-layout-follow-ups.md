@@ -41,9 +41,18 @@ a mount's name or a doublet's radii.
 
 ## M17c Mounts from Properties
 
-- [ ] `mount` set from Properties: none, one of the file's `[[mount]]` tables, or a
-      mount of the parts library; the DOFs it gives listed
-- [ ] Checks: a library mount chosen writes its key and the item gets its adjusters
+- [x] `mount` set from Properties (elements, sources, detectors): none, one of the
+      file's `[[mount]]` tables, or a mount of the parts library (a file's table with a
+      library key's id stands in for it, as when tracing); each mount's `source` on
+      hover. A stack (`mount = [...]`) is shown as one on the other and kept until one
+      mount is chosen in its place
+- [x] The DOFs a mount gives listed under it in words (`M1_tip: tilt about x, -4 to
+      4°`, `slide along z, 12.7 mm of travel`, `unlimited`); a name found in neither is
+      marked. The library's mounts are read again after each change to the design
+- [x] Checks: the file's mounts first, then the library's without those it stands in
+      for; adjusters in words; in the window (`a_mount_is_chosen_from_the_parts_library`),
+      a kinematic mount imported into the library chosen for M1 writes
+      `mount = "example/KM1"` and the scene's M1 gets M1_tip and M1_tilt
 
 ## M17d An achromatic doublet from its focal length
 
