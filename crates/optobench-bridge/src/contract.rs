@@ -94,9 +94,59 @@ const NEEDED: &[Needed] = &[
     },
 ];
 
+/// What M13 writes with, and reads back, as SolidCraft 0.45.0 describes it: checked only
+/// before writing, so a changed write contract does not stop the read-only link.
+const NEEDED_FOR_WRITING: &[Needed] = &[
+    Needed {
+        command: "parameters.change",
+        side: "input",
+        definition: None,
+        properties: &["changes"],
+    },
+    Needed {
+        command: "joint.drive",
+        side: "input",
+        definition: None,
+        properties: &["joint", "value", "index"],
+    },
+    Needed {
+        command: "joint.drive",
+        side: "output",
+        definition: None,
+        properties: &["values"],
+    },
+    Needed {
+        command: "occurrence.move",
+        side: "input",
+        definition: None,
+        properties: &["occurrence", "path", "space", "matrix", "capture"],
+    },
+    Needed {
+        command: "edit.checkpoint",
+        side: "output",
+        definition: None,
+        properties: &["checkpoint"],
+    },
+    Needed {
+        command: "edit.restore_checkpoint",
+        side: "input",
+        definition: None,
+        properties: &["checkpoint", "forget"],
+    },
+];
+
 /// The commands M12 uses, by id.
 pub fn commands() -> Vec<&'static str> {
-    let mut ids: Vec<&str> = NEEDED.iter().map(|n| n.command).collect();
+    ids(NEEDED)
+}
+
+/// The commands M13 adds for writing, by id.
+pub fn commands_for_writing() -> Vec<&'static str> {
+    ids(NEEDED_FOR_WRITING)
+}
+
+fn ids(needed: &[Needed]) -> Vec<&'static str> {
+    let mut ids: Vec<&str> = needed.iter().map(|n| n.command).collect();
     ids.dedup();
     ids
 }
@@ -132,12 +182,21 @@ fn missing(schema: &Value, needed: &Needed) -> Vec<String> {
 /// Checks the app's contracts for every command M12 reads; [`BridgeError::Contract`]
 /// lists every difference.
 pub fn check(connection: &mut Connection) -> Result<(), BridgeError> {
+    check_list(connection, NEEDED)
+}
+
+/// Checks the contracts of the commands M13 writes with, as [`check`] does.
+pub fn check_writing(connection: &mut Connection) -> Result<(), BridgeError> {
+    check_list(connection, NEEDED_FOR_WRITING)
+}
+
+fn check_list(connection: &mut Connection, list: &[Needed]) -> Result<(), BridgeError> {
     let mut changes = Vec::new();
-    for command in commands() {
+    for command in ids(list) {
         // `engine.describe` is an engine command (through `engine.execute`), not a method.
         match connection.execute("engine.describe", json!({ "command": command })) {
             Ok(schema) => {
-                for needed in NEEDED.iter().filter(|n| n.command == command) {
+                for needed in list.iter().filter(|n| n.command == command) {
                     changes.extend(missing(&schema, needed));
                 }
             }

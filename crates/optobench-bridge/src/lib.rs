@@ -20,6 +20,8 @@
 //!   revision; a STEP export of the design for tracing.
 //! - [`live`]: a sidecar traced against the design, again after each change (the
 //!   tracing done through `optobench-commands`, which knows nothing of SolidCraft).
+//! - [`write`]: DOF values made in the design (M13): one batch, read back, taken back
+//!   whole when anything differs.
 //! - [`fake`]: a stand-in for the app in tests (no SolidCraft in CI).
 //!
 //! M12 changes nothing in the design. The STEP export writes a file into a folder the
@@ -34,6 +36,7 @@ pub mod discovery;
 pub mod fake;
 pub mod live;
 pub mod read;
+pub mod write;
 
 use std::fmt;
 
@@ -56,6 +59,9 @@ pub enum BridgeError {
     Protocol(String),
     /// The app's commands are not the ones this version of optobench was written against.
     Contract(Vec<String>),
+    /// What was written is not what was asked for (M13); the design was put back as it
+    /// was.
+    Mismatch(Vec<String>),
 }
 
 impl fmt::Display for BridgeError {
@@ -76,6 +82,11 @@ impl fmt::Display for BridgeError {
             }
             BridgeError::Refused(why) => write!(f, "SolidCraft: {why}"),
             BridgeError::Protocol(why) => write!(f, "an unexpected reply from SolidCraft: {why}"),
+            BridgeError::Mismatch(differences) => write!(
+                f,
+                "SolidCraft did not make the change asked for ({}); the design is as it was",
+                differences.join("; ")
+            ),
             BridgeError::Contract(changes) => write!(
                 f,
                 "this SolidCraft's commands differ from those optobench reads ({}); nothing was read",

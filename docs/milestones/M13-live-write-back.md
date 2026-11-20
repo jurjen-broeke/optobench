@@ -39,12 +39,19 @@ What SolidCraft does, checked before the design (SolidCraft 0.45.0, 2026-11-20, 
 
 ## M13b Writing, reading back, taking back
 
-- [ ] `optobench-bridge::write`: a checkpoint; one batch of `parameters.change` (all
+- [x] `optobench-bridge::write`: a checkpoint; one batch of `parameters.change` (all
       parameters at once, one rebuild), `joint.drive` and `occurrence.move` (by numeric
       ids and paths); the design read back: every parameter and joint value, and every
       moved part's placement against the move asked for; any difference beyond the
       tolerance, or a failed command, restores the checkpoint and says what differed
-- [ ] The contracts of the commands written and read for it checked as M12's
+- [x] The contracts of the commands written and read for it checked as M12's
+- [x] Checks (bridge `tests/write.rs`, against the stand-in, which now keeps parameters
+      and joints that move parts, world moves, checkpoints and batches): a part moved
+      2 mm; a parameter and a joint set by their DOFs' changes, the parameters first and
+      unchanged parts not written; a parameter that moves its part twice its change
+      (`2 * L1_z`) caught by the read-back and taken back, the design as it was; a joint
+      stopped at its limit taken back; an unknown joint, an unknown part and a changed
+      write contract change nothing
 
 ## M13c Writing from the live link
 
