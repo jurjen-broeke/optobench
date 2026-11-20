@@ -367,6 +367,14 @@ const STANDARD: &[Command] = &[
         summary: "after a move report's moves are made in CAD and exported again: is every part where it should be",
         handler: moves::check_moves,
     },
+    Command {
+        id: "cad-moves",
+        label: "CAD Moves",
+        icon: "check-moves",
+        effect: Effect::Read,
+        summary: "for degree-of-freedom values: each CAD part's move, or the parameters and joints its bindings change",
+        handler: moves::cad_moves,
+    },
 ];
 
 /// The set of commands callers can run.

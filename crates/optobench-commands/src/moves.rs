@@ -405,3 +405,128 @@ pub(crate) fn check_moves(parameters: &Parameters) -> Result<Value, CommandError
     }
     Ok(result)
 }
+
+/// `cad-moves` (M13): for DOF values asked for, what to change in the CAD design. Parameters
+/// `path` (a sidecar), `dofs` (`{ "<name>": value }`, mm for slides, degrees for tilts;
+/// others keep the file's), and `data_directory`, `step` and `moves` as `trace` takes them.
+/// For each CAD occurrence a DOF moves: its move in the assembly frame from where the
+/// file's values put it (a 4 × 4 row-major matrix, with its translation and rotation in
+/// words), and for DOFs with a `binding` the parameter or joint change instead; the DOFs
+/// of one part are all bound or none. Sources and detectors of a sidecar are not CAD
+/// parts: listed under `skipped`, their DOFs stay in the file.
+pub(crate) fn cad_moves(parameters: &Parameters) -> Result<Value, CommandError> {
+    use optobench_scene::dof::{Binding, Motion};
+    check_keys(
+        parameters,
+        &["path", "dofs", "data_directory", "step", "moves"],
+    )?;
+    let invalid = |m: String| CommandError::new(ErrorCode::InvalidParameters, m);
+    let path = parameters
+        .get("path")
+        .and_then(Value::as_str)
+        .ok_or_else(|| invalid("missing parameter `path`".into()))?;
+    let (scene, _, _, _) = load(path, parameters)?;
+    let asked = parameters
+        .get("dofs")
+        .and_then(Value::as_object)
+        .ok_or_else(|| invalid("`dofs` is { \"<name>\": value } (mm or degrees)".into()))?;
+    let degrees = |name: &str| {
+        scene
+            .dofs
+            .iter()
+            .find(|d| d.name == name)
+            .is_some_and(|d| matches!(d.motion, Motion::Tilt { .. }))
+    };
+    let mut overrides = BTreeMap::new();
+    for (name, value) in asked {
+        let value = value
+            .as_f64()
+            .ok_or_else(|| invalid(format!("the value of `{name}` is not a number")))?;
+        let scale = if degrees(name) {
+            std::f64::consts::PI / 180.0
+        } else {
+            1.0
+        };
+        overrides.insert(name.clone(), value * scale);
+    }
+    let current = scene
+        .dof_values(&BTreeMap::new())
+        .map_err(|e| failed(e.to_string()))?;
+    let wanted = scene
+        .dof_values(&overrides)
+        .map_err(|e| invalid(e.to_string()))?;
+    // A change in the DOF's own unit: mm, or degrees for a tilt.
+    let change = |name: &str| {
+        let c = wanted[name] - current[name];
+        if degrees(name) { c.to_degrees() } else { c }
+    };
+    let mut items = Vec::new();
+    let mut skipped = Vec::new();
+    for target in scene.dof_targets() {
+        let dofs: Vec<&optobench_scene::dof::Dof> =
+            scene.dofs.iter().filter(|d| d.target == target).collect();
+        let names: Vec<&str> = dofs.iter().map(|d| d.name.as_str()).collect();
+        let changed = names.iter().any(|n| change(n).abs() > 0.0);
+        let Target::Occurrence(occurrence) = &target else {
+            let (kind, name) = target_json(&target);
+            skipped.push(json!({
+                "kind": kind, "name": name, "dofs": names, "changed": changed,
+                "why": "not a CAD part: its degrees of freedom stay in the file",
+            }));
+            continue;
+        };
+        let bound = dofs.iter().filter(|d| d.binding.is_some()).count();
+        if bound > 0 && bound < dofs.len() {
+            return Err(invalid(format!(
+                "`{occurrence}`: bind all its degrees of freedom ({}) or none",
+                names.join(", ")
+            )));
+        }
+        let t = scene.movement(&target, &current, &wanted);
+        let m = matrix(&t);
+        let (axis, angle) = axis_angle(&t);
+        let bindings: Value = if bound == 0 {
+            Value::Null
+        } else {
+            json!(
+                dofs.iter()
+                    .map(|d| {
+                        let unit = if degrees(&d.name) { "deg" } else { "mm" };
+                        let mut b =
+                            json!({ "dof": d.name, "change": change(&d.name), "unit": unit });
+                        match &d.binding {
+                            Some(Binding::Parameter(p)) => b["parameter"] = json!(p),
+                            Some(Binding::Joint { name, index }) => {
+                                b["joint"] = json!(name);
+                                b["index"] = json!(index.unwrap_or(0));
+                            }
+                            None => {}
+                        }
+                        b
+                    })
+                    .collect::<Vec<_>>()
+            )
+        };
+        items.push(json!({
+            "occurrence": occurrence,
+            "dofs": names,
+            "changed": changed,
+            "matrix": [[m[0], m[1], m[2], m[3]], [m[4], m[5], m[6], m[7]],
+                       [m[8], m[9], m[10], m[11]], [0.0, 0.0, 0.0, 1.0]],
+            "translate_mm": v(t.translation),
+            "rotate_axis": v(axis),
+            "rotate_deg": angle,
+            "bindings": bindings,
+        }));
+    }
+    let values: serde_json::Map<String, Value> = wanted
+        .iter()
+        .map(|(n, w)| {
+            (
+                n.clone(),
+                json!(if degrees(n) { w.to_degrees() } else { *w }),
+            )
+        })
+        .collect();
+    Ok(json!({ "items": items, "skipped": skipped, "values": values }))
+}
