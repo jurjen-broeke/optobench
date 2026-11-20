@@ -13,6 +13,7 @@ mod editors;
 mod graphs;
 mod icons;
 mod lens;
+mod live;
 mod logo;
 mod moving;
 mod render;

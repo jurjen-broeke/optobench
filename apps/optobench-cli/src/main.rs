@@ -34,6 +34,10 @@ fn help(registry: &Registry) -> String {
         text.push_str(&format!("  {:<12} {}\n", command.id, command.summary));
     }
     text.push_str(&format!(
+        "  {:<12} the live link: a sidecar traced against the design open in SolidCraft, again\n               after each change, one JSON line per trace ({{\"path\": \"<sidecar>\"}})\n",
+        "live"
+    ));
+    text.push_str(&format!(
         "  {:<12} print this help\n\nPlanned (see docs/design.md, Milestones):\n  {PLANNED}\n",
         "help"
     ));
@@ -70,6 +74,77 @@ fn print_json(value: &Value) {
     }
 }
 
+/// A trace from the live link, short: the revision, how long it took, the ledger, the
+/// clipping and each detector's power and spot.
+fn live_summary(update: &Value) -> Value {
+    let trace = &update["trace"];
+    serde_json::json!({
+        "revision": update["revision"],
+        "seconds": update["seconds"],
+        "ledger": trace["ledger"],
+        "clipping": trace["clipping"],
+        "detectors": trace["detectors"].as_array().into_iter().flatten().map(|d| serde_json::json!({
+            "id": d["id"],
+            "power_w": d["power_w"],
+            "direct_centroid_mm": d["direct_centroid_mm"],
+            "direct_rms_radius_mm": d["direct_rms_radius_mm"],
+        })).collect::<Vec<_>>(),
+        "warnings": trace["warnings"],
+    })
+}
+
+/// `optobench live {"path": "<sidecar>", …}`: the sidecar traced against the design open
+/// in SolidCraft, then again after each change, one JSON line per trace (the short form,
+/// or the whole `live-trace` result with `"full": true`); `"changes": n` stops after n
+/// changes. Ends with the connection, or Ctrl-C.
+fn live(argument: Option<&str>) -> ExitCode {
+    let fail = |error: CommandError| {
+        print_json(&error.to_json());
+        ExitCode::FAILURE
+    };
+    let parameters = match read_parameters(argument) {
+        Ok(Value::Object(map)) => map,
+        Ok(_) => {
+            return fail(CommandError::new(
+                ErrorCode::InvalidParameters,
+                "live takes {\"path\": \"<sidecar>\", …}",
+            ));
+        }
+        Err(error) => return fail(error),
+    };
+    let mut parameters = parameters;
+    let full = parameters
+        .remove("full")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    let changes = parameters.remove("changes").and_then(|v| v.as_u64());
+    let show = |update: &Value| {
+        let shown = if full {
+            update.clone()
+        } else {
+            live_summary(update)
+        };
+        println!("{shown}");
+    };
+    let (mut session, first) = match optobench_bridge::live::Live::start(&parameters) {
+        Ok(started) => started,
+        Err(error) => return fail(error),
+    };
+    show(&first);
+    let mut seen = 0;
+    while changes.is_none_or(|n| seen < n) {
+        match session.next(std::time::Duration::from_secs(3600)) {
+            Ok(Some(update)) => {
+                show(&update);
+                seen += 1;
+            }
+            Ok(None) => {}
+            Err(error) => return fail(error),
+        }
+    }
+    ExitCode::SUCCESS
+}
+
 fn main() -> ExitCode {
     let registry = Registry::standard();
     let arguments: Vec<String> = std::env::args().skip(1).collect();
@@ -100,6 +175,10 @@ fn main() -> ExitCode {
         );
         print_json(&error.to_json());
         return ExitCode::FAILURE;
+    }
+
+    if command == "live" {
+        return live(arguments.get(1).map(String::as_str));
     }
 
     let outcome = read_parameters(arguments.get(1).map(String::as_str))

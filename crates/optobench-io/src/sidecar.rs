@@ -681,6 +681,17 @@ fn add_part(
 /// A sidecar, with parts from `library`: elements that name a part, and STEP products
 /// named after a part (tagged automatically unless `[library] automatic = false`).
 pub fn read(text: &str, sidecar: &Path, lookups: &Lookups) -> Result<Read, FileError> {
+    read_with_step(text, sidecar, None, lookups)
+}
+
+/// As [`read`], with the assembly read from `step` instead of the file the sidecar names
+/// (the live link, M12: a fresh export of the design open in SolidCraft).
+pub fn read_with_step(
+    text: &str,
+    sidecar: &Path,
+    step: Option<&Path>,
+    lookups: &Lookups,
+) -> Result<Read, FileError> {
     check_header(text)?;
     let mut root: Table = text
         .parse()
@@ -759,7 +770,10 @@ pub fn read(text: &str, sidecar: &Path, lookups: &Lookups) -> Result<Read, FileE
         Some(v) => medium(v, lookup, "surrounding")?,
     };
 
-    let path = step_path(&root, sidecar)?;
+    let path = match step {
+        Some(step) => step.to_path_buf(),
+        None => step_path(&root, sidecar)?,
+    };
     let step_text =
         std::fs::read_to_string(&path).map_err(|e| error(format!("{}: {e}", path.display())))?;
     let model = step::read(&step_text).map_err(|e| error(format!("{}: {e}", path.display())))?;

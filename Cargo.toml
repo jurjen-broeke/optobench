@@ -4,7 +4,7 @@ members = ["crates/*", "apps/*", "xtask"]
 default-members = ["crates/*", "apps/*"]
 
 [workspace.package]
-version = "0.2.0"
+version = "0.3.0"
 edition = "2024"
 rust-version = "1.85"
 license = "MIT OR Apache-2.0"
@@ -24,8 +24,7 @@ optobench-optimize = { path = "crates/optobench-optimize" }       # L4
 optobench-field = { path = "crates/optobench-field" }             # L4
 optobench-gpu = { path = "crates/optobench-gpu" }                 # L4
 optobench-io = { path = "crates/optobench-io" }                   # L5
-# optobench-bridge (L5, crates/optobench-bridge): no crate depends on it until M12/M13
-# (behind gate G1); its entry comes back here with its first user.
+optobench-bridge = { path = "crates/optobench-bridge" }           # L5, SolidCraft's control channel (M12)
 optobench-commands = { path = "crates/optobench-commands" }       # L5
 
 # Third-party crates. Each must pass `cargo deny check` (deny.toml) and be compatible with

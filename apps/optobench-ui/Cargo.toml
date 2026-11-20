@@ -13,6 +13,7 @@ layer = "apps"
 
 [dependencies]
 optobench-commands.workspace = true
+optobench-bridge.workspace = true
 optobench-analysis.workspace = true
 optobench-io.workspace = true
 optobench-materials.workspace = true

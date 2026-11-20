@@ -12,8 +12,11 @@ publish = false
 layer = "L5"
 
 [dependencies]
-# None yet: the bridge waits for M12 (live read-only) and M13 (write-back), behind gate G1.
-# M12 adds optobench-scene (the scene it re-traces) when the first real code lands.
+# The protocol, and the live session that traces what it reads through the command
+# registry (optobench-commands, the same layer), which knows nothing of SolidCraft.
+optobench-commands.workspace = true
+optobench-io.workspace = true
+serde_json.workspace = true
 
 [lints]
 workspace = true

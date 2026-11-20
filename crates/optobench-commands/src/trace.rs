@@ -192,9 +192,15 @@ pub(crate) fn load_text(
         curves: &curves,
         library: &library,
     };
+    let step = text(parameters, "step")?.map(Path::new);
     let (scene, parts) = match sidecar::kind_of(&source).as_deref() {
-        Some("sidecar") => {
-            sidecar::read(&source, Path::new(path), &lookups).map(|read| (read.scene, read.parts))
+        Some("sidecar") => sidecar::read_with_step(&source, Path::new(path), step, &lookups)
+            .map(|read| (read.scene, read.parts)),
+        _ if step.is_some() => {
+            return Err(CommandError::new(
+                ErrorCode::InvalidParameters,
+                "`step` is for a sidecar: a layout has no STEP file",
+            ));
         }
         _ => scene_file::parse_with(&source, &lookups).map(|scene| (scene, Vec::new())),
     }
@@ -206,12 +212,14 @@ pub(crate) fn load_text(
 /// and optionally `data_directory`
 /// (for imported materials), `svg` (where to write the layout view), `view` (`top` or
 /// `side`), `rays_drawn` (default 200) and `dofs` (`{ "<name>": value }`, mm or degrees,
-/// in place of the file's values).
+/// in place of the file's values), and `step` (a sidecar's assembly read from this STEP
+/// file instead of the one it names: the live link's fresh export).
 pub(crate) fn trace(parameters: &Parameters) -> Result<Value, CommandError> {
     check_keys(
         parameters,
         &[
             "path",
+            "step",
             "data_directory",
             "svg",
             "view",
@@ -410,7 +418,14 @@ pub(crate) fn view(parameters: &Parameters) -> Result<Value, CommandError> {
     use optobench_scene::{ElementKind, SolidRole};
     check_keys(
         parameters,
-        &["path", "data_directory", "dofs", "max_points", "mesh"],
+        &[
+            "path",
+            "data_directory",
+            "dofs",
+            "max_points",
+            "mesh",
+            "step",
+        ],
     )?;
     let path = text(parameters, "path")?.ok_or_else(|| {
         CommandError::new(ErrorCode::InvalidParameters, "missing parameter `path`")

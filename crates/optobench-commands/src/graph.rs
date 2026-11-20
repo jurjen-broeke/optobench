@@ -573,6 +573,7 @@ pub(crate) fn graph(parameters: &Parameters) -> Result<Value, CommandError> {
         "svg",
         "csv",
         "json",
+        "step",
     ];
     keys.extend_from_slice(PSF_KEYS);
     keys.extend_from_slice(SWEEP_KEYS);
