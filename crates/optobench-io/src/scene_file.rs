@@ -49,7 +49,10 @@
 //! at = 100.0
 //! surfaces = [ { radius = 51.5 }, { radius = "inf" } ]   # optional conic per surface
 //! thickness = [3.6]
-//! material = ["fused-silica"]       # names (bundled or imported) or indices
+//! material = ["fused-silica"]       # names (bundled or imported), indices, or model
+//!                                   # glasses { nd = 1.5168, vd = 64.17 }: nd and the Abbe
+//!                                   # number, the index between F and C from a two-term
+//!                                   # Cauchy formula (optobench_materials::ModelGlass)
 //! diameter = 25.4
 //! clear_aperture = 22.9
 //! coating = "uncoated"              # default; or "ideal", { curve = "<name>" },
@@ -446,8 +449,25 @@ pub(crate) fn medium(
         Value::Float(f) => Ok((*f).into()),
         Value::Integer(i) => Ok((*i as f64).into()),
         Value::String(name) => lookup(name).map_err(|e| error(format!("{context}: {e}"))),
+        Value::Table(table) => {
+            check_keys(table, &["nd", "vd"], context)?;
+            let number = |key: &str| {
+                table
+                    .get(key)
+                    .and_then(|v| v.as_float().or_else(|| v.as_integer().map(|i| i as f64)))
+            };
+            number("nd")
+                .zip(number("vd"))
+                .and_then(|(nd, vd)| optobench_materials::ModelGlass::new(nd, vd))
+                .map(Medium::new)
+                .ok_or_else(|| {
+                    error(format!(
+                        "{context}: a model glass is {{ nd = …, vd = … }}, nd above 1 and vd above 0"
+                    ))
+                })
+        }
         _ => Err(error(format!(
-            "{context}: a material is a name or an index"
+            "{context}: a material is a name, an index or {{ nd = …, vd = … }}"
         ))),
     }
 }
@@ -2468,6 +2488,27 @@ mod tests {
         let error =
             read(&format!("{HEADER}{lens}material = [\"unobtainium\"]\n")).expect_err("rejected");
         assert!(error.0.contains("unobtainium"));
+        // A model glass by nd and Vd; a bad one, or one with a key it does not take, refused.
+        let scene = read(&format!(
+            "{HEADER}{lens}material = [{{ nd = 1.5168, vd = 64.17 }}]\n"
+        ))
+        .expect("valid");
+        let ElementKind::Lens { materials, .. } = &scene.elements[0].kind else {
+            panic!("a lens");
+        };
+        let nd = materials[0]
+            .material()
+            .refractive_index(optobench_materials::LINE_D)
+            .expect("in range");
+        assert!((nd - 1.5168).abs() < 1e-12);
+        for bad in [
+            "{ nd = 0.9, vd = 60 }",
+            "{ nd = 1.5 }",
+            "{ nd = 1.5, vd = 60, ne = 1.52 }",
+        ] {
+            let error = read(&format!("{HEADER}{lens}material = [{bad}]\n")).expect_err(bad);
+            assert!(error.0.contains("[[element]] `L1`"), "{bad}: {}", error.0);
+        }
         let error = read("format = \"optobench/1\"\nkind = \"layout\"\nlayout = \"table\"\n")
             .expect_err("rejected");
         assert!(error.0.contains("[table]"));

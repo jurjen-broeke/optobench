@@ -294,6 +294,63 @@ impl Material for Cauchy {
     }
 }
 
+/// The d line, helium (µm): where a glass's nd is given (ISO 7944, Optics and optical
+/// instruments: reference wavelengths).
+pub const LINE_D: f64 = 0.587_561_8;
+/// The F line, hydrogen β (µm).
+pub const LINE_F: f64 = 0.486_132_7;
+/// The C line, hydrogen α (µm).
+pub const LINE_C: f64 = 0.656_272_5;
+
+/// A glass known only by its catalogue numbers: nd, its index at the d line, and the Abbe
+/// number Vd = (nd − 1)/(nF − nC). Between them the index follows the two-term Cauchy
+/// formula n = A + B/λ² through nd with nF − nC = (nd − 1)/Vd, so
+/// B = (nd − 1) / (Vd (λF⁻² − λC⁻²)) and A = nd − B/λd². It is a model: right at d and in
+/// the spread from F to C, close across the visible, and only indicative beyond it (its
+/// range, 0.35–2.5 µm, is wide so a design can be traced at any laser line).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ModelGlass {
+    /// Index at the d line.
+    pub nd: f64,
+    /// Abbe number Vd.
+    pub vd: f64,
+}
+
+impl ModelGlass {
+    /// The model's range (µm).
+    pub const RANGE: (f64, f64) = (0.35, 2.5);
+
+    /// A glass from nd and Vd; `None` unless nd > 1 and Vd > 0 (both finite).
+    pub fn new(nd: f64, vd: f64) -> Option<Self> {
+        (nd.is_finite() && vd.is_finite() && nd > 1.0 && vd > 0.0).then_some(Self { nd, vd })
+    }
+
+    /// The Cauchy coefficients (A, B), B in µm².
+    pub fn coefficients(&self) -> (f64, f64) {
+        let b = (self.nd - 1.0) / (self.vd * (LINE_F.powi(-2) - LINE_C.powi(-2)));
+        (self.nd - b / (LINE_D * LINE_D), b)
+    }
+}
+
+impl Material for ModelGlass {
+    fn refractive_index(&self, wavelength: f64) -> Result<f64, MaterialError> {
+        check_range(wavelength, Self::RANGE)?;
+        let (a, b) = self.coefficients();
+        Ok(a + b / (wavelength * wavelength))
+    }
+}
+
+/// A material's nd and Abbe number Vd = (nd − 1)/(nF − nC), from its own model at the
+/// d, F and C lines.
+pub fn abbe(material: &dyn Material) -> Result<(f64, f64), MaterialError> {
+    let nd = material.refractive_index(LINE_D)?;
+    let spread = material.refractive_index(LINE_F)? - material.refractive_index(LINE_C)?;
+    if spread.abs() < 1e-12 {
+        return Err(MaterialError::Undefined { wavelength: LINE_D });
+    }
+    Ok((nd, (nd - 1.0) / spread))
+}
+
 /// Measured n and k at listed wavelengths, linearly interpolated in wavelength.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Tabulated {
@@ -434,6 +491,25 @@ mod tests {
 
     const EPS: f64 = 1e-14;
     const VISIBLE: (f64, f64) = (0.4, 0.8);
+
+    #[test]
+    fn a_model_glass_gives_back_its_catalogue_numbers() {
+        // A crown of nd 1.5168, Vd 64.17 and a dense flint of nd 1.6727, Vd 32.25
+        // (typical catalogue values): the model passes through nd and spreads F to C by
+        // (nd − 1)/Vd, by its construction.
+        for (nd, vd) in [(1.5168, 64.17), (1.6727, 32.25)] {
+            let glass = ModelGlass::new(nd, vd).expect("a glass");
+            let n = |l: f64| glass.refractive_index(l).expect("in range");
+            assert!((n(LINE_D) - nd).abs() < 1e-12);
+            assert!((n(LINE_F) - n(LINE_C) - (nd - 1.0) / vd).abs() < 1e-12);
+            let (back_nd, back_vd) = abbe(&glass).expect("dispersive");
+            assert!((back_nd - nd).abs() < 1e-12 && (back_vd - vd).abs() < 1e-9);
+            // Normal dispersion: the index falls with wavelength.
+            assert!(n(0.4) > n(0.7) && n(0.7) > n(1.064));
+        }
+        assert!(ModelGlass::new(1.0, 50.0).is_none() && ModelGlass::new(1.5, 0.0).is_none());
+        assert!(abbe(&Constant { index: 1.5 }).is_err());
+    }
 
     #[test]
     fn sellmeier_term_without_resonance_is_a_constant_shift() {

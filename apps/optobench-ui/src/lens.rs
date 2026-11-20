@@ -249,6 +249,134 @@ impl Singlet {
     }
 }
 
+/// A cemented achromatic doublet (M17d): a crown glass first, equi-convex, then a flint,
+/// its three radii (mm) and two centre thicknesses.
+///
+/// Designed from its focal length f and the two glasses' nd and Abbe numbers Vd (each
+/// as [`optobench_materials::ModelGlass`]): first as thin lenses (E. Hecht, Optics, 5th
+/// ed., ch. 6, achromatic doublets), the powers φ₁ = φ V₁/(V₁ − V₂) and
+/// φ₂ = −φ V₂/(V₁ − V₂) so that φ₁ + φ₂ = φ and φ₁/V₁ + φ₂/V₂ = 0; the crown
+/// equi-convex, c₁ = −c₂ = φ₁/(2 (n₁ − 1)), the flint on it, c₃ = c₂ − φ₂/(n₂ − 1).
+/// Then with the thicknesses: c₁ (= −c₂) and c₃ by Newton's method on the paraxial
+/// trace until the power at the d line is φ and the powers at F and C are equal.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Achromat {
+    /// Radii (mm), light along +z.
+    pub radii: [f64; 3],
+    /// Centre thicknesses of the crown and the flint (mm).
+    pub thickness: [f64; 2],
+}
+
+/// A glass's index at a wavelength (µm) from its nd and Vd.
+fn model_index(glass: (f64, f64), wavelength: f64) -> Option<f64> {
+    use optobench_materials::Material;
+    optobench_materials::ModelGlass::new(glass.0, glass.1)?
+        .refractive_index(wavelength)
+        .ok()
+}
+
+/// The paraxial power (1/mm) of curvatures `c` between air, glass 1, glass 2 and air
+/// at their indices `n`, the glasses `t` thick: a ray at height 1 parallel to the axis,
+/// refracted as n′u′ = nu − y c (n′ − n) and carried on as y += t u′; the power is minus
+/// its last slope in air.
+fn power(c: [f64; 3], t: [f64; 2], n: [f64; 2]) -> f64 {
+    let media = [1.0, n[0], n[1], 1.0];
+    let (mut y, mut nu) = (1.0, 0.0);
+    for k in 0..3 {
+        nu -= y * c[k] * (media[k + 1] - media[k]);
+        if k < 2 {
+            y += t[k] * nu / media[k + 1];
+        }
+    }
+    -nu
+}
+
+impl Achromat {
+    /// Thin-lens powers (φ₁, φ₂) of the crown and the flint for a doublet of focal
+    /// length `f` from Abbe numbers `v1`, `v2`.
+    pub fn thin_powers(f: f64, v1: f64, v2: f64) -> (f64, f64) {
+        let phi = 1.0 / f;
+        (phi * v1 / (v1 - v2), -phi * v2 / (v1 - v2))
+    }
+
+    /// The doublet of focal length `f` (mm, positive) from a crown and a flint, each
+    /// (nd, Vd), `t` thick; `None` when the glasses' Abbe numbers are too close (within
+    /// 5) or the design does not settle.
+    pub fn design(f: f64, crown: (f64, f64), flint: (f64, f64), t: [f64; 2]) -> Option<Self> {
+        use optobench_materials::{LINE_C, LINE_D, LINE_F};
+        if !(f.is_finite() && f > 0.0 && t[0] > 0.0 && t[1] > 0.0)
+            || (crown.1 - flint.1).abs() < 5.0
+        {
+            return None;
+        }
+        let at = |l: f64| Some([model_index(crown, l)?, model_index(flint, l)?]);
+        let (nd, nf, nc) = (at(LINE_D)?, at(LINE_F)?, at(LINE_C)?);
+        let (p1, p2) = Self::thin_powers(f, crown.1, flint.1);
+        let c1 = p1 / (2.0 * (crown.0 - 1.0));
+        let mut x = [c1, -c1 - p2 / (flint.0 - 1.0)];
+        let curvatures = |x: [f64; 2]| [x[0], -x[0], x[1]];
+        let residual = |x: [f64; 2]| {
+            let c = curvatures(x);
+            [
+                (power(c, t, nd) - 1.0 / f) * f,
+                (power(c, t, nf) - power(c, t, nc)) * f,
+            ]
+        };
+        for _ in 0..50 {
+            let r = residual(x);
+            if r[0].abs() < 1e-13 && r[1].abs() < 1e-13 {
+                let c = curvatures(x);
+                return Some(Self {
+                    radii: c.map(|c| if c == 0.0 { f64::INFINITY } else { 1.0 / c }),
+                    thickness: t,
+                });
+            }
+            // The Jacobian by central differences (the residuals are smooth, and nearly
+            // linear in the curvatures).
+            let h = 1e-7 * (x[0].abs() + x[1].abs()).max(1e-6);
+            let column = |k: usize| {
+                let (mut up, mut down) = (x, x);
+                up[k] += h;
+                down[k] -= h;
+                let (a, b) = (residual(up), residual(down));
+                [(a[0] - b[0]) / (2.0 * h), (a[1] - b[1]) / (2.0 * h)]
+            };
+            let (j0, j1) = (column(0), column(1));
+            let det = j0[0] * j1[1] - j1[0] * j0[1];
+            if det.abs() < 1e-30 {
+                return None;
+            }
+            x[0] -= (r[0] * j1[1] - j1[0] * r[1]) / det;
+            x[1] -= (j0[0] * r[1] - r[0] * j0[1]) / det;
+        }
+        None
+    }
+
+    /// Its paraxial focal length (mm) at a wavelength (µm), with these glasses.
+    #[cfg(test)]
+    pub fn focal_length(
+        &self,
+        crown: (f64, f64),
+        flint: (f64, f64),
+        wavelength: f64,
+    ) -> Option<f64> {
+        let n = [
+            model_index(crown, wavelength)?,
+            model_index(flint, wavelength)?,
+        ];
+        let c = self.radii.map(curvature);
+        Some(1.0 / power(c, self.thickness, n))
+    }
+
+    /// The largest diameter (mm, to 0.1 mm) at which both glasses keep an edge of at
+    /// least [`MIN_EDGE`] and every surface reaches.
+    pub fn max_diameter(&self) -> f64 {
+        let [r1, r2, r3] = self.radii;
+        let glass = |r1, r2, t| Singlet { r1, r2, t, n: 1.5 }.max_diameter();
+        glass(r1, r2, self.thickness[0]).min(glass(r2, r3, self.thickness[1]))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -259,6 +387,45 @@ mod tests {
         t: 4.0,
         n: 1.5168,
     };
+
+    #[test]
+    fn an_achromat_is_designed_from_its_focal_length() {
+        use optobench_materials::{LINE_C, LINE_D, LINE_F};
+        // A crown (nd 1.5168, Vd 64.17) and a dense flint (nd 1.6727, Vd 32.25), typical
+        // catalogue values, for f 100 mm.
+        let (crown, flint) = ((1.5168, 64.17), (1.6727, 32.25));
+        // Thin lenses (Hecht, ch. 6): the powers add up to 1/f and their chromatic
+        // changes, φ/V, cancel.
+        let (p1, p2) = Achromat::thin_powers(100.0, crown.1, flint.1);
+        assert!((p1 + p2 - 0.01).abs() < 1e-15);
+        assert!((p1 / crown.1 + p2 / flint.1).abs() < 1e-15);
+        assert!(p1 > 0.0 && p2 < 0.0);
+        // Thick: f at d is 100 mm and the same at F and C, from the paraxial trace.
+        let doublet = Achromat::design(100.0, crown, flint, [6.0, 2.5]).expect("a design");
+        let f = |l| doublet.focal_length(crown, flint, l).expect("in range");
+        assert!((f(LINE_D) - 100.0).abs() < 1e-9, "{}", f(LINE_D));
+        assert!((f(LINE_F) - f(LINE_C)).abs() < 1e-9);
+        // A singlet of the crown alone with the same f spreads F to C by f/V: the doublet
+        // has none of that left; its secondary spectrum (d against F and C) stays small.
+        assert!(
+            (f(LINE_D) - f(LINE_F)).abs() < 0.1,
+            "{}",
+            f(LINE_D) - f(LINE_F)
+        );
+        // An equi-convex crown, cemented to the flint, which curves less after it.
+        let [r1, r2, r3] = doublet.radii;
+        assert!((r1 + r2).abs() < 1e-9 && r1 > 0.0 && r3 < r2);
+        // The thin-lens radius is where it starts; the thicknesses move it a little.
+        let thin_r1 = 2.0 * (crown.0 - 1.0) / p1;
+        assert!(
+            (r1 - thin_r1).abs() / thin_r1 < 0.05,
+            "{r1} against {thin_r1}"
+        );
+        // One inch fits with the edges kept.
+        assert!(doublet.max_diameter() >= 25.4, "{}", doublet.max_diameter());
+        // Glasses of nearly one Abbe number make no achromat.
+        assert!(Achromat::design(100.0, crown, (1.6, 62.0), [6.0, 2.5]).is_none());
+    }
 
     #[test]
     fn each_shape_has_the_focal_length_asked_for_either_way_round() {

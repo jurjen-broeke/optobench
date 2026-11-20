@@ -3519,4 +3519,66 @@ mod exit {
             "what it gives"
         );
     }
+
+    #[test]
+    fn a_singlet_becomes_an_achromat_of_the_same_focal_length() {
+        // A biconvex singlet (R ±50, n 1.5, 4 mm: f 50.67 mm at any wavelength) made an
+        // achromat from the type list: a crown and a flint by nd and Vd, f 50.67 mm at the
+        // d line; the engine's own paraxial trace (`view`) finds that f at d and one f at
+        // the F and C lines.
+        let dir = scratch("achromat");
+        let path = dir.join("achromat.optobench");
+        let file = |wavelength: f64| {
+            format!(
+                "format = \"optobench/1\"\nkind = \"layout\"\nlayout = \"table\"\n\n[table]\npitch = 25.0\n\n\
+                 [[source]]\nid = \"S1\"\nkind = \"collimated\"\nwavelength_um = {wavelength}\npower_w = 0.001\ndiameter = 2.0\nhole = [0, 0]\nheight = 75.0\naxis = [1, 0, 0]\n\n\
+                 [[element]]\nid = \"L1\"\nkind = \"lens\"\nhole = [2, 0]\nheight = 75.0\naxis = [1, 0, 0]\n\
+                 surfaces = [{{ radius = 50.0 }}, {{ radius = -50.0 }}]\nthickness = [4.0]\nmaterial = [1.5]\ndiameter = 25.4\nclear_aperture = 22.9\n"
+            )
+        };
+        std::fs::write(&path, file(optobench_materials::LINE_D)).expect("written");
+        let mut h = window(Some(path.clone()), &dir);
+        settle(&mut h);
+        click(&mut h, "Workspace");
+        click(&mut h, "Layout");
+        click(&mut h, "L1  ·  lens");
+        h.query_all_by_role(egui::accesskit::Role::ComboBox)
+            .next()
+            .expect("the type list")
+            .click();
+        h.step();
+        h.step();
+        click(&mut h, "achromat (cemented doublet)");
+        assert!(errors(&h).is_empty(), "{:?}", errors(&h));
+        let text = std::fs::read_to_string(&path).expect("written");
+        assert!(
+            text.contains("material = [{ nd = 1.5168, vd = 64.17 }, { nd = 1.6727, vd = 32.25 }]")
+                && text.contains("thickness = [6, 2.5]"),
+            "{text}"
+        );
+        assert!(h.query_by_label("Achromat").is_some(), "its own editor");
+        let f_at = |wavelength: f64| {
+            let changed = text.replace(
+                &format!("wavelength_um = {}", optobench_materials::LINE_D),
+                &format!("wavelength_um = {wavelength}"),
+            );
+            std::fs::write(&path, changed).expect("written");
+            let view = optobench_commands::Registry::standard()
+                .run("view", &json!({ "path": path.to_string_lossy(), "data_directory": dir.to_string_lossy() }))
+                .expect("viewed");
+            view["items"]
+                .as_array()
+                .and_then(|items| items.iter().find(|i| i["id"] == "L1"))
+                .and_then(|i| i["lens"]["focal_length_mm"].as_f64())
+                .expect("its focal length")
+        };
+        let singlet = 1.0 / (0.5 * (2.0 / 50.0 - 0.5 * 4.0 / (1.5 * 2500.0)));
+        let d = f_at(optobench_materials::LINE_D);
+        assert!((d - singlet).abs() < 1e-4, "{d} against {singlet}");
+        let (blue, red) = (
+            f_at(optobench_materials::LINE_F),
+            f_at(optobench_materials::LINE_C),
+        );
+        assert!((blue - red).abs() < 1e-4, "F {blue}, C {red}");
+    }
 }

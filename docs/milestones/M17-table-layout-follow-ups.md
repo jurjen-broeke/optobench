@@ -56,14 +56,27 @@ a mount's name or a doublet's radii.
 
 ## M17d An achromatic doublet from its focal length
 
-- [ ] A model glass, `material = { nd = …, vd = … }`: its index at the d line and Abbe
-      number, the index between them from a two-term Cauchy formula (n = A + B/λ²)
-      through nd with nF − nC = (nd − 1)/Vd
-- [ ] The lens editor designs a cemented achromat from its focal length and two glasses
-      (a crown and a flint, each a name or nd and Vd): the thin-lens powers
-      φ₁ = φ V₁/(V₁ − V₂), φ₂ = −φ V₂/(V₁ − V₂), an equi-convex crown, then the radii
-      corrected for the thicknesses so the paraxial focal length is f at the d line and
-      equal at the F and C lines
-- [ ] Checks: the model glass gives back nd and nF − nC; the thin-lens powers add up to φ
-      and cancel their chromatic change; the thick doublet's f at d is the one asked for
-      and its f at F and C agree
+- [x] A model glass, `material = { nd = …, vd = … }` (`optobench_materials::ModelGlass`):
+      its index at the d line and Abbe number, the index between them from a two-term
+      Cauchy formula (n = A + B/λ²) through nd with nF − nC = (nd − 1)/Vd, from 0.35 to
+      2.5 µm (only indicative away from the visible); the d, F and C lines as ISO 7944
+      gives them; `abbe` gives any material's nd and Vd from its own model, and `view`
+      gives them for each glass of a lens
+- [x] The lens editor's types include "achromat (cemented doublet)": from the lens's
+      focal length, a crown (nd 1.5168, Vd 64.17) and a dense flint (nd 1.6727, Vd
+      32.25), typical catalogue values, 6 and 2.5 mm thick. `lens::Achromat`: the
+      thin-lens powers φ₁ = φ V₁/(V₁ − V₂), φ₂ = −φ V₂/(V₁ − V₂) (Hecht, ch. 6), an
+      equi-convex crown, then its curvature and the flint's last by Newton's method on
+      the paraxial trace until the power at d is 1/f and the powers at F and C are equal;
+      the diameter kept where both glasses keep a 0.5 mm edge
+- [x] A cemented doublet gets an Achromat section in Properties: f and each glass's nd
+      and Vd (a named glass's from the scene); a change designs it again with its
+      thicknesses, a glass typed becomes a model glass, one left keeps its name. The
+      prescription's glass fields take `{ "nd": …, "vd": … }` too
+- [x] Checks: the model gives back nd, nF − nC and Vd, and falls with wavelength; a
+      scene reads `{ nd, vd }` and refuses a bad one; the thin powers add up to φ and
+      cancel φ/V; the thick doublet's f at d is 100 mm and equal at F and C to 1e-9, its
+      first radius within 5 % of the thin one; in the window
+      (`a_singlet_becomes_an_achromat_of_the_same_focal_length`), the f 50.68 mm singlet
+      made an achromat keeps f 50.68 mm at d in the engine's own `view`, and the same f
+      at F and C to 1e-4

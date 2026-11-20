@@ -575,10 +575,21 @@ fn lens_json(scene: &optobench_scene::Scene, kind: &optobench_scene::ElementKind
                 .map_or(Value::Null, |n| json!((n * 1e6).round() / 1e6))
         })
         .collect();
+    // Each glass's catalogue numbers, nd and Vd, where its model reaches the d, F and C
+    // lines (the lens editor designs achromats from them).
+    let abbe: Vec<Value> = materials
+        .iter()
+        .map(|m| {
+            optobench_materials::abbe(m.material()).map_or(Value::Null, |(nd, vd)| {
+                json!([(nd * 1e6).round() / 1e6, (vd * 1e4).round() / 1e4])
+            })
+        })
+        .collect();
     let radii: Vec<f64> = surfaces.iter().map(|s| s.radius).collect();
     let mut out = json!({
         "wavelength_um": wavelength,
         "indices": indices,
+        "abbe": abbe,
         "shape": lens_shape(&radii),
     });
     if let Some(c) = optobench_scene::lens_cardinal_points(kind, &scene.surrounding, wavelength) {

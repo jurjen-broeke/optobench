@@ -1167,9 +1167,13 @@ fn lens_editor(
     let (shape, flipped) = now.map_or((Shape::Biconvex, false), |l| l.shape());
     let glass = material.first().cloned().unwrap_or(json!(1.5));
     let mut chosen: Option<Option<Shape>> = None;
+    let mut achromat_chosen = false;
+    let doublet = surfaces.len() == 3 && material.len() == 2;
     ui.horizontal(|ui| {
         ui.label(RichText::new("type").color(DARK.text_dim));
-        let shown = if custom {
+        let shown = if doublet {
+            "cemented doublet"
+        } else if custom {
             "custom (radius by radius)"
         } else {
             shape.name()
@@ -1186,7 +1190,16 @@ fn lens_editor(
                     }
                 }
                 if ui
-                    .selectable_label(custom, "custom (radius by radius)")
+                    .selectable_label(false, "achromat (cemented doublet)")
+                    .on_hover_text(
+                        "A crown and a flint glass cemented: one focal length for red and blue",
+                    )
+                    .clicked()
+                {
+                    achromat_chosen = true;
+                }
+                if ui
+                    .selectable_label(custom && !doublet, "custom (radius by radius)")
                     .clicked()
                 {
                     chosen = Some(None);
@@ -1253,6 +1266,41 @@ fn lens_editor(
         None => {}
     }
 
+    // An achromat: from the lens's focal length (100 mm without one) and two glasses.
+    let current_f = shown("focal_length_mm")
+        .filter(|f| f.is_finite() && *f > 0.0)
+        .or_else(|| {
+            now.map(|l| l.focal_length().abs())
+                .filter(|f| f.is_finite())
+        })
+        .unwrap_or(100.0);
+    if achromat_chosen {
+        drafts.texts.remove(&custom_path);
+        operations.extend(write_achromat(
+            drafts,
+            base,
+            &set,
+            current_f,
+            [
+                (
+                    DEFAULT_CROWN,
+                    json!({ "nd": DEFAULT_CROWN.0, "vd": DEFAULT_CROWN.1 }),
+                ),
+                (
+                    DEFAULT_FLINT,
+                    json!({ "nd": DEFAULT_FLINT.0, "vd": DEFAULT_FLINT.1 }),
+                ),
+            ],
+            [6.0, 2.5],
+            diameter,
+            clear,
+        ));
+    }
+    if doublet && !achromat_chosen {
+        operations.extend(achromat_editor(
+            ui, drafts, base, &set, &thickness, &material, lens, current_f, diameter, clear,
+        ));
+    }
     if custom {
         operations.extend(prescription_editor(
             ui, drafts, base, &set, &surfaces, &thickness, &material,
@@ -1429,6 +1477,175 @@ fn lens_editor(
     operations
 }
 
+/// The glasses an achromat starts from: a crown (nd 1.5168, Vd 64.17) and a dense flint
+/// (nd 1.6727, Vd 32.25), typical catalogue values.
+const DEFAULT_CROWN: (f64, f64) = (1.5168, 64.17);
+const DEFAULT_FLINT: (f64, f64) = (1.6727, 32.25);
+
+/// Writes an achromat of focal length `f` from two glasses, each (nd, Vd) with what to
+/// write as its material, and two thicknesses; its diameter kept where both glasses keep
+/// an edge. A note when no achromat comes of it.
+#[allow(clippy::too_many_arguments)]
+fn write_achromat(
+    drafts: &mut Drafts,
+    base: &str,
+    set: &dyn Fn(&str, Value) -> Value,
+    f: f64,
+    glasses: [((f64, f64), Value); 2],
+    t: [f64; 2],
+    diameter: f64,
+    clear: f64,
+) -> Vec<Value> {
+    let [(crown, crown_material), (flint, flint_material)] = glasses;
+    let Some(design) = crate::lens::Achromat::design(f, crown, flint, t) else {
+        drafts.texts.insert(
+            format!("{base}/note"),
+            format!(
+                "No achromat of f {f:.1} mm from these glasses: their Abbe numbers must differ (crown first, the larger)"
+            ),
+        );
+        return Vec::new();
+    };
+    let mut operations = vec![
+        set(
+            "surfaces",
+            json!(design.radii.map(|r| json!({ "radius": radius_value(r) }))),
+        ),
+        set("thickness", json!(t.map(tidy))),
+        set("material", json!([crown_material, flint_material])),
+    ];
+    let largest = design.max_diameter();
+    if diameter > largest && largest > 0.0 {
+        operations.push(set("diameter", tidy(largest)));
+        operations.push(set(
+            "clear_aperture",
+            tidy((clear.min(0.9 * largest) * 10.0).floor() / 10.0),
+        ));
+        drafts.texts.insert(
+            format!("{base}/note"),
+            format!(
+                "Ø kept to {largest} mm: beyond it an edge would be thinner than {} mm",
+                crate::lens::MIN_EDGE
+            ),
+        );
+    }
+    operations
+}
+
+/// An achromat's own editor, for a cemented doublet: its focal length and its two
+/// glasses by nd and Vd (a named glass's from the scene); a change designs it again,
+/// keeping its thicknesses. A glass whose numbers are typed becomes a model glass
+/// `{ nd, vd }`; one left as it was keeps its name.
+#[allow(clippy::too_many_arguments)]
+fn achromat_editor(
+    ui: &mut Ui,
+    drafts: &mut Drafts,
+    base: &str,
+    set: &dyn Fn(&str, Value) -> Value,
+    thickness: &[Value],
+    material: &[Value],
+    lens: Option<&Value>,
+    f: f64,
+    diameter: f64,
+    clear: f64,
+) -> Vec<Value> {
+    // Each glass's numbers: its own { nd, vd }, else what the scene found.
+    let numbers = |k: usize| -> Option<(f64, f64)> {
+        let m = &material[k];
+        if let (Some(nd), Some(vd)) = (m["nd"].as_f64(), m["vd"].as_f64()) {
+            return Some((nd, vd));
+        }
+        let abbe = &lens?["abbe"][k];
+        Some((abbe[0].as_f64()?, abbe[1].as_f64()?))
+    };
+    let t = [
+        thickness.first().and_then(Value::as_f64).unwrap_or(6.0),
+        thickness.get(1).and_then(Value::as_f64).unwrap_or(2.5),
+    ];
+    let mut glasses = [
+        numbers(0).map(|g| (g, material[0].clone())),
+        numbers(1).map(|g| (g, material[1].clone())),
+    ];
+    let mut target_f = f;
+    let mut changed = false;
+    ui.label(RichText::new("Achromat").strong()).on_hover_text(
+        "Designed from its focal length and two glasses: an equi-convex crown cemented to a flint, one focal length at the F and C lines",
+    );
+    egui::Grid::new(format!("achromat-{base}"))
+        .num_columns(5)
+        .spacing([8.0, 4.0])
+        .show(ui, |ui| {
+            ui.label(RichText::new("f").color(DARK.text_dim))
+                .on_hover_text(
+                    "focal length at the d line (587.6 nm), from the rear principal plane",
+                );
+            if let Some(v) = number(
+                ui,
+                drafts,
+                &format!("{base}/achromat/f"),
+                (f * 1e4).round() / 1e4,
+            ) {
+                if v > 0.0 {
+                    target_f = v;
+                    changed = true;
+                }
+            }
+            ui.label(RichText::new("mm").color(DARK.text_dim).size(11.0));
+            ui.label("");
+            ui.label("");
+            ui.end_row();
+            for (k, name) in ["crown", "flint"].into_iter().enumerate() {
+                ui.label(RichText::new(name).color(DARK.text_dim))
+                    .on_hover_text(if k == 0 {
+                        "the first glass: low dispersion, a high Abbe number"
+                    } else {
+                        "the second glass: high dispersion, a low Abbe number"
+                    });
+                match glasses[k].clone() {
+                    Some(((nd, vd), _)) => {
+                        ui.label(RichText::new("nd").color(DARK.text_dim).size(11.0));
+                        let typed_nd = number(ui, drafts, &format!("{base}/achromat/{k}/nd"), nd);
+                        ui.label(RichText::new("Vd").color(DARK.text_dim).size(11.0));
+                        let typed_vd = number(ui, drafts, &format!("{base}/achromat/{k}/vd"), vd);
+                        if typed_nd.is_some() || typed_vd.is_some() {
+                            let g = (typed_nd.unwrap_or(nd), typed_vd.unwrap_or(vd));
+                            glasses[k] = Some((g, json!({ "nd": tidy(g.0), "vd": tidy(g.1) })));
+                            changed = true;
+                        }
+                    }
+                    None => {
+                        ui.label(
+                            RichText::new("its dispersion is not known: type nd and Vd")
+                                .color(DARK.warning)
+                                .size(11.0),
+                        );
+                        if ui.small_button("Use a typical one").clicked() {
+                            let g = if k == 0 { DEFAULT_CROWN } else { DEFAULT_FLINT };
+                            glasses[k] = Some((g, json!({ "nd": g.0, "vd": g.1 })));
+                            changed = true;
+                        }
+                        ui.label("");
+                        ui.label("");
+                    }
+                }
+                ui.end_row();
+            }
+        });
+    match (changed, glasses) {
+        (true, [Some(crown), Some(flint)]) => write_achromat(
+            drafts,
+            base,
+            set,
+            target_f,
+            [crown, flint],
+            t,
+            diameter,
+            clear,
+        ),
+        _ => Vec::new(),
+    }
+}
+
 /// A lens's prescription radius by radius (R1…Rn, flat or not), with each glass's centre
 /// thickness and material between them; a cemented glass added or taken away.
 fn prescription_editor(
@@ -1484,10 +1701,16 @@ fn prescription_editor(
                         other => other.to_string(),
                     };
                     if let Some(typed) = text(ui, drafts, &format!("{base}/glass/{k}"), &shown, 90.0) {
-                        let value = typed
-                            .trim()
-                            .parse::<f64>()
-                            .map_or_else(|_| json!(typed.trim()), |n| json!(n));
+                        let typed = typed.trim();
+                        let value = typed.parse::<f64>().map_or_else(
+                            |_| {
+                                serde_json::from_str::<Value>(typed)
+                                    .ok()
+                                    .filter(Value::is_object)
+                                    .unwrap_or_else(|| json!(typed))
+                            },
+                            |n| json!(n),
+                        );
                         let mut new = material.to_vec();
                         new.resize(surfaces.len() - 1, json!(1.5));
                         new[k] = value;
