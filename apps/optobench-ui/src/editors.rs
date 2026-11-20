@@ -33,6 +33,12 @@ impl Drafts {
         self.numbers.clear();
         self.texts.clear();
     }
+
+    /// Sets a text being typed or chosen, as a test would by hand.
+    #[cfg(test)]
+    pub fn set_text(&mut self, path: &str, text: &str) {
+        self.texts.insert(path.to_owned(), text.to_owned());
+    }
 }
 
 /// The choices for keys that take one of a few words.
@@ -209,6 +215,9 @@ pub struct Context {
     pub pitch: Option<f64>,
     /// The groups items are in, and those the file declares.
     pub groups: Vec<String>,
+    /// Where each item and source with an id stands (mm, scene frame), for aiming
+    /// mirrors.
+    pub places: Vec<(String, V3)>,
 }
 
 impl Context {
@@ -228,8 +237,113 @@ impl Context {
                 .then(|| design["table"]["pitch"].as_f64())
                 .flatten(),
             groups: groups_of(design),
+            places: Vec::new(),
         }
     }
+
+    /// As [`Context::of`], with where the scene placed each item and source.
+    pub fn with_places(mut self, scene: &crate::document::Scene) -> Self {
+        let mut places: Vec<(String, V3)> = scene
+            .items
+            .iter()
+            .filter(|i| !i.id.is_empty())
+            .filter_map(|i| Some((i.id.clone(), i.origin?)))
+            .chain(scene.sources.iter().map(|s| (s.id.clone(), s.origin)))
+            .collect();
+        places.dedup_by(|a, b| a.0 == b.0);
+        self.places = places;
+        self
+    }
+}
+
+/// A mirror's axis (its normal, towards the light) that reflects light coming from
+/// `from` at `at` towards `to`: the outgoing direction minus the incoming one (the law of
+/// reflection: the normal halves the turn), scaled so its largest number is 1 and rounded
+/// to 1e-9. `None` when the light would go straight on (no mirror does that), or a place
+/// is the mirror's own.
+pub fn aim(from: V3, at: V3, to: V3) -> Option<V3> {
+    let unit = |a: V3, b: V3| {
+        let d = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
+        let length = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
+        (length > 1e-9).then(|| d.map(|x| x / length))
+    };
+    let incoming = unit(from, at)?;
+    let outgoing = unit(at, to)?;
+    let normal: V3 = std::array::from_fn(|k| outgoing[k] - incoming[k]);
+    let largest = normal.iter().fold(0.0_f64, |m, x| m.max(x.abs()));
+    if largest < 1e-6 {
+        return None;
+    }
+    Some(normal.map(|x| ((x / largest) * 1e9).round() / 1e9 + 0.0))
+}
+
+/// Aim, for a mirror with an axis: where the light comes from and where it should go,
+/// chosen among the other items; returns the `set` of its axis.
+fn aim_editor(
+    ui: &mut Ui,
+    drafts: &mut Drafts,
+    base: &str,
+    target: &Value,
+    entry: &Value,
+    origin: V3,
+    context: &Context,
+) -> Option<Value> {
+    let own = entry["id"].as_str().unwrap_or_default();
+    let others: Vec<&(String, V3)> = context.places.iter().filter(|(id, _)| id != own).collect();
+    if others.is_empty() {
+        return None;
+    }
+    let mut op = None;
+    ui.horizontal_wrapped(|ui| {
+        ui.label(RichText::new("aim").color(DARK.text_dim))
+            .on_hover_text("Set its axis from where the light comes from and where it should go");
+        for (label, key) in [("light from", "from"), ("to", "to")] {
+            ui.label(RichText::new(label).color(DARK.text_dim).size(11.0));
+            let path = format!("{base}/aim/{key}");
+            let current = drafts.texts.get(&path).cloned().unwrap_or_default();
+            egui::ComboBox::from_id_salt(&path)
+                .selected_text(if current.is_empty() { "…" } else { &current })
+                .width(70.0)
+                .show_ui(ui, |ui| {
+                    for (id, _) in &others {
+                        if ui.selectable_label(*id == current, id.as_str()).clicked() {
+                            drafts.texts.insert(path.clone(), id.clone());
+                        }
+                    }
+                });
+        }
+        let place = |key: &str| {
+            let id = drafts.texts.get(&format!("{base}/aim/{key}"))?;
+            others.iter().find(|(o, _)| o == id).map(|(_, p)| *p)
+        };
+        let (from, to) = (place("from"), place("to"));
+        if ui
+            .add_enabled(from.is_some() && to.is_some(), egui::Button::new("Aim"))
+            .on_hover_text("Turn it so the light from the first goes to the second")
+            .clicked()
+        {
+            match aim(from.unwrap_or_default(), origin, to.unwrap_or_default()) {
+                Some(axis) => {
+                    let mut set = target.clone();
+                    set["op"] = json!("set");
+                    set["key"] = json!("axis");
+                    set["value"] = json!(axis.map(tidy));
+                    op = Some(set);
+                    drafts.texts.remove(&format!("{base}/aim/note"));
+                }
+                None => {
+                    drafts.texts.insert(
+                        format!("{base}/aim/note"),
+                        "No mirror lets light go straight on, or aims at its own place".into(),
+                    );
+                }
+            }
+        }
+    });
+    if let Some(note) = drafts.texts.get(&format!("{base}/aim/note")) {
+        ui.label(RichText::new(note).color(DARK.warning).size(11.0));
+    }
+    op
 }
 
 /// Every group of a design: those items are in and those `[[group]]` declares, sorted.
@@ -460,6 +574,11 @@ pub fn entry(
         operations.extend(lens_editor(ui, drafts, &base, &target, entry, lens));
     }
     operations.extend(position(ui, drafts, &base, &target, entry, origin, context));
+    if table == "element" && entry["kind"] == "mirror" && entry["axis"].is_array() {
+        if let Some(at) = origin {
+            operations.extend(aim_editor(ui, drafts, &base, &target, entry, at, context));
+        }
+    }
     if ["element", "source", "detector", "proxy"].contains(&table) && entry["id"].is_string() {
         operations.extend(group_field(ui, drafts, &base, &target, entry, context));
     }
@@ -1629,6 +1748,40 @@ pub fn tag(design: &Value, solid: &str, mirror_face: Option<(V3, [V3; 3])>) -> O
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_mirror_is_aimed_by_the_law_of_reflection() {
+        // A fold from +y to −x (a hand-built layout's first mirror, 25 mm pitch).
+        let axis = aim(
+            [175.0, -25.0, 50.0],
+            [175.0, 300.0, 50.0],
+            [-50.0, 300.0, 50.0],
+        );
+        assert_eq!(axis, Some([-1.0, -1.0, 0.0]));
+        // From −y up to +z: a periscope's lower mirror.
+        let axis = aim(
+            [-50.0, 125.0, 50.0],
+            [-50.0, 25.0, 50.0],
+            [-50.0, 25.0, 200.0],
+        );
+        assert_eq!(axis, Some([0.0, 1.0, 1.0]));
+        // A 60° turn in the plane: the normal halves it, so the light leaves at the same
+        // angle to it as it came in.
+        let to = [100.0 + 50.0 * 0.5, 50.0 * 3f64.sqrt() / 2.0, 0.0];
+        let n = aim([0.0, 0.0, 0.0], [100.0, 0.0, 0.0], to).expect("a normal");
+        let length = n.iter().map(|x| x * x).sum::<f64>().sqrt();
+        let cos_in = -n[0] / length;
+        let cos_out = (n[0] * 0.5 + n[1] * 3f64.sqrt() / 2.0) / length;
+        assert!((cos_in - cos_out).abs() < 1e-9, "{cos_in} {cos_out}");
+        // Straight back: the mirror faces the light.
+        assert_eq!(
+            aim([0.0; 3], [100.0, 0.0, 0.0], [0.0; 3]),
+            Some([-1.0, 0.0, 0.0])
+        );
+        // Straight on, and a place at the mirror's own: refused.
+        assert_eq!(aim([0.0; 3], [100.0, 0.0, 0.0], [200.0, 0.0, 0.0]), None);
+        assert_eq!(aim([0.0; 3], [100.0, 0.0, 0.0], [100.0, 0.0, 0.0]), None);
+    }
 
     #[test]
     fn new_entries_get_free_ids_and_places_after_the_rest() {

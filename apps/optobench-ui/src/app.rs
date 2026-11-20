@@ -1598,8 +1598,11 @@ impl App {
         let Some(design) = self.design().cloned() else {
             return Vec::new();
         };
-        let context = editors::Context::of(&design);
         let scene = self.doc.as_ref().and_then(|d| d.scene.clone());
+        let context = match &scene {
+            Some(scene) => editors::Context::of(&design).with_places(scene),
+            None => editors::Context::of(&design),
+        };
         let mut operations = Vec::new();
         let list = design[table].as_array().cloned().unwrap_or_default();
         ui.label(RichText::new(format!("{title} ({})", list.len())).strong());
@@ -1731,7 +1734,7 @@ impl App {
             return Vec::new();
         };
         let design = scene.design.clone();
-        let context = editors::Context::of(&design);
+        let context = editors::Context::of(&design).with_places(scene);
         if self.focus.as_ref().is_some_and(|(t, _)| t == "table") {
             if let Some(board) = crate::board::Board::of(&design, scene) {
                 return editors::board(ui, &mut self.drafts, &board);
@@ -3286,5 +3289,37 @@ mod exit {
         let detected = after["ledger"]["detected_w"].as_f64().expect("detected")
             / after["ledger"]["launched_w"].as_f64().expect("launched");
         assert!((detected - 1.0).abs() < 1e-6, "{detected}");
+    }
+
+    #[test]
+    fn a_mirror_is_aimed_from_its_properties() {
+        // A source along +x, a mirror two holes on facing back along x (wrong), a screen
+        // two holes up in y: the light from S1 to D1 turns from +x to +y, so Aim writes
+        // the axis (−1, 1, 0), and the beam reaches the screen.
+        let dir = scratch("aim");
+        let path = dir.join("fold.optobench");
+        std::fs::write(
+            &path,
+            "format = \"optobench/1\"\nkind = \"layout\"\nlayout = \"table\"\n\n[table]\npitch = 25.0\n\n\
+             [[source]]\nid = \"S1\"\nkind = \"collimated\"\nwavelength_um = 0.633\npower_w = 0.001\ndiameter = 2.0\nhole = [0, 0]\nheight = 75.0\naxis = [1, 0, 0]\n\n\
+             [[element]]\nid = \"M1\"\nkind = \"mirror\"\nhole = [2, 0]\nheight = 75.0\naxis = [-1, 0, 0]\ndiameter = 25.4\nclear_aperture = 22.9\n\n\
+             [[detector]]\nid = \"D1\"\nhole = [2, 2]\nheight = 75.0\naxis = [0, 1, 0]\nsize = [20, 20]\npixels = [20, 20]\n",
+        )
+        .expect("written");
+        let mut h = window(Some(path.clone()), &dir);
+        settle(&mut h);
+        click(&mut h, "Workspace");
+        click(&mut h, "Layout");
+        click(&mut h, "M1  ·  mirror");
+        assert!(h.query_by_label("Aim").is_some(), "Aim in its Properties");
+        h.state_mut().drafts.set_text("element/M1/aim/from", "S1");
+        h.state_mut().drafts.set_text("element/M1/aim/to", "D1");
+        click(&mut h, "Aim");
+        let text = std::fs::read_to_string(&path).expect("written");
+        assert!(text.contains("axis = [-1, 1, 0]"), "{text}");
+        assert!(errors(&h).is_empty(), "{:?}", errors(&h));
+        let traced = trace(&path, &dir);
+        let detected = traced["ledger"]["detected_w"].as_f64().expect("detected");
+        assert!(detected > 0.9e-3, "{traced}");
     }
 }
