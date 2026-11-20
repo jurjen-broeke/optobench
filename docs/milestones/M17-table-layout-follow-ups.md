@@ -6,7 +6,8 @@ be worked out by hand.
 
 Exit criterion: a folded beam path with alignment irises, mirrors on library mounts and
 an achromatic doublet built in the interface alone, without typing a mirror's normal,
-a mount's name or a doublet's radii.
+a mount's name or a doublet's radii; and the light coming back into the laser kept low
+by the optimiser (M17e, asked for during the milestone).
 
 ## M17a Aiming a mirror
 
@@ -80,3 +81,38 @@ a mount's name or a doublet's radii.
       (`a_singlet_becomes_an_achromat_of_the_same_focal_length`), the f 50.68 mm singlet
       made an achromat keeps f 50.68 mm at d in the engine's own `view`, and the same f
       at F and C to 1e-4
+
+## M17e Light coming back into the laser
+
+Asked for by the user (2026-11-20): a detector placed to measure backscattered light and
+a merit term on it, so the optimiser places elements to keep that light low. What comes
+back in a ray trace is the ghosts of partly reflecting faces (Fresnel reflections at
+uncoated or coated faces, with splitting on); diffuse scatter from surfaces is not
+modelled.
+
+- [x] `returning = true` on a detector (layouts and sidecars): it stops nothing, and
+      records the light crossing its plane against its axis, found afterwards on every
+      ray's path (each step between hits, and an escaping ray's last direction). Placed
+      at a laser and facing along its beam, it sees what comes back into the laser: its
+      power, spot, angles and irradiance as any detector's, from the crossings inside it
+- [x] Its `returned` power (`returned_w`, `returned_percent` in `trace`): every crossing
+      anywhere in its plane weighted by exp(−2r²/w²), w half its smaller side, the light
+      a Gaussian mode of 1/e² radius w takes in. It changes smoothly as the returning
+      light moves, where a hard edge would give the optimiser no slope while the light
+      lies wholly inside or outside
+- [x] Merit term `backscatter` (`detector` a returning one, else refused): 100 ×
+      returned / launched, in %. Its slope is zero where the returning light is centred
+      (a face square to the beam), so a tilt that should send it away starts a little off
+- [x] In the window: backscatter among the merit terms; Add a term puts it on the first
+      returning detector or, with none, adds one (`R1`) at the first source, facing
+      along its beam and as wide as it. Terms other than backscatter go on the first
+      detector that is not returning
+- [x] Checks (commands `tests/backscatter.rs`, theory: Fresnel R = ((n − 1)/(n + 1))² =
+      0.04 at normal incidence, Hecht §4.6): an uncoated window square to a 2 mm beam
+      returns R + T²R/(1 − R²) = 0.076923 of it to 1e-8 (reflections followed to 1e-12),
+      the screen still gets T² directly, and the weighted share is the disc's mean of
+      exp(−2r²/w²) to 0.005; from a 0.2° tilt the optimiser takes the backscatter from
+      3.8 % to below 1e-3 % (at about 1.8°) with the beam still on the screen; a term on
+      an ordinary detector is refused; power is conserved in every trace. In the window
+      (`backscatter_is_added_with_a_detector_at_the_laser`), Add a term puts R1 at the
+      laser and the trace weighs the returning light while the screen gets T²

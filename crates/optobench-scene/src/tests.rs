@@ -26,6 +26,7 @@ fn detector(id: &str, frame: Frame) -> Detector {
         size: (20.0, 20.0),
         pixels: (40, 40),
         quantum_efficiency: None,
+        returning: false,
     }
 }
 
@@ -266,6 +267,7 @@ fn free_space(source: Source, detector_z: f64, size: f64) -> SceneTrace {
             size: (size, size),
             pixels: (10, 10),
             quantum_efficiency: None,
+            returning: false,
         }],
         ..empty()
     };

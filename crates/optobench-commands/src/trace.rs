@@ -258,7 +258,7 @@ pub(crate) fn trace(parameters: &Parameters) -> Result<Value, CommandError> {
         .detectors
         .iter()
         .map(|d| {
-            json!({
+            let mut value = json!({
                 "id": d.id,
                 "power_w": d.power,
                 "direct_power_w": d.direct_power,
@@ -274,7 +274,14 @@ pub(crate) fn trace(parameters: &Parameters) -> Result<Value, CommandError> {
                 // Power by angle from the detector normal, in bins of angular_bin_deg.
                 "angular_bin_deg": optobench_scene::ANGULAR_BIN_DEGREES,
                 "angular_power_w": d.angular,
-            })
+            });
+            // A returning detector stops nothing; it weighs the light coming back.
+            if d.returning {
+                value["returning"] = json!(true);
+                value["returned_w"] = json!(d.returned);
+                value["returned_percent"] = json!(100.0 * d.returned / launched);
+            }
+            value
         })
         .collect();
     let clipping: Vec<Value> = traced

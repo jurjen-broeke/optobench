@@ -166,6 +166,14 @@
 //!                                   # optional: a number or [[wavelength_um, value], …]
 //!                                   # from 0 to 1, and where it comes from
 //!
+//! [[detector]]
+//! id = "back"                       # at the laser, facing along its beam: what comes back
+//! at = 0.0
+//! size = [3, 3]                     # the light it weighs: a Gaussian mode of 1/e² radius
+//! pixels = [32, 32]                 # half the smaller side (`backscatter` merit term)
+//! returning = true                  # optional, default false: records only light crossing
+//!                                   # its plane against its axis, and stops nothing
+//!
 //! [[fluorophore]]                   # what a dye or protein absorbs and emits (M11b)
 //! id = "dye"
 //! source = "…"                      # where the values come from (required)
@@ -1995,7 +2003,14 @@ pub fn parse_with(text: &str, lookups: &Lookups) -> Result<Scene, FileError> {
             item.table,
             &with(
                 position,
-                &["id", "size", "pixels", "quantum_efficiency", "dof"],
+                &[
+                    "id",
+                    "size",
+                    "pixels",
+                    "quantum_efficiency",
+                    "dof",
+                    "returning",
+                ],
             ),
             &item.context,
         )?;
@@ -2009,6 +2024,7 @@ pub fn parse_with(text: &str, lookups: &Lookups) -> Result<Scene, FileError> {
             size,
             pixels: item.count_pair("pixels")?,
             quantum_efficiency: quantum_efficiency(&item)?,
+            returning: returning(&item)?,
         });
         let frame = scene.detectors[scene.detectors.len() - 1].frame;
         let target = Target::Detector(item.text("id")?.to_owned());
@@ -2020,6 +2036,20 @@ pub fn parse_with(text: &str, lookups: &Lookups) -> Result<Scene, FileError> {
     check_dofs(&scene)?;
     scene.tolerances = crate::tolerance::tolerances(&root, &scene, &[])?;
     scene.placed().map_err(|e| error(e.to_string()))
+}
+
+/// A detector's `returning = true | false` (default false): it records only the light
+/// that crosses its plane against its axis, and stops nothing (M17e).
+pub(crate) fn returning(item: &Item) -> Result<bool, FileError> {
+    match item.table.get("returning") {
+        None => Ok(false),
+        Some(v) => v.as_bool().ok_or_else(|| {
+            error(format!(
+                "{}: `returning` must be true or false",
+                item.context
+            ))
+        }),
+    }
 }
 
 /// Avogadro's constant (1/mol), exact in the SI since 2019.

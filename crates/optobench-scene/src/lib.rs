@@ -422,7 +422,10 @@ pub struct QuantumEfficiency {
     pub source: String,
 }
 
-/// A detector: a rectangle across the axis that absorbs and records.
+/// A detector: a rectangle across the axis that absorbs and records. A *returning*
+/// detector (M17e) stops nothing: it records the light that crosses its plane against
+/// its axis, so placed at a laser and facing along its beam it measures what comes back
+/// into the laser (ghosts from partly reflecting faces).
 #[derive(Debug, Clone, PartialEq)]
 pub struct Detector {
     /// Unique id within the scene.
@@ -435,6 +438,8 @@ pub struct Detector {
     pub pixels: (usize, usize),
     /// What fraction of the photons it counts (M11c); `None` where only power matters.
     pub quantum_efficiency: Option<QuantumEfficiency>,
+    /// Whether it records returning light only, stopping nothing.
+    pub returning: bool,
 }
 
 /// What a solid from CAD (STEP) does.
@@ -1003,6 +1008,10 @@ impl Scene {
                     detector.id
                 )));
             }
+            // A returning detector is a plane the rays are measured on afterwards.
+            if detector.returning {
+                continue;
+            }
             let owner = owners.len();
             owners.push(Owner::Detector(index));
             system.faces.push(Face {
@@ -1500,52 +1509,120 @@ pub struct DetectorResult {
     /// Power arriving at angles from the detector's normal in bins of
     /// [`ANGULAR_BIN_DEGREES`], from 0° (normal) to 90° (W).
     pub angular: Vec<f64>,
+    /// Whether it is a returning detector ([`Detector::returning`]).
+    pub returning: bool,
+    /// For a returning detector: the light crossing its plane against its axis, anywhere,
+    /// each ray weighted by exp(−2 r²/w²) at its distance r from the centre, w half the
+    /// detector's smaller side (W). This is what a Gaussian mode of 1/e² radius w (a
+    /// laser's, a fibre's) takes in, and it changes smoothly as the returning light
+    /// moves, so the optimiser can push it away (the `backscatter` merit term). Zero for
+    /// other detectors.
+    pub returned: f64,
+}
+
+/// Light reaching a detector: where in its frame (mm), the power (W), the direction
+/// (scene frame) and whether on a ray's main path.
+struct Arrival {
+    point: (f64, f64),
+    power: f64,
+    direction: Vec3,
+    direct: bool,
+}
+
+/// Where rays cross a returning detector's plane against its axis (from local z > 0 to
+/// z ≤ 0), anywhere in the plane: every step between two hits and, for a ray that
+/// escaped, its last direction on from its last hit.
+fn returning_arrivals(detector: &Detector, records: &[RayRecord]) -> Vec<Arrival> {
+    let frame = &detector.frame;
+    let mut out = Vec::new();
+    for r in records {
+        let mut steps: Vec<(Vec3, Vec3, f64)> = r
+            .points
+            .windows(2)
+            .zip(&r.powers)
+            .map(|(p, &power)| (p[0], p[1] - p[0], power))
+            .collect();
+        if matches!(r.end, End::Escaped) {
+            if let Some(&last) = r.points.last() {
+                steps.push((last, r.ray.direction * 1e9, r.ray.power));
+            }
+        }
+        for (start, step, power) in steps {
+            let a = frame.to_local_point(start);
+            let d = frame.to_local_vector(step);
+            if a.z > 0.0 && a.z + d.z <= 0.0 && d.z < 0.0 {
+                let t = a.z / -d.z;
+                let length = step.length();
+                if length > 0.0 {
+                    out.push(Arrival {
+                        point: (a.x + t * d.x, a.y + t * d.y),
+                        power,
+                        direction: step * (1.0 / length),
+                        direct: r.generation == 0,
+                    });
+                }
+            }
+        }
+    }
+    out
 }
 
 impl DetectorResult {
     fn collect(index: usize, detector: &Detector, records: &[RayRecord]) -> Self {
-        let hits: Vec<((f64, f64), f64)> = records
-            .iter()
-            .filter(|r| matches!(r.end, End::Detected { detector, .. } if detector == index))
-            .filter_map(|r| r.detector_point.map(|p| (p, r.ray.power)))
-            .collect();
+        let (width, height) = detector.size;
+        let (arrivals, returned) = if detector.returning {
+            let all = returning_arrivals(detector, records);
+            let w = 0.5 * width.min(height);
+            let returned = all
+                .iter()
+                .map(|a| a.power * (-2.0 * (a.point.0.powi(2) + a.point.1.powi(2)) / (w * w)).exp())
+                .sum();
+            let inside = all
+                .into_iter()
+                .filter(|a| a.point.0.abs() <= width / 2.0 && a.point.1.abs() <= height / 2.0)
+                .collect();
+            (inside, returned)
+        } else {
+            let arrivals = records
+                .iter()
+                .filter(|r| matches!(r.end, End::Detected { detector, .. } if detector == index))
+                .filter_map(|r| {
+                    Some(Arrival {
+                        point: r.detector_point?,
+                        power: r.ray.power,
+                        direction: r.ray.direction,
+                        direct: r.generation == 0,
+                    })
+                })
+                .collect::<Vec<_>>();
+            (arrivals, 0.0)
+        };
+        let hits: Vec<((f64, f64), f64)> = arrivals.iter().map(|a| (a.point, a.power)).collect();
         let power: f64 = hits.iter().map(|h| h.1).sum();
-        let direct: Vec<((f64, f64), f64)> = records
+        let direct: Vec<((f64, f64), f64)> = arrivals
             .iter()
-            .filter(|r| r.generation == 0)
-            .filter(|r| matches!(r.end, End::Detected { detector, .. } if detector == index))
-            .filter_map(|r| r.detector_point.map(|p| (p, r.ray.power)))
+            .filter(|a| a.direct)
+            .map(|a| (a.point, a.power))
             .collect();
         let direct_power: f64 = direct.iter().map(|h| h.1).sum();
         let (direct_centroid, direct_rms_radius) = centroid_and_rms(&direct);
         // Slopes of the direct rays in the detector's frame.
-        let slopes: Vec<((f64, f64), f64)> = records
+        let slopes: Vec<((f64, f64), f64)> = arrivals
             .iter()
-            .filter(|r| r.generation == 0)
-            .filter(|r| matches!(r.end, End::Detected { detector, .. } if detector == index))
-            .filter_map(|r| {
-                let d = detector.frame.to_local_vector(r.ray.direction);
-                (d.z.abs() > 1e-12).then(|| ((d.x / d.z, d.y / d.z), r.ray.power))
+            .filter(|a| a.direct)
+            .filter_map(|a| {
+                let d = detector.frame.to_local_vector(a.direction);
+                (d.z.abs() > 1e-12).then(|| ((d.x / d.z, d.y / d.z), a.power))
             })
             .collect();
         let (direct_mean_slope, direct_rms_slope) = centroid_and_rms(&slopes);
         let bins = (90.0 / ANGULAR_BIN_DEGREES).round() as usize;
         let mut angular = vec![0.0; bins];
         let normal = detector.frame.axes()[2];
-        for record in records
-            .iter()
-            .filter(|r| matches!(r.end, End::Detected { detector, .. } if detector == index))
-        {
-            let angle = record
-                .ray
-                .direction
-                .dot(normal)
-                .abs()
-                .min(1.0)
-                .acos()
-                .to_degrees();
+        for a in &arrivals {
+            let angle = a.direction.dot(normal).abs().min(1.0).acos().to_degrees();
             let bin = ((angle / ANGULAR_BIN_DEGREES) as usize).min(bins - 1);
-            angular[bin] += record.ray.power;
+            angular[bin] += a.power;
         }
         let weight = if power > 0.0 { power } else { 1.0 };
         let centroid = (
@@ -1559,7 +1636,6 @@ impl DetectorResult {
             / weight)
             .sqrt();
         let (nx, ny) = detector.pixels;
-        let (width, height) = detector.size;
         let pixel_area_m2 = (width / nx as f64) * (height / ny as f64) * 1e-6;
         let mut irradiance = vec![0.0; nx * ny];
         for ((x, y), w) in &hits {
@@ -1582,6 +1658,8 @@ impl DetectorResult {
             centroid,
             rms_radius,
             irradiance,
+            returning: detector.returning,
+            returned,
         }
     }
 }

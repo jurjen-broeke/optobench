@@ -4,7 +4,7 @@
 //!
 //! - [`lm`]: the Levenberg–Marquardt method with bounds, on any residuals.
 //! - [`Term`] and [`Merit`]: what alignment means, as residuals from a traced scene:
-//!   focus, centring, pointing, collimation, diameter, power.
+//!   focus, centring, pointing, collimation, diameter, power, backscatter.
 //! - [`optimise`]: the free DOFs of a scene (neither locked nor coupled) that minimise a
 //!   merit.
 
@@ -45,6 +45,13 @@ pub enum Term {
     /// As much of the launched power as possible arriving directly (residual: the
     /// fraction that does not).
     Power,
+    /// As little light as possible coming back through a returning detector (placed at a
+    /// laser, facing along its beam): its Gaussian-weighted returned power
+    /// (`DetectorResult::returned`) as a percentage of the launched power. The light is
+    /// the ghosts of partly reflecting faces; tilting or moving them sends it past. Its
+    /// slope is zero where the returning light is centred on the detector (at normal
+    /// incidence exactly), so a DOF that should tilt it away starts a little off.
+    Backscatter,
     /// Every free DOF with a range near the middle of it, leaving room to adjust both
     /// ways: one residual per such DOF, (value − middle) / half the range (0 in the
     /// middle, ±1 at the ends). Measured on the DOFs, not at a detector. With a small
@@ -63,6 +70,7 @@ impl Term {
             Term::Collimation => "collimation",
             Term::Diameter { .. } => "diameter",
             Term::Power => "power",
+            Term::Backscatter => "backscatter",
             Term::Headroom => "headroom",
         }
     }
@@ -116,7 +124,13 @@ pub fn residuals(merit: &[Merit], traced: &SceneTrace) -> Result<Vec<Vec<f64>>, 
                 .iter()
                 .find(|d| d.id == m.detector)
                 .ok_or_else(|| format!("no detector `{}`", m.detector))?;
-            if d.direct_power <= 0.0 && m.term != Term::Power {
+            if m.term == Term::Backscatter && !d.returning {
+                return Err(format!(
+                    "backscatter is measured on a returning detector (`returning = true`); `{}` is not one",
+                    m.detector
+                ));
+            }
+            if d.direct_power <= 0.0 && !matches!(m.term, Term::Power | Term::Backscatter) {
                 return Err(format!("no direct light reaches detector `{}`", m.detector));
             }
             Ok(match &m.term {
@@ -134,6 +148,14 @@ pub fn residuals(merit: &[Merit], traced: &SceneTrace) -> Result<Vec<Vec<f64>>, 
                     vec![DIAMETER_PER_RMS_RADIUS * d.direct_rms_radius - target]
                 }
                 Term::Headroom => Vec::new(),
+                Term::Backscatter => {
+                    let launched = traced.ledger.launched;
+                    vec![if launched > 0.0 {
+                        100.0 * d.returned / launched
+                    } else {
+                        0.0
+                    }]
+                }
                 Term::Power => {
                     let launched = traced.ledger.launched;
                     vec![if launched > 0.0 {

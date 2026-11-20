@@ -1493,9 +1493,8 @@ impl App {
                     .as_array()
                     .cloned()
                     .unwrap_or_default();
-                let first_detector = scene.design["detector"][0]["id"]
-                    .as_str()
-                    .map(str::to_owned);
+                let first_detector = editors::first_detector(&scene.design);
+                let backscatter = editors::backscatter_term(&scene.design);
                 egui::CollapsingHeader::new(format!("Merit ({})", merit.len()))
                     .default_open(true)
                     .show(ui, |ui| {
@@ -1517,6 +1516,18 @@ impl App {
                             }
                         }
                         ui.menu_button("Add a term", |ui| {
+                            if let Some(ops) = &backscatter {
+                                if ui
+                                    .button("backscatter")
+                                    .on_hover_text("as little light as possible coming back into the laser (%): measured on a returning detector at the laser, added there when there is none")
+                                    .clicked()
+                                {
+                                    self.apply(ops.clone());
+                                    self.focus = Some(("merit".into(), merit.len().to_string()));
+                                    self.selected = None;
+                                    ui.close();
+                                }
+                            }
                             let Some(detector) = &first_detector else {
                                 ui.label(
                                     RichText::new("Add a detector first: terms are measured on one")
@@ -1740,9 +1751,14 @@ impl App {
                 let more = self.table_editor(ui, "detector", "Detectors");
                 operations.extend(more);
                 ui.separator();
-                let first = design["detector"][0]["id"].as_str().map(str::to_owned);
+                let first = editors::first_detector(&design);
                 ui.horizontal_wrapped(|ui| {
                     ui.label(RichText::new("Add merit").color(DARK.text_dim));
+                    if let Some(ops) = editors::backscatter_term(&design) {
+                        if ui.small_button("backscatter").clicked() {
+                            operations.extend(ops);
+                        }
+                    }
                     for kind in [
                         "focus",
                         "centring",
@@ -3580,5 +3596,51 @@ mod exit {
             f_at(optobench_materials::LINE_C),
         );
         assert!((blue - red).abs() < 1e-4, "F {blue}, C {red}");
+    }
+
+    #[test]
+    fn backscatter_is_added_with_a_detector_at_the_laser() {
+        // A 2 mm beam through an uncoated window square to it: Add a term, backscatter,
+        // puts a returning detector R1 at the laser, 2 mm wide, and the term on it; the
+        // trace then weighs the reflections coming back (a few per cent of the beam).
+        let dir = scratch("backscatter");
+        let path = dir.join("window.optobench");
+        std::fs::write(
+            &path,
+            "format = \"optobench/1\"\nkind = \"layout\"\nlayout = \"table\"\n\n[table]\npitch = 25.0\n\n\
+             [[source]]\nid = \"S1\"\nkind = \"collimated\"\nwavelength_um = 0.633\npower_w = 0.001\ndiameter = 2.0\nhole = [0, 0]\nheight = 75.0\naxis = [1, 0, 0]\n\n\
+             [[element]]\nid = \"W1\"\nkind = \"lens\"\nhole = [4, 0]\nheight = 75.0\naxis = [1, 0, 0]\n\
+             surfaces = [{ radius = \"inf\" }, { radius = \"inf\" }]\nthickness = [5.0]\nmaterial = [1.5]\ndiameter = 25.4\nclear_aperture = 22.9\n\n\
+             [[detector]]\nid = \"D1\"\nhole = [10, 0]\nheight = 75.0\naxis = [1, 0, 0]\nsize = [20, 20]\npixels = [20, 20]\n",
+        )
+        .expect("written");
+        let mut h = window(Some(path.clone()), &dir);
+        settle(&mut h);
+        click(&mut h, "Workspace");
+        click(&mut h, "Layout");
+        click(&mut h, "Add a term");
+        click(&mut h, "backscatter");
+        assert!(errors(&h).is_empty(), "{:?}", errors(&h));
+        let text = std::fs::read_to_string(&path).expect("written");
+        assert!(
+            text.contains("id = \"R1\"\nhole = [0, 0]") && text.contains("returning = true"),
+            "{text}"
+        );
+        assert!(
+            text.contains("kind = \"backscatter\"\ndetector = \"R1\""),
+            "{text}"
+        );
+        let traced = trace(&path, &dir);
+        let back = traced["detectors"]
+            .as_array()
+            .and_then(|l| l.iter().find(|d| d["id"] == "R1"))
+            .expect("R1");
+        let percent = back["returned_percent"].as_f64().expect("%");
+        assert!(percent > 2.0 && percent < 7.7, "{percent} %");
+        // R1 stops nothing: the screen gets the beam through both faces.
+        let screen = traced["detectors"][0]["direct_power_w"]
+            .as_f64()
+            .expect("direct");
+        assert!((screen / 1e-3 - 0.9216).abs() < 1e-6, "{screen}");
     }
 }

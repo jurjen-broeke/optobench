@@ -20,7 +20,12 @@ Nothing yet.
   glass's nd and Vd. The lens editor designs a cemented achromat from its focal length
   and two glasses (thin-lens powers, then corrected for the thicknesses on the paraxial
   trace: f at the d line, one f at F and C). No file-format change: older versions refuse
-  `{ nd, vd }` rather than misread it.
+  `{ nd, vd }` rather than misread it. A detector with `returning = true` stops nothing
+  and records the light coming back across its plane (placed at a laser, what returns
+  into it), with a Gaussian-weighted `returned` power; merit term `backscatter` (% of the
+  launched power) makes the optimiser tilt or move faces until their reflections pass
+  the laser by. Added from the window's Add a term, with a returning detector at the
+  first source when there is none.
 
 ## 0.1.0 (2026-11-14)
 

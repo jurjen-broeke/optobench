@@ -174,6 +174,7 @@ pub(crate) fn criterion_unit(merit: &Merit) -> &'static str {
         Term::Pointing { .. } | Term::Collimation => "mrad",
         Term::Diameter { .. } => "mm",
         Term::Power => "fraction",
+        Term::Backscatter => "%",
         Term::Headroom => "half range",
     }
 }

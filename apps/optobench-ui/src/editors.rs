@@ -53,6 +53,7 @@ fn choices(table: &str, key: &str) -> Option<&'static [&'static str]> {
             "collimation",
             "diameter",
             "power",
+            "backscatter",
         ]),
         ("proxy", "kind") => Some(&["plate", "tube"]),
         _ => None,
@@ -2059,6 +2060,60 @@ fn dofs(
     operations
 }
 
+/// The first detector that is not a returning one: where terms other than `backscatter`
+/// are measured.
+pub fn first_detector(design: &Value) -> Option<String> {
+    design["detector"]
+        .as_array()?
+        .iter()
+        .find(|d| d["returning"] != true)
+        .and_then(|d| d["id"].as_str())
+        .map(str::to_owned)
+}
+
+/// The operations that add a `backscatter` term: on the design's first returning
+/// detector or, without one, on a new one at the first source, facing along its beam and
+/// as wide as it (so the light it weighs is what a mode of the beam's size takes in).
+/// `None` without either.
+pub fn backscatter_term(design: &Value) -> Option<Vec<Value>> {
+    let existing = design["detector"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .find(|d| d["returning"] == true)
+        .and_then(|d| d["id"].as_str())
+        .map(str::to_owned);
+    let mut operations = Vec::new();
+    let id = match existing {
+        Some(id) => id,
+        None => {
+            let source = design["source"].get(0)?;
+            let width = source["diameter"]
+                .as_f64()
+                .or_else(|| source["waist_diameter"].as_f64())
+                .or_else(|| source["core_diameter"].as_f64())
+                .unwrap_or(2.0);
+            let id = next_id(design, "R");
+            let mut entry = vec![json!(["id", id])];
+            for key in ["at", "hole", "height", "axis"] {
+                if !source[key].is_null() {
+                    entry.push(json!([key, source[key]]));
+                }
+            }
+            entry.push(json!(["size", [tidy(width), tidy(width)]]));
+            entry.push(json!(["pixels", [32, 32]]));
+            entry.push(json!(["returning", true]));
+            operations.push(json!({ "op": "add", "table": "detector", "entry": entry }));
+            id
+        }
+    };
+    operations.push(json!({
+        "op": "add", "table": "merit",
+        "entry": [["kind", "backscatter"], ["detector", id]],
+    }));
+    Some(operations)
+}
+
 /// The next free id with a prefix: `L1`, `L2`, …
 pub fn next_id(design: &Value, prefix: &str) -> String {
     let used: Vec<&str> = ["element", "source", "detector", "proxy"]
@@ -2379,6 +2434,40 @@ mod tests {
             adjuster_text(&mounts[0].adjusters[0]),
             "slide along x, -1 to 1 mm"
         );
+    }
+
+    #[test]
+    fn backscatter_is_measured_at_the_laser() {
+        // Without a returning detector, one is added at the first source, facing along
+        // its beam and as wide as it; terms other than backscatter keep to the others.
+        let design = json!({ "layout": "table",
+            "source": [{ "id": "S1", "kind": "gaussian", "waist_diameter": 1.5, "hole": [0, 0], "height": 75.0, "axis": [1, 0, 0] }],
+            "detector": [{ "id": "D1", "hole": [9, 0] }] });
+        let ops = backscatter_term(&design).expect("ops");
+        assert_eq!(ops.len(), 2);
+        let entry = ops[0]["entry"].as_array().expect("pairs");
+        for pair in [
+            json!(["id", "R1"]),
+            json!(["hole", [0, 0]]),
+            json!(["height", 75.0]),
+            json!(["axis", [1, 0, 0]]),
+            json!(["size", [1.5, 1.5]]),
+            json!(["returning", true]),
+        ] {
+            assert!(entry.contains(&pair), "{pair} in {entry:?}");
+        }
+        assert_eq!(
+            ops[1]["entry"],
+            json!([["kind", "backscatter"], ["detector", "R1"]])
+        );
+        // With one, the term goes on it; it is never the first detector of other terms.
+        let with = json!({ "detector": [{ "id": "back", "returning": true }, { "id": "D1" }] });
+        let ops = backscatter_term(&with).expect("ops");
+        assert_eq!(ops.len(), 1);
+        assert_eq!(ops[0]["entry"][1], json!(["detector", "back"]));
+        assert_eq!(first_detector(&with).as_deref(), Some("D1"));
+        // Neither a source nor a returning detector: nothing to measure on.
+        assert!(backscatter_term(&json!({ "detector": [{ "id": "D1" }] })).is_none());
     }
 
     #[test]
