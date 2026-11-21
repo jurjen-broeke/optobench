@@ -72,6 +72,24 @@ What SolidCraft does, checked before the design (SolidCraft 0.45.0, 2026-11-20, 
       window (`optimised_values_are_written_into_solidcraft`), Apply in SolidCraft asks
       first, writes, logs it, and the design is traced again
 
+## M13e Travel used, from the user's test
+
+From the user's test on the periscope (2026-11-21): two rounds of Optimise and Apply in
+SolidCraft moved L2 6 mm on a slide of ±3 mm, since each write set its value back to 0
+and left its range where it was. Rough placement along rods or on a breadboard, limited
+only by the space around a part, is a different kind of DOF; decided with the user, it
+comes in M18 (`range = "free"`, the part with its group, two-stage optimisation).
+
+- [x] After a write, each CAD DOF's range moves by the value written (the travel it
+      used), so a mount's limits stay where they are over repeated writes; `cad-moves`
+      gives each DOF's range. An adjuster a mount gives, with no entry in the sidecar,
+      gets a note instead
+- [x] Check: L2_z (±5 mm) written to 2 mm has the range [−7, 3] in the sidecar; the
+      screen's slide (no CAD part) keeps ±5
+- [x] Also from that test: the writes worked (L1 0.88 mm across, the mirrors tilted, the
+      beam on `out` centred from 0.81 mm to 0.03 mm off), but L1, 60 mm out along the
+      rods, could not come back: no DOF moves it there, which M18's rough placement will
+
 ## M13d The contract test
 
 - [x] `optobench-bridge` `tests/contract.rs` (ignored unless asked for, with

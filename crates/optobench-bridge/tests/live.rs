@@ -295,6 +295,21 @@ fn dof_values_are_written_into_the_design_and_traced_again() {
     };
     assert_eq!(value_of("L2_z"), 0.0);
     assert_eq!(value_of("screen_z"), 1.0);
+    // L2's slide used 2 mm of its travel: its range moves with it, so the mount's limits
+    // stay where they are; the screen's slide is no CAD part and keeps its range.
+    let line = |name: &str| {
+        after
+            .lines()
+            .find(|l| l.contains(&format!("name = \"{name}\"")))
+            .map(str::to_owned)
+            .expect("declared")
+    };
+    assert!(line("L2_z").contains("range = [-7, 3]"), "{}", line("L2_z"));
+    assert!(
+        line("screen_z").contains("range = [-5, 5]"),
+        "{}",
+        line("screen_z")
+    );
     let update = live
         .next(Duration::from_secs(5))
         .expect("waited")

@@ -18,7 +18,8 @@ Nothing yet.
   {"path", "dofs"}` does it from the command line; in the window, Apply in SolidCraft
   (Align, with Live on) writes the last optimisation's values after asking. A contract
   test runs every command the link sends against an installed SolidCraft, nightly in CI
-  against the latest release.
+  against the latest release. After a write, each adjuster's range moves by the travel
+  it used, so repeated writes stay within a mount's limits.
 
 ## 0.3.0 (2026-11-20)
 

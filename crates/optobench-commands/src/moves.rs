@@ -543,5 +543,11 @@ pub(crate) fn cad_moves(parameters: &Parameters) -> Result<Value, CommandError> 
         "skipped": skipped,
         "values": in_units(&wanted),
         "current": in_units(&current),
+        // Each DOF's travel, in its unit, where it has one.
+        "ranges": scene.dofs.iter().filter_map(|d| {
+            let (low, high) = d.range?;
+            let k = if degrees(&d.name) { 180.0 / std::f64::consts::PI } else { 1.0 };
+            Some((d.name.clone(), json!([low * k, high * k])))
+        }).collect::<serde_json::Map<String, Value>>(),
     }))
 }
