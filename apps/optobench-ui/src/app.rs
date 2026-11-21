@@ -3986,4 +3986,70 @@ mod exit {
         assert!(h.state().doc.as_ref().expect("open").optimised.is_none());
         assert!(errors(&h).is_empty(), "{:?}", errors(&h));
     }
+
+    #[test]
+    fn a_rough_placement_is_optimised_first() {
+        // M18 in the window: the golden relay with L2 and its cage plate in a group on a
+        // free slide (20 mm out) and L2's adjuster off-centre; Optimise says it went in two
+        // stages, and the free range is ticked off and on in Properties.
+        let fixtures =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../crates/optobench-io/tests/step");
+        let dir = scratch("stages");
+        let text = std::fs::read_to_string(fixtures.join("cage-relay.optobench"))
+            .expect("read")
+            .replace(
+                "kind = \"sidecar\"\n",
+                &format!("kind = \"sidecar\"\nstep = '{}'\n", fixtures.join("cage-relay.step").to_string_lossy()),
+            )
+            .replace(
+                "body = { product = \"pc-lens\", occurrence = \"pc-lens:2\" }",
+                "body = { product = \"pc-lens\", occurrence = \"pc-lens:2\" }\ngroup = \"L2 assembly\"\ndof = [ { name = \"L2_x\", kind = \"slide\", axis = [1, 0, 0], frame = \"scene\", range = [-1, 1], value = 0.3 } ]",
+            )
+            + "\n[[group]]\nid = \"L2 assembly\"\noccurrences = [\"cage-plate:2\"]\ndof = [ { name = \"L2_rail\", kind = \"slide\", axis = [0, 0, 1], range = \"free\", value = 20 } ]\n\n[[merit]]\nkind = \"focus\"\ndetector = \"image\"\n";
+        let path = dir.join("relay.optobench");
+        std::fs::write(&path, text).expect("written");
+        let mut h = window(Some(path.clone()), &dir);
+        settle(&mut h);
+        click(&mut h, "Workspace");
+        click(&mut h, "CAD");
+        click(&mut h, "Align");
+        click(&mut h, "Optimise");
+        let said = h
+            .state()
+            .doc
+            .as_ref()
+            .and_then(|d| {
+                d.messages
+                    .iter()
+                    .rev()
+                    .find(|m| m.text.starts_with("Optimised"))
+                    .cloned()
+            })
+            .unwrap_or_else(|| {
+                panic!(
+                    "no message: {:?} {:?}",
+                    h.state().doc.as_ref().map(|d| d.messages.clone()),
+                    h.state().notice
+                )
+            });
+        assert!(
+            said.text.starts_with("Optimised in two stages: rough (1)")
+                && said.text.contains("then fine (1)"),
+            "{}",
+            said.text
+        );
+        // L2's adjuster made free in Properties, then given its range back.
+        click(&mut h, "Scene");
+        click(&mut h, "L2  ·  lens");
+        click(&mut h, "free");
+        let text = std::fs::read_to_string(&path).expect("read");
+        assert!(
+            text.contains("name = \"L2_x\"") && text.contains("range = \"free\", value = 0.3"),
+            "{text}"
+        );
+        click(&mut h, "free");
+        let text = std::fs::read_to_string(&path).expect("read");
+        assert!(text.contains("range = [-10, 10], value = 0.3"), "{text}");
+        assert!(errors(&h).is_empty(), "{:?}", errors(&h));
+    }
 }

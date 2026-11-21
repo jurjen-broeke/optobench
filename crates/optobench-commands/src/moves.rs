@@ -67,7 +67,13 @@ fn poses(scene: &Scene) -> BTreeMap<String, Transform> {
 }
 
 fn zeros(scene: &Scene) -> BTreeMap<String, f64> {
-    scene.dofs.iter().map(|d| (d.name.clone(), 0.0)).collect()
+    // Those that follow another take their 0 from it.
+    scene
+        .dofs
+        .iter()
+        .filter(|d| d.follows.is_none())
+        .map(|d| (d.name.clone(), 0.0))
+        .collect()
 }
 
 /// The report for an optimisation of `scene` (as read from `design`), in JSON and
@@ -79,15 +85,18 @@ pub(crate) fn report(
     merit: &[Value],
     design: &Path,
 ) -> Result<(Value, String), CommandError> {
+    // The DOFs that lead or stand alone: those that follow take their values from them.
     let current: BTreeMap<String, f64> = scene
         .dofs
         .iter()
+        .filter(|d| d.follows.is_none())
         .map(|d| (d.name.clone(), d.value))
         .collect();
-    let mut suggested = current.clone();
-    suggested.extend(result.end());
+    let mut leading = current.clone();
+    leading.extend(result.end());
+    // Every DOF's value, those that follow included (for each item's chain of moves).
     let suggested = scene
-        .dof_values(&suggested)
+        .dof_values(&leading)
         .map_err(|e| failed(e.to_string()))?;
     let zero = zeros(scene);
     let mut moves = Vec::new();
@@ -113,7 +122,7 @@ pub(crate) fn report(
         moves.push(entry);
     }
     let step_scene = scene.moved(&zero).map_err(|e| failed(e.to_string()))?;
-    let end_scene = scene.moved(&suggested).map_err(|e| failed(e.to_string()))?;
+    let end_scene = scene.moved(&leading).map_err(|e| failed(e.to_string()))?;
     let before = poses(&step_scene);
     let after = poses(&end_scene);
     let pose_list: Vec<Value> = before

@@ -264,3 +264,134 @@ pub fn optimise(
         outcome,
     })
 }
+
+/// One stage of [`optimise_in_stages`]: which DOFs it moved, and its result.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Stage {
+    /// `rough` (the free DOFs, rough placements) or `fine` (the adjusters).
+    pub name: &'static str,
+    /// Its result: the DOFs it moved, from where it found them.
+    pub result: Optimised,
+}
+
+/// Rough placement, then fine adjustment (M18): the free DOFs (`Dof::free`, rough
+/// placements) take the space around their parts as their range (`Scene::clearance`
+/// with `settings`); stage one moves only them, every other free DOF (an adjuster) held
+/// in the middle of its range (where it has one); stage two only the adjusters, from
+/// there. Returns both stages combined (every free DOF from its start to its end, the
+/// merit from before stage one to after stage two) and each stage. Without free DOFs,
+/// one stage as [`optimise`] runs it.
+pub fn optimise_in_stages(
+    scene: &Scene,
+    merit: &[Merit],
+    options: &lm::Options,
+    settings: &optobench_scene::clearance::Settings,
+) -> Result<(Optimised, Vec<Stage>), String> {
+    let movable = |d: &optobench_scene::dof::Dof| !d.locked && d.follows.is_none();
+    if !scene.dofs.iter().any(|d| d.free && movable(d)) {
+        let result = optimise(scene, merit, options)?;
+        let stage = Stage {
+            name: "fine",
+            result: result.clone(),
+        };
+        return Ok((result, vec![stage]));
+    }
+    // The free DOFs' ranges: the space around their parts.
+    let mut ranged = scene.clone();
+    for k in 0..ranged.dofs.len() {
+        let d = &scene.dofs[k];
+        if d.free && movable(d) {
+            let found = scene
+                .clearance(&d.name, settings)
+                .map_err(|e| e.to_string())?;
+            ranged.dofs[k].range = Some(found.range);
+        }
+    }
+    // Stage one: the adjusters in the middle of their travel, held there.
+    let middles: BTreeMap<String, f64> = ranged
+        .dofs
+        .iter()
+        .filter(|d| !d.free && movable(d))
+        .filter_map(|d| Some((d.name.clone(), d.range.map(|(a, b)| 0.5 * (a + b))?)))
+        .collect();
+    let mut rough_scene = ranged.moved(&middles).map_err(|e| e.to_string())?;
+    for d in &mut rough_scene.dofs {
+        if !d.free {
+            d.locked = true;
+        }
+    }
+    let rough = optimise(&rough_scene, merit, options)?;
+    // Stage two: the rough placements held where stage one left them.
+    let mut fine_scene = rough_scene.moved(&rough.end()).map_err(|e| e.to_string())?;
+    for (k, d) in fine_scene.dofs.iter_mut().enumerate() {
+        d.locked = if d.free { true } else { scene.dofs[k].locked };
+    }
+    let adjusters = fine_scene.dofs.iter().any(movable);
+    let fine = if adjusters {
+        Some(optimise(&fine_scene, merit, options)?)
+    } else {
+        None
+    };
+    // Both together: every free DOF from where it was to where it ends.
+    let mut values = Vec::new();
+    let mut at_bound = Vec::new();
+    for d in scene.dofs.iter().filter(|d| movable(d)) {
+        let from_stage = |r: &Optimised| {
+            r.values
+                .iter()
+                .zip(&r.outcome.at_bound)
+                .find(|(v, _)| v.0 == d.name)
+                .map(|(v, b)| (v.2, *b))
+        };
+        // A rough placement ends where stage one left it; an adjuster where stage two
+        // did, else in the middle of its travel.
+        let (end, bound) = if d.free {
+            from_stage(&rough)
+        } else {
+            fine.as_ref()
+                .and_then(from_stage)
+                .or_else(|| middles.get(&d.name).map(|m| (*m, false)))
+        }
+        .unwrap_or((d.value, false));
+        values.push((d.name.clone(), d.value, end));
+        at_bound.push(bound);
+    }
+    let last = fine.as_ref().unwrap_or(&rough);
+    let mut outcome = last.outcome.clone();
+    outcome.start_cost = rough.outcome.start_cost;
+    outcome.iterations =
+        rough.outcome.iterations + fine.as_ref().map_or(0, |f| f.outcome.iterations);
+    outcome.evaluations =
+        rough.outcome.evaluations + fine.as_ref().map_or(0, |f| f.outcome.evaluations);
+    outcome.history = rough
+        .outcome
+        .history
+        .iter()
+        .chain(fine.iter().flat_map(|f| f.outcome.history.iter().skip(1)))
+        .copied()
+        .collect();
+    outcome.x = values.iter().map(|v| v.2).collect();
+    outcome.at_bound = at_bound;
+    let terms = rough
+        .terms
+        .iter()
+        .zip(&last.terms)
+        .map(|((start, _), (_, end))| (start.clone(), end.clone()))
+        .collect();
+    let combined = Optimised {
+        values,
+        terms,
+        outcome,
+    };
+    let mut stages = vec![Stage {
+        name: "rough",
+        result: rough,
+    }];
+    if let Some(fine) = fine {
+        stages.push(Stage {
+            name: "fine",
+            result: fine,
+        });
+    }
+    Ok((combined, stages))
+}

@@ -17,9 +17,10 @@ Decided with the user (2026-11-21):
   middle of its travel; then the adjusters alone. Apply (and Apply in SolidCraft) writes
   both
 
-Exit criterion: on the Thorlabs periscope with L1 moved 60 mm along its rods, one
-Optimise brings it back within its mount's reach and centres the beam on `out`, without
-any part overlapping another.
+Exit criterion: on the Thorlabs periscope with L1 moved out of place along its rods
+(within the free space: the 60 to 69 mm the user moved it by hand went down through a
+CP33B bracket, 30.9 mm below), one Optimise brings it back within its mount's reach and
+centres the beam on `out`, without any part overlapping another.
 
 ## M18a Free ranges and groups of CAD parts
 
@@ -59,10 +60,30 @@ any part overlapping another.
 
 ## M18c Two-stage optimisation
 
-- [ ] `optimize`: free DOFs take their clearance as their range; stage one moves only
+- [x] `optimize`: free DOFs take their clearance as their range; stage one moves only
       them with every adjuster at the middle of its range, stage two only the adjusters
       from there; the report gives both stages
-- [ ] In the window: the two stages in the results; Apply writes both
+- [x] In the window: the two stages in the results; Apply writes both
+- [x] Properties: a DOF's range has a "free" checkbox (free: as far as the space around
+      it allows; unticked it gets ±10 back)
+- [x] Found on the way: the move report started from every DOF's value, those following
+      a group's leader too, which the value check refuses ("set the leader instead"): any
+      group with followers failed Optimise in the window (which asks for the report);
+      the report now starts from the leaders and moves the scene by them
+- [x] Checks: on the golden relay (commands `tests/golden.rs`), L2 with its plate 20 mm
+      out on a free slide and its adjuster at 0.3 mm: two stages, the rough one ending
+      where a single stage does with an ordinary ±30 mm range and the adjuster locked in
+      the middle (0.85 mm above the design's place, where the R 30 mm lenses' RMS spot is
+      smallest: 0.011 mm against 0.033 mm at the paraxial image), the adjuster back in
+      the middle; in the window (`a_rough_placement_is_optimised_first`), Optimise says
+      it went in two stages and the free checkbox writes `range = "free"` and back
+- [x] Exit, on the Thorlabs periscope as SolidCraft exports it (2026-11-21): L1 with its
+      CXY1A on a free slide along z, 35 mm out; one Optimise (23 s, the clearance
+      included): the rough stage brings centring from 3.27 to 0.0006 mm, pointing from
+      5.35 to 0.0004 mrad and collimation from 5.82 to 0.09 mrad, with every adjuster in
+      the middle of its travel (L1's own z slide, range [−2, 17] after M13e's writes, at
+      7.50 mm, the rail at −7.52 mm: L1 0.02 mm from where it was built); the fine stage
+      changes nothing more
 
 ## M18d Layouts
 

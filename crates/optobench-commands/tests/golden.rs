@@ -454,3 +454,87 @@ fn a_free_slide_stops_where_its_parts_would_overlap() {
     }
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn a_rough_placement_comes_back_before_the_adjusters_move() {
+    // M18c, on the golden relay: L2 with its cage plate placed 20 mm too high on a free
+    // slide, and L2's own adjuster (±1 mm across x) off-centre at 0.3 mm. With a focus
+    // term at the image, one optimisation runs two stages: the rough placement back to
+    // the smallest spot, with the adjuster held in the middle of its travel; then the
+    // adjuster alone, which stays in the middle (the relay is centred). The rough stage
+    // ends where one stage does with an ordinary range in place of the free one and the
+    // adjuster locked in the middle (0.85 mm above the design's place: the RMS spot of
+    // the R 30 mm lenses' spherical aberration is smallest there, 0.011 mm against
+    // 0.033 mm at the paraxial image).
+    let dir = std::env::temp_dir().join(format!("optobench-stages-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("dir");
+    let text = std::fs::read_to_string(fixtures().join("cage-relay.optobench"))
+        .expect("read")
+        .replace(
+            "kind = \"sidecar\"\n",
+            &format!("kind = \"sidecar\"\nstep = '{}'\n", fixtures().join("cage-relay.step").to_string_lossy()),
+        )
+        .replace(
+            "body = { product = \"pc-lens\", occurrence = \"pc-lens:2\" }",
+            "body = { product = \"pc-lens\", occurrence = \"pc-lens:2\" }\ngroup = \"L2 assembly\"\ndof = [ { name = \"L2_x\", kind = \"slide\", axis = [1, 0, 0], frame = \"scene\", range = [-1, 1], value = 0.3 } ]",
+        )
+        + "\n[[group]]\nid = \"L2 assembly\"\noccurrences = [\"cage-plate:2\"]\ndof = [ { name = \"L2_rail\", kind = \"slide\", axis = [0, 0, 1], range = \"free\", value = 20 } ]\n\n[[merit]]\nkind = \"focus\"\ndetector = \"image\"\n";
+    let optimised = |text: &str, name: &str| {
+        let path = dir.join(name);
+        std::fs::write(&path, text).expect("written");
+        Registry::standard()
+            .run(
+                "optimize",
+                &json!({ "path": path.to_string_lossy(), "data_directory": dir.to_string_lossy() }),
+            )
+            .expect("optimised")
+    };
+    let reference = optimised(
+        &text
+            .replace(
+                "range = \"free\", value = 20",
+                "range = [-30, 30], value = 20",
+            )
+            .replace(
+                "range = [-1, 1], value = 0.3",
+                "range = [-1, 1], locked = true",
+            ),
+        "reference.optobench",
+    );
+    let result = optimised(&text, "relay.optobench");
+    let stages: Vec<&str> = result["stages"]
+        .as_array()
+        .expect("stages")
+        .iter()
+        .filter_map(|s| s["stage"].as_str())
+        .collect();
+    assert_eq!(stages, ["rough", "fine"], "{}", result["stages"]);
+    assert_eq!(result["stages"][0]["dofs"], json!(["L2_rail"]));
+    assert_eq!(result["stages"][1]["dofs"], json!(["L2_x"]));
+    let value = |name: &str| {
+        result["dofs"]
+            .as_array()
+            .and_then(|l| l.iter().find(|d| d["name"] == name))
+            .and_then(|d| d["suggested"].as_f64())
+            .unwrap_or_else(|| panic!("no {name}: {}", result["dofs"]))
+    };
+    let expected = reference["dofs"][0]["suggested"]
+        .as_f64()
+        .expect("the reference");
+    assert!((expected - 0.85).abs() < 0.1, "{expected}");
+    assert!(
+        (value("L2_rail") - expected).abs() < 1e-3,
+        "{} against {expected}",
+        value("L2_rail")
+    );
+    assert!(value("L2_x").abs() < 0.01, "{}", value("L2_x"));
+    let cost = |k: &str| result["cost"][k].as_f64().expect("cost");
+    assert!(
+        cost("end") < 1e-3 * cost("start"),
+        "{} to {}",
+        cost("start"),
+        cost("end")
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}

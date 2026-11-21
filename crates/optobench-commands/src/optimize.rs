@@ -1,7 +1,7 @@
 //! `optimize`: the DOF values that best meet a design's merit (M6b;
 //! `optobench_optimize`).
 
-use optobench_optimize::{Merit, Term, lm, optimise};
+use optobench_optimize::{Merit, Term, lm};
 use serde_json::{Value, json};
 
 use crate::trace::{dof_values, load};
@@ -102,7 +102,10 @@ pub(crate) fn room(
 /// default 0.5), `small_range_mm` (slides adjusting this little or less either way are
 /// warned about before anything else, default 1) and `data_directory`. Returns each free DOF's start and suggested value,
 /// its adjustment room where it has a range, warnings for adjusters off-centre or at a
-/// limit, and every merit term before and after.
+/// limit, and every merit term before and after. A design with free DOFs (rough
+/// placements, `range = "free"`) is optimised in two stages (`stages`): the free DOFs,
+/// their ranges the space around their parts, with every adjuster in the middle of its
+/// travel; then the adjusters alone (`optobench_optimize::optimise_in_stages`).
 pub(crate) fn optimize(parameters: &Parameters) -> Result<Value, CommandError> {
     check_keys(
         parameters,
@@ -156,7 +159,26 @@ pub(crate) fn optimize(parameters: &Parameters) -> Result<Value, CommandError> {
             )
         })? as usize;
     }
-    let result = optimise(&scene, &merit, &options).map_err(|e| failed(format!("{path}: {e}")))?;
+    // Rough placements first, then the adjusters (M18); one stage without free DOFs.
+    let (result, stages) = optobench_optimize::optimise_in_stages(
+        &scene,
+        &merit,
+        &options,
+        &optobench_scene::clearance::Settings::default(),
+    )
+    .map_err(|e| failed(format!("{path}: {e}")))?;
+    let stages: Vec<Value> = stages
+        .iter()
+        .map(|stage| {
+            json!({
+                "stage": stage.name,
+                "dofs": stage.result.values.iter().map(|v| v.0.clone()).collect::<Vec<_>>(),
+                "cost": { "start": stage.result.outcome.start_cost, "end": stage.result.outcome.cost },
+                "iterations": stage.result.outcome.iterations,
+                "converged": stage.result.outcome.converged,
+            })
+        })
+        .collect();
     let dofs: Vec<Value> = result
         .values
         .iter()
@@ -223,6 +245,7 @@ pub(crate) fn optimize(parameters: &Parameters) -> Result<Value, CommandError> {
         "report": written,
         "cost": { "start": result.outcome.start_cost, "end": result.outcome.cost },
         "converged": result.outcome.converged,
+        "stages": stages,
         "iterations": result.outcome.iterations,
         "history": result.outcome.history,
         "traces": result.outcome.evaluations,
