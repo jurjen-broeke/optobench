@@ -25,6 +25,13 @@
 //! plate's edge) share one ray. The work is shared out over the processor's cores, except
 //! on wasm32.
 //!
+//! A layout has no CAD parts: its items stand in as simple solids (`Scene::stand_ins`):
+//! a lens a disc of its diameter from its first vertex to its last (and as far as its
+//! curved surfaces bulge at the rim), a mirror a disc 6 mm thick behind its face, an
+//! ideal lens or objective a disc 2 mm thick, a screen a box of its size 1 mm thick, a
+//! tube a wall 1 mm thick around its bore, an iris a plate 2 mm thick with its hole.
+//! Sources and posts have no size in a layout and are left out.
+//!
 //! What is missed: features thinner than the spacing that cross each other between
 //! points (two thin wires crossing), and a part that slides off the end of the rods it
 //! runs on (leaving them is not an overlap).
@@ -34,8 +41,119 @@ use std::collections::{BTreeMap, HashMap};
 use optobench_math::{Transform, Vec3};
 use optobench_surfaces::brep::Fineness;
 
+use optobench_math::Frame;
+use optobench_surfaces::brep::{BrepFace, FaceSurface};
+
 use crate::dof::{Motion, Target};
-use crate::{Scene, SceneError, Solid};
+use crate::{ElementKind, ProxyKind, Scene, SceneError, Solid, SolidFace, SolidRole};
+
+/// The key of the part a DOF target moves: a CAD occurrence's path, or for a layout's
+/// stand-in its table and id (`element:L1`).
+fn part_key(target: &Target) -> String {
+    match target {
+        Target::Occurrence(path) => path.clone(),
+        Target::Element(id) => format!("element:{id}"),
+        Target::Source(id) => format!("source:{id}"),
+        Target::Detector(id) => format!("detector:{id}"),
+    }
+}
+
+/// A circle of radius `r` about local z at height `z`, in `frame`'s scene coordinates.
+fn circle(frame: &Frame, r: f64, z: f64) -> Vec<Vec3> {
+    (0..48)
+        .map(|i| {
+            let a = std::f64::consts::TAU * i as f64 / 48.0;
+            frame.to_parent_point(Vec3::new(r * a.cos(), r * a.sin(), z))
+        })
+        .collect()
+}
+
+/// A rectangle of half-sides `w`, `h` about local z at height `z`.
+fn rectangle(frame: &Frame, w: f64, h: f64, z: f64) -> Vec<Vec3> {
+    [(-w, -h), (w, -h), (w, h), (-w, h)]
+        .iter()
+        .map(|&(x, y)| frame.to_parent_point(Vec3::new(x, y, z)))
+        .collect()
+}
+
+/// A plane face across local z at `z`, its normal outward along `side` (±1).
+fn across(frame: &Frame, z: f64, side: f64, loops: Vec<Vec<Vec3>>) -> SolidFace {
+    let at = Frame::from_transform(
+        frame.transform() * Transform::from_translation(Vec3::new(0.0, 0.0, z)),
+    );
+    SolidFace {
+        geometry: std::sync::Arc::new(BrepFace::new(FaceSurface::Plane(at), side < 0.0, loops)),
+        placement: Transform::IDENTITY,
+    }
+}
+
+/// A cylinder face of radius `r` about local z from `z0` to `z1`, its normal outward
+/// (away from the axis) or, for a bore, inward.
+fn around(frame: &Frame, r: f64, z0: f64, z1: f64, bore: bool) -> SolidFace {
+    SolidFace {
+        geometry: std::sync::Arc::new(BrepFace::new(
+            FaceSurface::Cylinder {
+                frame: *frame,
+                radius: r,
+            },
+            bore,
+            vec![circle(frame, r, z0), circle(frame, r, z1)],
+        )),
+        placement: Transform::IDENTITY,
+    }
+}
+
+/// A disc of radius `r` along local z from `z0` to `z1`.
+fn disc(frame: &Frame, r: f64, z0: f64, z1: f64) -> Vec<SolidFace> {
+    vec![
+        around(frame, r, z0, z1, false),
+        across(frame, z0, -1.0, vec![circle(frame, r, z0)]),
+        across(frame, z1, 1.0, vec![circle(frame, r, z1)]),
+    ]
+}
+
+/// A box of half-sides `w`, `h` along local z from `z0` to `z1`.
+fn slab(frame: &Frame, w: f64, h: f64, z0: f64, z1: f64) -> Vec<SolidFace> {
+    // A side face: the plane through local `axis · half`, its normal along `axis`, `a`
+    // wide either way along `x`.
+    let side = |axis: Vec3, x: Vec3, half: f64, a: f64| {
+        let origin = frame.to_parent_point(axis * half);
+        let at = Frame::new(
+            origin,
+            frame.to_parent_vector(axis),
+            frame.to_parent_vector(x),
+        )
+        .unwrap_or(*frame);
+        let corners: Vec<Vec3> = [(-a, z0), (a, z0), (a, z1), (-a, z1)]
+            .iter()
+            .map(|&(u, z)| frame.to_parent_point(axis * half + x * u + Vec3::new(0.0, 0.0, z)))
+            .collect();
+        SolidFace {
+            geometry: std::sync::Arc::new(BrepFace::new(
+                FaceSurface::Plane(at),
+                false,
+                vec![corners],
+            )),
+            placement: Transform::IDENTITY,
+        }
+    };
+    vec![
+        across(frame, z0, -1.0, vec![rectangle(frame, w, h, z0)]),
+        across(frame, z1, 1.0, vec![rectangle(frame, w, h, z1)]),
+        side(Vec3::X, Vec3::Y, w, h),
+        side(-Vec3::X, Vec3::Y, w, h),
+        side(Vec3::Y, Vec3::X, h, w),
+        side(-Vec3::Y, Vec3::X, h, w),
+    ]
+}
+
+/// How far a surface of `radius` bulges at rim radius `r`, along z (signed).
+fn sag(radius: f64, r: f64) -> f64 {
+    if !radius.is_finite() || radius.abs() <= r {
+        return 0.0;
+    }
+    radius - radius.signum() * (radius * radius - r * r).sqrt()
+}
 
 /// How the clearance is found.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -437,6 +555,100 @@ fn run_all<T: Sync, R: Send>(jobs: &[T], f: &(dyn Fn(&T) -> R + Sync)) -> Vec<R>
 }
 
 impl Scene {
+    /// A layout's items as simple solids for the clearance (see the module), each keyed
+    /// by its table and id (`element:L1`).
+    pub fn stand_ins(&self) -> Vec<Solid> {
+        let solid = |id: &str, key: String, faces: Vec<SolidFace>| Solid {
+            id: id.to_owned(),
+            faces,
+            role: SolidRole::Absorber,
+            occurrence: key,
+        };
+        let mut out = Vec::new();
+        for e in &self.elements {
+            let f = &e.frame;
+            let key = format!("element:{}", e.id);
+            let faces = match &e.kind {
+                ElementKind::Lens {
+                    surfaces,
+                    thicknesses,
+                    diameter,
+                    ..
+                } => {
+                    let r = 0.5 * diameter;
+                    let length: f64 = thicknesses.iter().sum();
+                    let first = surfaces.first().map_or(0.0, |s| sag(s.radius, r));
+                    let last = surfaces.last().map_or(0.0, |s| sag(s.radius, r));
+                    disc(f, r, first.min(0.0), (length + last).max(length))
+                }
+                ElementKind::Mirror { diameter, .. } => disc(f, 0.5 * diameter, -6.0, 0.0),
+                ElementKind::IdealLens { diameter, .. }
+                | ElementKind::Objective { diameter, .. } => disc(f, 0.5 * diameter, -1.0, 1.0),
+                _ => continue,
+            };
+            out.push(solid(&e.id, key, faces));
+        }
+        for d in &self.detectors {
+            let (w, h) = (0.5 * d.size.0, 0.5 * d.size.1);
+            out.push(solid(
+                &d.id,
+                format!("detector:{}", d.id),
+                slab(&d.frame, w, h, -1.0, 0.0),
+            ));
+        }
+        for p in &self.proxies {
+            let f = &p.frame;
+            let faces = match p.kind {
+                ProxyKind::Tube {
+                    inner_diameter,
+                    length,
+                } => {
+                    let (inner, outer) = (0.5 * inner_diameter, 0.5 * inner_diameter + 1.0);
+                    vec![
+                        around(f, outer, 0.0, length, false),
+                        around(f, inner, 0.0, length, true),
+                        across(
+                            f,
+                            0.0,
+                            -1.0,
+                            vec![circle(f, outer, 0.0), circle(f, inner, 0.0)],
+                        ),
+                        across(
+                            f,
+                            length,
+                            1.0,
+                            vec![circle(f, outer, length), circle(f, inner, length)],
+                        ),
+                    ]
+                }
+                ProxyKind::Plate {
+                    hole_diameter,
+                    size,
+                } => {
+                    let (half, hole) = (0.5 * size, 0.5 * hole_diameter);
+                    let mut faces = slab(f, half, half, -1.0, 1.0);
+                    // The two broad faces get the hole; the bore lines it.
+                    faces[0] = across(
+                        f,
+                        -1.0,
+                        -1.0,
+                        vec![rectangle(f, half, half, -1.0), circle(f, hole, -1.0)],
+                    );
+                    faces[1] = across(
+                        f,
+                        1.0,
+                        1.0,
+                        vec![rectangle(f, half, half, 1.0), circle(f, hole, 1.0)],
+                    );
+                    faces.push(around(f, hole, -1.0, 1.0, true));
+                    faces
+                }
+            };
+            out.push(solid(&p.id, format!("proxy:{}", p.id), faces));
+        }
+        out
+    }
+
     /// How far DOF `name` can go each way from its value now before its parts (its
     /// target's and those of the DOFs following it) overlap another part (see the
     /// module). For slides up to twice the scene's size, for tilts up to half a turn.
@@ -466,15 +678,22 @@ impl Scene {
         let mover_of = |s: &Solid| {
             movers
                 .iter()
-                .position(|(t, ..)| matches!(t, Target::Occurrence(o) if *o == s.occurrence))
+                .position(|(t, ..)| part_key(t) == s.occurrence)
         };
         // The move of mover `k` when the leader changes by `change`.
         let moved = |k: usize, change: f64| -> Transform {
             let (_, motion, ratio, value) = movers[k];
             motion.transform(value + ratio * change) * motion.transform(value).inverse()
         };
-        let shapes: Vec<Shape> = self
-            .solids
+        // A layout's items stand in as simple solids; a CAD design has its parts.
+        let stand_ins;
+        let solids: &[Solid] = if self.solids.is_empty() {
+            stand_ins = self.stand_ins();
+            &stand_ins
+        } else {
+            &self.solids
+        };
+        let shapes: Vec<Shape> = solids
             .iter()
             .filter_map(|s| Shape::of(s, settings.fineness))
             .collect();
@@ -489,7 +708,7 @@ impl Scene {
             .collect();
         if moving.is_empty() {
             return Err(invalid(format!(
-                "`{name}` moves no CAD part to find the space around"
+                "`{name}` moves no part with a size to find the space around (a layout's source has none)"
             )));
         }
         // A straight path: a slide, every part moving with it alike.

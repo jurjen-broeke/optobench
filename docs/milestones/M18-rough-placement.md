@@ -87,5 +87,13 @@ centres the beam on `out`, without any part overlapping another.
 
 ## M18d Layouts
 
-- [ ] The same for table layouts: elements, detectors and proxies as solids for the
-      clearance (a lens's or mirror's disc, a screen, a tube, a plate)
+- [x] The same for table (and planar) layouts, which have no CAD parts: their items stand
+      in as simple solids (`Scene::stand_ins`): a lens a disc of its diameter from its
+      first vertex to its last and as far as its curved surfaces bulge at the rim, a
+      mirror a disc 6 mm thick behind its face, an ideal lens or objective a disc 2 mm
+      thick, a screen a box of its size 1 mm thick, a tube a wall 1 mm thick, an iris a
+      plate 2 mm thick with its hole; sources and posts have no size and are left out. A
+      DOF finds its stand-in by its table and id, as a sidecar's finds its occurrence
+- [x] Check (commands `tests/groups.rs`): a lens on a free slide along the beam, a second
+      lens 100 mm on (biconvex, vertices outermost): it goes 96.05 mm towards it (96 mm
+      between the vertices, plus the tolerance), stopped by it; the other way nothing
