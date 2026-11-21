@@ -222,6 +222,10 @@ pub struct Context {
     /// The mounts an item can be given: the file's `[[mount]]` tables, then the parts
     /// library's.
     pub mounts: Vec<Mount>,
+    /// The space found around free DOFs (`clearance`'s entries, by name), and whether a
+    /// search is running.
+    pub clearances: std::collections::BTreeMap<String, Value>,
+    pub finding: bool,
 }
 
 /// A mount an item can name: its id (the file's) or key (the library's), where its
@@ -426,7 +430,16 @@ impl Context {
             groups: groups_of(design),
             places: Vec::new(),
             mounts: Vec::new(),
+            clearances: std::collections::BTreeMap::new(),
+            finding: false,
         }
+    }
+
+    /// As [`Context::of`], with the space found around free DOFs and whether a search runs.
+    pub fn with_clearances(mut self, doc: &crate::document::Document) -> Self {
+        self.clearances = doc.clearances.clone();
+        self.finding = doc.running.iter().any(|c| c == "clearance");
+        self
     }
 
     /// As [`Context::of`], with the mounts items can be given ([`mounts_of`]).
@@ -1828,7 +1841,7 @@ pub fn moved_group(
 }
 
 /// The tables whose entries carry degrees of freedom.
-const WITH_DOFS: &[&str] = &["element", "source", "detector"];
+const WITH_DOFS: &[&str] = &["element", "source", "detector", "group"];
 
 /// The degrees of freedom of an entry: each with its value and its range (both
 /// editable), removed by ×; and buttons to add one. On a table layout and in a sidecar
@@ -1948,6 +1961,69 @@ fn dofs(
                 }));
             }
         });
+        // The space found around a free DOF (M19), or a search for it.
+        if dof["range"] == "free" {
+            ui.horizontal_wrapped(|ui| {
+                ui.add_space(12.0);
+                match context.clearances.get(name) {
+                    Some(found) => {
+                        let unit = found["unit"].as_str().unwrap_or("mm");
+                        let end = |k: usize| {
+                            let v = found["range"][k].as_f64().unwrap_or(f64::NAN);
+                            let by = found["stopped_by"][k]
+                                .as_str()
+                                .map_or_else(|| "nothing in the way".to_owned(), |b| format!("stopped by {b}"));
+                            format!("{v:+.2} {unit} ({by})")
+                        };
+                        ui.label(
+                            RichText::new(format!("space: {} to {}", end(0), end(1)))
+                                .color(DARK.text_dim)
+                                .size(11.0),
+                        );
+                    }
+                    None if context.finding => {
+                        ui.label(RichText::new("finding the space…").color(DARK.text_dim).size(11.0));
+                    }
+                    None => {
+                        if ui
+                            .small_button("Find the space")
+                            .on_hover_text("How far it can go each way before its parts overlap another part, and which part stops it")
+                            .clicked()
+                        {
+                            operations.push(json!({ "op": "clearance", "dof": name }));
+                        }
+                    }
+                }
+            });
+        }
+    }
+    // A group's: slides along the scene's axes, free to start (rough placements: how far
+    // its parts may go is the space around them); in the scene's frame, so no `frame`.
+    if table == "group" {
+        ui.horizontal_wrapped(|ui| {
+            ui.label(RichText::new("Add").color(DARK.text_dim));
+            for (label, short, axis) in [
+                ("slide X", "slide_X", json!([1, 0, 0])),
+                ("slide Y", "slide_Y", json!([0, 1, 0])),
+                ("slide Z", "slide_Z", json!([0, 0, 1])),
+            ] {
+                let name = format!("{}_{short}", id.replace(' ', "_"));
+                if list.iter().any(|d| d["name"] == name.as_str()) {
+                    continue;
+                }
+                if ui
+                    .small_button(label)
+                    .on_hover_text("A free slide for the whole group: as far as the space around its parts allows")
+                    .clicked()
+                {
+                    operations.push(json!({
+                        "op": "add_dof", "table": table, "id": id,
+                        "dof_entry": [["name", name], ["kind", "slide"], ["axis", axis], ["range", "free"]],
+                    }));
+                }
+            }
+        });
+        return operations;
     }
     // Buttons to add one.
     let scene_axes = context.sidecar || context.pitch.is_some();
@@ -2078,6 +2154,82 @@ fn dofs(
             }
         }
     });
+    operations
+}
+
+/// The group whose `occurrences` list a CAD part (a sidecar's `[[group]]`, M18), if one
+/// does.
+pub fn group_of_part(design: &Value, occurrence: &str) -> Option<String> {
+    design["group"]
+        .as_array()?
+        .iter()
+        .find(|g| {
+            g["occurrences"]
+                .as_array()
+                .is_some_and(|o| o.iter().any(|x| x == occurrence))
+        })
+        .and_then(|g| g["id"].as_str())
+        .map(str::to_owned)
+}
+
+/// The `edit` operations that make a CAD part (its occurrence) move with `element`: the
+/// element in a group (its own, or a new one, `<element> assembly`) and the part among
+/// the group's `occurrences`, out of any other group; with `None`, out of its group.
+pub fn move_with(design: &Value, occurrence: &str, element: Option<&str>) -> Vec<Value> {
+    let mut operations = Vec::new();
+    let groups = design["group"].as_array().cloned().unwrap_or_default();
+    let listed =
+        |g: &Value| -> Vec<Value> { g["occurrences"].as_array().cloned().unwrap_or_default() };
+    // Out of the group that has it, unless that is where it goes.
+    let target_group = element.map(|e| {
+        design["element"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .find(|x| x["id"] == e)
+            .and_then(|x| x["group"].as_str())
+            .map_or_else(|| format!("{e} assembly"), str::to_owned)
+    });
+    for g in &groups {
+        let id = g["id"].as_str().unwrap_or_default();
+        let parts = listed(g);
+        if parts.iter().any(|x| x == occurrence) && target_group.as_deref() != Some(id) {
+            let rest: Vec<Value> = parts.into_iter().filter(|x| x != occurrence).collect();
+            operations.push(if rest.is_empty() {
+                json!({ "op": "unset", "table": "group", "id": id, "key": "occurrences" })
+            } else {
+                json!({ "op": "set", "table": "group", "id": id, "key": "occurrences", "value": rest })
+            });
+        }
+    }
+    let (Some(element), Some(group)) = (element, target_group) else {
+        return operations;
+    };
+    let has_group = design["element"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .any(|x| x["id"] == element && x["group"].is_string());
+    if !has_group {
+        operations.push(json!({
+            "op": "set", "table": "element", "id": element, "key": "group", "value": group,
+        }));
+    }
+    match groups.iter().find(|g| g["id"] == group.as_str()) {
+        Some(g) => {
+            let mut parts = listed(g);
+            if !parts.iter().any(|x| x == occurrence) {
+                parts.push(json!(occurrence));
+                operations.push(json!({
+                    "op": "set", "table": "group", "id": group, "key": "occurrences", "value": parts,
+                }));
+            }
+        }
+        None => operations.push(json!({
+            "op": "add", "table": "group",
+            "entry": [["id", group], ["occurrences", [occurrence]]],
+        })),
+    }
     operations
 }
 
@@ -2489,6 +2641,36 @@ mod tests {
         assert_eq!(first_detector(&with).as_deref(), Some("D1"));
         // Neither a source nor a returning detector: nothing to measure on.
         assert!(backscatter_term(&json!({ "detector": [{ "id": "D1" }] })).is_none());
+    }
+
+    #[test]
+    fn a_part_moves_with_one_lens_at_a_time() {
+        // L1 already in `rail` with mount:1; mount:2 is free; L2 has no group.
+        let design = json!({
+            "element": [{ "id": "L1", "group": "rail" }, { "id": "L2" }],
+            "group": [{ "id": "rail", "occurrences": ["mount:1"] }],
+        });
+        assert_eq!(group_of_part(&design, "mount:1").as_deref(), Some("rail"));
+        assert_eq!(group_of_part(&design, "mount:2"), None);
+        // mount:2 with L1: added to `rail`.
+        assert_eq!(
+            move_with(&design, "mount:2", Some("L1")),
+            [
+                json!({ "op": "set", "table": "group", "id": "rail", "key": "occurrences", "value": ["mount:1", "mount:2"] })
+            ]
+        );
+        // mount:1 with L2: out of `rail`, L2 given a new group with it.
+        assert_eq!(
+            move_with(&design, "mount:1", Some("L2")),
+            [
+                json!({ "op": "unset", "table": "group", "id": "rail", "key": "occurrences" }),
+                json!({ "op": "set", "table": "element", "id": "L2", "key": "group", "value": "L2 assembly" }),
+                json!({ "op": "add", "table": "group", "entry": [["id", "L2 assembly"], ["occurrences", ["mount:1"]]] }),
+            ]
+        );
+        // None: out of its group; already where it is asked: nothing.
+        assert_eq!(move_with(&design, "mount:1", None).len(), 1);
+        assert!(move_with(&design, "mount:1", Some("L1")).is_empty());
     }
 
     #[test]

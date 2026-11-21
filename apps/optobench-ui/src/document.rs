@@ -428,6 +428,9 @@ pub struct Document {
     /// With it, the occurrences moved in SolidCraft since that export (the live link's
     /// `moves`), applied when it is read.
     pub live_moves: Value,
+    /// The space found around free DOFs (`clearance`'s entries, by DOF name), until the
+    /// design changes.
+    pub clearances: std::collections::BTreeMap<String, Value>,
     /// What the next run follows (for the runs strip).
     changed: String,
     undoing: bool,
@@ -462,6 +465,7 @@ impl Document {
             optimised: None,
             live_step: None,
             live_moves: Value::Null,
+            clearances: std::collections::BTreeMap::new(),
             changed: "opened".into(),
             undoing: false,
             repaint,
@@ -488,6 +492,7 @@ impl Document {
             command,
             "view"
                 | "edit"
+                | "clearance"
                 | "trace"
                 | "optimize"
                 | "embed"
@@ -502,7 +507,10 @@ impl Document {
         {
             p.insert("data_directory".into(), json!(data.to_string_lossy()));
         }
-        let reads_step = matches!(command, "view" | "trace" | "optimize" | "graph");
+        let reads_step = matches!(
+            command,
+            "view" | "trace" | "optimize" | "graph" | "clearance"
+        );
         if let (true, Some(step), Some(p)) =
             (reads_step, &self.live_step, parameters.as_object_mut())
         {
@@ -545,7 +553,7 @@ impl Document {
             }
             "parts" | "curves" | "materials" => Ok(json!({})),
             "graph" => Ok(json!({ "path": path, "of": "spot" })),
-            "edit" => Ok(json!({ "path": path })),
+            "edit" | "clearance" => Ok(json!({ "path": path })),
             "import-part" | "import-curve" | "import-material" | "import-fluorophore" => {
                 Err("drop the file on the window to import it (coming with M8c)".into())
             }
@@ -662,6 +670,7 @@ impl Document {
         let moved = step.is_some() && (step != self.live_step || moves != self.live_moves);
         self.live_step = step;
         self.live_moves = moves;
+        self.clearances.clear();
         self.changed = format!("SolidCraft revision {revision}");
         self.accept(Finished {
             command: "trace".into(),
@@ -701,8 +710,16 @@ impl Document {
                     text: e,
                 }),
             },
+            ("clearance", Ok(value)) => {
+                for d in value["dofs"].as_array().into_iter().flatten() {
+                    if let Some(name) = d["name"].as_str() {
+                        self.clearances.insert(name.to_owned(), d.clone());
+                    }
+                }
+            }
             ("edit", Ok(value)) => {
                 self.edits += 1;
+                self.clearances.clear();
                 if let (false, Some(previous)) = (self.undoing, value["previous"].as_str()) {
                     self.undo.push(previous.to_owned());
                 }
@@ -1056,6 +1073,7 @@ mod tests {
             optimised: None,
             live_step: None,
             live_moves: Value::Null,
+            clearances: std::collections::BTreeMap::new(),
             changed: String::new(),
             undoing: false,
             repaint: std::sync::Arc::new(|| {}),
