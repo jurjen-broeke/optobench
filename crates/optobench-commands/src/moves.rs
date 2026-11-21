@@ -551,3 +551,77 @@ pub(crate) fn cad_moves(parameters: &Parameters) -> Result<Value, CommandError> 
         }).collect::<serde_json::Map<String, Value>>(),
     }))
 }
+
+/// `clearance` (M18): how far each free DOF (`range = "free"`) of a design can move each
+/// way before its parts overlap another part (`optobench_scene::clearance`). Parameters
+/// `path`, optionally `dof` (one DOF, free or not), `tolerance` (mm, default 0.05),
+/// `spacing` (mm, default 1), and `data_directory`, `step` and `moves` as `trace` takes
+/// them. Per DOF its range (mm or degrees, from its value now) and what stops it each
+/// way (`null`: nothing within the scene's size, or half a turn).
+pub(crate) fn clearance(parameters: &Parameters) -> Result<Value, CommandError> {
+    check_keys(
+        parameters,
+        &[
+            "path",
+            "dof",
+            "tolerance",
+            "spacing",
+            "data_directory",
+            "step",
+            "moves",
+        ],
+    )?;
+    let invalid = |m: String| CommandError::new(ErrorCode::InvalidParameters, m);
+    let path = parameters
+        .get("path")
+        .and_then(Value::as_str)
+        .ok_or_else(|| invalid("missing parameter `path`".into()))?;
+    let (scene, _, _, _) = load(path, parameters)?;
+    let mut settings = optobench_scene::clearance::Settings::default();
+    for (key, slot) in [
+        ("tolerance", &mut settings.tolerance),
+        ("spacing", &mut settings.spacing),
+    ] {
+        if let Some(v) = parameters.get(key) {
+            *slot = v
+                .as_f64()
+                .filter(|x| *x > 0.0)
+                .ok_or_else(|| invalid(format!("`{key}` is a length in mm > 0")))?;
+        }
+    }
+    let names: Vec<String> = match parameters.get("dof").and_then(Value::as_str) {
+        Some(name) => vec![name.to_owned()],
+        None => scene
+            .dofs
+            .iter()
+            .filter(|d| d.free)
+            .map(|d| d.name.clone())
+            .collect(),
+    };
+    let dofs = names
+        .iter()
+        .map(|name| {
+            let dof = scene
+                .dofs
+                .iter()
+                .find(|d| &d.name == name)
+                .ok_or_else(|| invalid(format!("no degree of freedom `{name}`")))?;
+            let found = scene
+                .clearance(name, &settings)
+                .map_err(|e| failed(e.to_string()))?;
+            let k = if dof.motion.is_angle() {
+                180.0 / std::f64::consts::PI
+            } else {
+                1.0
+            };
+            Ok(json!({
+                "name": name,
+                "unit": if dof.motion.is_angle() { "deg" } else { "mm" },
+                "value": dof.value * k,
+                "range": [found.range.0 * k, found.range.1 * k],
+                "stopped_by": [found.stopped_by.0, found.stopped_by.1],
+            }))
+        })
+        .collect::<Result<Vec<Value>, CommandError>>()?;
+    Ok(json!({ "dofs": dofs, "tolerance_mm": settings.tolerance, "spacing_mm": settings.spacing }))
+}

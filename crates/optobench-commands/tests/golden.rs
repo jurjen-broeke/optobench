@@ -394,3 +394,63 @@ fn a_group_moves_its_lens_with_the_cad_parts_it_names() {
     }
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn a_free_slide_stops_where_its_parts_would_overlap() {
+    // M18b, on the golden relay: L2 and its cage plate slide along z (free) until the
+    // plate meets the other plate, 117.5 mm below (plate 2's underside at z 180.5, plate
+    // 1's top at 63, from the relay's script), plus the 0.05 mm they may sink in, the
+    // faces meeting square; upwards nothing is in the way (the rods' ends are not an
+    // overlap). Tilted about x through L2, the plate meets the rods through its holes
+    // almost at once.
+    let dir = std::env::temp_dir().join(format!("optobench-clearance-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("dir");
+    let original = std::fs::read_to_string(fixtures().join("cage-relay.optobench")).expect("read");
+    let sidecar = |dof: &str| {
+        original
+            .replace(
+                "kind = \"sidecar\"\n",
+                &format!("kind = \"sidecar\"\nstep = '{}'\n", fixtures().join("cage-relay.step").to_string_lossy()),
+            )
+            .replace(
+                "body = { product = \"pc-lens\", occurrence = \"pc-lens:2\" }",
+                "body = { product = \"pc-lens\", occurrence = \"pc-lens:2\" }\ngroup = \"L2 assembly\"",
+            )
+            + &format!("\n[[group]]\nid = \"L2 assembly\"\noccurrences = [\"cage-plate:2\"]\ndof = [ {dof} ]\n")
+    };
+    let path = dir.join("relay.optobench");
+    let run = |dof: &str| {
+        std::fs::write(&path, sidecar(dof)).expect("written");
+        Registry::standard()
+            .run(
+                "clearance",
+                &json!({ "path": path.to_string_lossy(), "data_directory": dir.to_string_lossy() }),
+            )
+            .expect("found")
+    };
+    let slide = run("{ name = \"L2_rail\", kind = \"slide\", axis = [0, 0, 1], range = \"free\" }");
+    let d = &slide["dofs"][0];
+    assert_eq!(d["name"], "L2_rail");
+    let low = d["range"][0].as_f64().expect("low");
+    assert!((low + 117.55).abs() < 1e-6, "{low}");
+    assert_eq!(d["stopped_by"][0], "cage-plate:1/Plate");
+    assert_eq!(d["stopped_by"][1], Value::Null);
+    let tilt = run(
+        "{ name = \"L2_turn\", kind = \"tilt\", axis = [1, 0, 0], pivot = [0, 0, 185.6], range = \"free\" }",
+    );
+    let d = &tilt["dofs"][0];
+    assert_eq!(d["unit"], "deg");
+    let (low, high) = (
+        d["range"][0].as_f64().expect("low"),
+        d["range"][1].as_f64().expect("high"),
+    );
+    assert!(
+        low < 0.0 && high > 0.0 && high.abs() < 5.0 && low.abs() < 5.0,
+        "{low} {high}"
+    );
+    for by in d["stopped_by"].as_array().expect("both") {
+        assert!(by.as_str().is_some_and(|b| b.starts_with("rod:")), "{d}");
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}

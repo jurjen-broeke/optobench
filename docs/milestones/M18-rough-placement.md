@@ -34,13 +34,28 @@ any part overlapping another.
 
 ## M18b How far a part can move
 
-- [ ] `optobench_scene::clearance`: for a DOF, how far its part (with everything moving
+- [x] `optobench_scene::clearance`: for a DOF, how far its part (with everything moving
       with it) can go each way before a point of it lies deeper than the tolerance inside
       another part, or a point of another part inside it: points from the parts'
       tessellations (vertices, and their triangles subdivided to a spacing), inside and
       outside from the exact faces (the nearest hit's normal along a ray), each point's
       path a ray for a slide and short chords for a tilt; what stops it named
-- [ ] `clearance` command: every free DOF's range and what stops it each way
+- [x] `clearance` command: every free DOF's range and what stops it each way
+- [x] Fast enough for vendor assemblies: each part tessellated once; on a slide, points
+      on one line parallel to it share a ray, cut to the other part's box, and points
+      whose line never passes the other part are left out; the smallest limit found so
+      far, shared between the cores, cuts every later path short (nearest parts first).
+      On the Thorlabs periscope (L1 with its CXY1A, 440 000 surface points): 61 s at
+      first, now 7.8 s; L1 with its mount can slide from −30.93 mm (a CP33B bracket) to
+      +38.28 mm (L2)
+- [x] Found on the way: an entry was dropped when the same segment left the part again
+      further on (a plate's far side), so plates passed through each other; the depth is
+      now checked against the next hit
+- [x] Checks (commands `tests/golden.rs`): on the golden relay, L2 with its cage plate
+      slides down to −117.55 mm (the plates 117.5 mm apart, plus the 0.05 mm tolerance,
+      faces meeting square), stopped by `cage-plate:1`, and upwards nothing stops it;
+      tilted about x through L2, the rods through the plate's holes stop it within a few
+      degrees each way
 
 ## M18c Two-stage optimisation
 
