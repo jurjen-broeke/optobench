@@ -457,6 +457,14 @@ impl App {
 
     /// Sends edit operations for the open design.
     fn apply(&mut self, operations: Vec<Value>) {
+        // Requests that are no edits: the space around a free DOF (M19).
+        let (searches, operations): (Vec<Value>, Vec<Value>) =
+            operations.into_iter().partition(|o| o["op"] == "clearance");
+        if let Some(doc) = &mut self.doc {
+            for s in searches {
+                doc.start("clearance", json!({ "dof": s["dof"] }));
+            }
+        }
         if operations.is_empty() {
             return;
         }
@@ -1589,26 +1597,36 @@ impl App {
                                         .filter(|e| e["group"] == g.as_str())
                                         .filter_map(|e| e["id"].as_str().map(str::to_owned))
                                         .collect();
-                                let label = format!("{g}  ·  {}", members.join(", "));
+                                // Its CAD parts too (a sidecar's `occurrences`, M18).
+                                let parts: Vec<String> = scene.design["group"]
+                                    .as_array()
+                                    .into_iter()
+                                    .flatten()
+                                    .filter(|x| x["id"] == g.as_str())
+                                    .flat_map(|x| x["occurrences"].as_array().cloned().unwrap_or_default())
+                                    .filter_map(|o| o.as_str().map(str::to_owned))
+                                    .collect();
+                                let label = format!(
+                                    "{g}  ·  {}",
+                                    members.iter().chain(&parts).cloned().collect::<Vec<_>>().join(", ")
+                                );
+                                let key = ("group".to_owned(), g.clone());
+                                let on = self.focus.as_ref() == Some(&key);
                                 if ui
-                                    .selectable_label(false, label)
+                                    .selectable_label(on, label)
                                     .on_hover_text(
-                                        "Select its first item; Move moves the whole group",
+                                        "Its Properties (its degrees of freedom); its first item selected, so Move moves the whole group",
                                     )
                                     .clicked()
                                 {
+                                    let focus = Some(key);
                                     if let Some(first) = members.first() {
                                         match scene.items.iter().position(|i| &i.id == first) {
-                                            Some(i) => {
-                                                self.selected = Some(i);
-                                                self.focus = None;
-                                            }
-                                            None => {
-                                                self.selected = None;
-                                                self.focus = Some(("source".into(), first.clone()));
-                                            }
+                                            Some(i) => self.selected = Some(i),
+                                            None => self.selected = None,
                                         }
                                     }
+                                    self.focus = focus;
                                 }
                             }
                         });
@@ -1861,6 +1879,10 @@ impl App {
             None => editors::Context::of(&design),
         }
         .with_mounts(&design, &library);
+        let context = match &self.doc {
+            Some(doc) => context.with_clearances(doc),
+            None => context,
+        };
         let mut operations = Vec::new();
         let list = design[table].as_array().cloned().unwrap_or_default();
         ui.label(RichText::new(format!("{title} ({})", list.len())).strong());
@@ -1999,7 +2021,8 @@ impl App {
         let design = scene.design.clone();
         let context = editors::Context::of(&design)
             .with_places(scene)
-            .with_mounts(&design, self.library_mounts.as_deref().unwrap_or_default());
+            .with_mounts(&design, self.library_mounts.as_deref().unwrap_or_default())
+            .with_clearances(doc);
         if self.focus.as_ref().is_some_and(|(t, _)| t == "table") {
             if let Some(board) = crate::board::Board::of(&design, scene) {
                 return editors::board(ui, &mut self.drafts, &board);
@@ -2081,6 +2104,67 @@ impl App {
                         )
                         .color(DARK.text_dim),
                     );
+                    // A mount moving with its lens (M19): the part in the lens's group.
+                    if let Some(occurrence) = item.occurrence.clone() {
+                        let now = editors::group_of_part(&design, &occurrence);
+                        let element_of = |g: &str| {
+                            design["element"]
+                                .as_array()
+                                .into_iter()
+                                .flatten()
+                                .find(|e| e["group"] == g)
+                                .and_then(|e| e["id"].as_str())
+                                .map(str::to_owned)
+                        };
+                        let shown = now
+                            .as_deref()
+                            .and_then(element_of)
+                            .unwrap_or_else(|| "none".into());
+                        let elements: Vec<String> = design["element"]
+                            .as_array()
+                            .into_iter()
+                            .flatten()
+                            .filter_map(|e| e["id"].as_str().map(str::to_owned))
+                            .collect();
+                        let mut chosen: Option<Option<String>> = None;
+                        ui.add_space(6.0);
+                        ui.horizontal(|ui| {
+                            ui.label(RichText::new("moves with").color(DARK.text_dim))
+                                .on_hover_text(format!(
+                                    "The CAD part `{occurrence}` moves with an element: in its group, it follows the group's degrees of freedom (a lens's mount sliding along the rods with it)"
+                                ));
+                            egui::ComboBox::from_id_salt("moves-with")
+                                .selected_text(&shown)
+                                .show_ui(ui, |ui| {
+                                    if ui.selectable_label(shown == "none", "none").clicked() {
+                                        chosen = Some(None);
+                                    }
+                                    for e in &elements {
+                                        if ui.selectable_label(&shown == e, e).clicked() {
+                                            chosen = Some(Some(e.clone()));
+                                        }
+                                    }
+                                });
+                        });
+                        if let Some(choice) = chosen {
+                            if choice.as_deref() != Some(shown.as_str()) {
+                                operations.extend(editors::move_with(
+                                    &design,
+                                    &occurrence,
+                                    choice.as_deref(),
+                                ));
+                            }
+                        }
+                        if let Some(g) = &now {
+                            ui.label(
+                                RichText::new(format!(
+                                    "In the group `{g}`: give the group a slide to move them together"
+                                ))
+                                .color(DARK.text_dim)
+                                .size(11.0),
+                            );
+                        }
+                    }
                 }
             }
         }
@@ -4050,6 +4134,86 @@ mod exit {
         click(&mut h, "free");
         let text = std::fs::read_to_string(&path).expect("read");
         assert!(text.contains("range = [-10, 10], value = 0.3"), "{text}");
+        assert!(errors(&h).is_empty(), "{:?}", errors(&h));
+    }
+
+    #[test]
+    fn a_mount_moves_with_its_lens_and_the_space_is_found() {
+        // M19 in the window, on the golden relay: cage plate 2 (an untagged CAD part) made
+        // to move with L2, the group given a free slide along Z, and its space found: down
+        // to the other plate (117.5 mm, plus the 0.05 mm they may sink in).
+        let fixtures =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../crates/optobench-io/tests/step");
+        let dir = scratch("move-with");
+        let text = std::fs::read_to_string(fixtures.join("cage-relay.optobench"))
+            .expect("read")
+            .replace(
+                "kind = \"sidecar\"\n",
+                &format!(
+                    "kind = \"sidecar\"\nstep = '{}'\n",
+                    fixtures.join("cage-relay.step").to_string_lossy()
+                ),
+            );
+        let path = dir.join("relay.optobench");
+        std::fs::write(&path, text).expect("written");
+        let mut h = window(Some(path.clone()), &dir);
+        settle(&mut h);
+        click(&mut h, "Workspace");
+        click(&mut h, "CAD");
+        let plate = h
+            .state()
+            .doc
+            .as_ref()
+            .and_then(|d| d.scene.as_ref())
+            .and_then(|s| s.items.iter().position(|i| i.id == "cage-plate:2/Plate"))
+            .expect("the plate");
+        h.state_mut().selected = Some(plate);
+        h.step();
+        h.step();
+        h.query_all_by_role(egui::accesskit::Role::ComboBox)
+            .find(|c| c.value().as_deref() == Some("none"))
+            .expect("moves with")
+            .click();
+        h.step();
+        h.step();
+        click(&mut h, "L2");
+        let text = std::fs::read_to_string(&path).expect("read");
+        assert!(
+            text.contains("group = \"L2 assembly\"")
+                && text
+                    .contains("[[group]]\nid = \"L2 assembly\"\noccurrences = [\"cage-plate:2\"]"),
+            "{text}"
+        );
+        assert!(errors(&h).is_empty(), "{:?}", errors(&h));
+        click(&mut h, "L2 assembly  ·  L2, cage-plate:2");
+        click(&mut h, "slide Z");
+        let text = std::fs::read_to_string(&path).expect("read");
+        assert!(
+            text.contains("name = \"L2_assembly_slide_Z\"") && text.contains("range = \"free\""),
+            "{text}"
+        );
+        click(&mut h, "Find the space");
+        for _ in 0..600 {
+            h.step();
+            settle(&mut h);
+            if h.state()
+                .doc
+                .as_ref()
+                .is_some_and(|d| !d.clearances.is_empty())
+            {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        h.step();
+        h.step();
+        let shown =
+            "space: -117.55 mm (stopped by cage-plate:1/Plate) to +513.27 mm (nothing in the way)";
+        assert!(
+            h.query_by_label(shown).is_some(),
+            "{:?}",
+            h.state().doc.as_ref().map(|d| d.clearances.clone())
+        );
         assert!(errors(&h).is_empty(), "{:?}", errors(&h));
     }
 }

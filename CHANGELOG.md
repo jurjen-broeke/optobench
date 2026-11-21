@@ -7,6 +7,14 @@ with the release that introduced them.
 
 Nothing yet.
 
+## 0.6.0 (2026-11-21)
+
+- M19 groups of CAD parts and the clearance in the window: an untagged CAD part's
+  Properties have "moves with" (a lens's mount in the lens's group, made `<lens>
+  assembly` when it has none); the browser lists a group with its CAD parts and opens its
+  Properties, where free slides along X, Y and Z are added; under a free DOF, Find the
+  space runs the clearance and shows how far it can go each way and what stops it.
+
 ## 0.5.0 (2026-11-21)
 
 - M18 rough placement, then fine adjustment: a DOF with `range = "free"` is limited only
