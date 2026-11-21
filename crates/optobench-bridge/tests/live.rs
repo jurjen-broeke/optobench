@@ -241,3 +241,106 @@ fn a_move_is_traced_without_exporting_again() {
     let _ = std::fs::remove_dir_all(&control);
     let _ = std::fs::remove_dir_all(&empty);
 }
+
+#[test]
+fn dof_values_are_written_into_the_design_and_traced_again() {
+    // M13c: the golden relay with L2 on a slide along z, at 0.5 mm in the file, and the
+    // screen on a slide (not a CAD part). Writing L2_z = 2 and screen_z = 1 moves L2 2 mm
+    // in "SolidCraft" (the file's 0.5 is optobench's offset on the design, which stands
+    // at 0), sets L2_z back to 0 and screen_z to 1 in the sidecar; the next trace (a move:
+    // no export) is the design traced with those values.
+    let fixtures = fixtures();
+    let app = FakeApp::start(&fixtures.join("cage-relay.step"));
+    let control = scratch("write");
+    let data = scratch("write-data");
+    app.write_control_folder(&control);
+    let original = std::fs::read_to_string(fixtures.join("cage-relay.optobench")).expect("read");
+    let text = original
+        .replace(
+            "kind = \"sidecar\"\n",
+            &format!(
+                "kind = \"sidecar\"\nstep = '{}'\n",
+                fixtures.join("cage-relay.step").to_string_lossy()
+            ),
+        )
+        .replace(
+            "body = { product = \"pc-lens\", occurrence = \"pc-lens:2\" }",
+            "body = { product = \"pc-lens\", occurrence = \"pc-lens:2\" }\ndof = [ { name = \"L2_z\", kind = \"slide\", axis = [0, 0, 1], range = [-5, 5], value = 0.5 } ]",
+        )
+        + "dof = [ { name = \"screen_z\", kind = \"slide\", axis = [0, 0, 1], range = [-5, 5] } ]\n";
+    let sidecar = data.join("relay.optobench");
+    std::fs::write(&sidecar, &text).expect("written");
+    let mut parameters = parameters(&control, &data);
+    parameters.insert("path".into(), json!(sidecar.to_string_lossy()));
+    let (mut live, _) = Live::start(&parameters).expect("started");
+    let done = live
+        .write(&json!({ "L2_z": 2.0, "screen_z": 1.0 }))
+        .expect("written");
+    assert_eq!(done["written"]["written"], 1, "{done}");
+    // The design stands where L2_z is 0: it moves the whole 2 mm, the file's 0.5 being
+    // only optobench's offset.
+    assert!((app.world("pc-lens:2")[2][3] - 2.0).abs() < 1e-12);
+    let after = std::fs::read_to_string(&sidecar).expect("read");
+    let value_of = |name: &str| {
+        let line = after
+            .lines()
+            .find(|l| l.contains(&format!("name = \"{name}\"")))
+            .unwrap_or_else(|| panic!("no {name}: {after}"));
+        let at = line.find("value = ").expect("a value") + "value = ".len();
+        line[at..]
+            .split([' ', '}'])
+            .next()
+            .and_then(|v| v.parse::<f64>().ok())
+            .expect("a number")
+    };
+    assert_eq!(value_of("L2_z"), 0.0);
+    assert_eq!(value_of("screen_z"), 1.0);
+    // L2's slide used 2 mm of its travel: its range moves with it, so the mount's limits
+    // stay where they are; the screen's slide is no CAD part and keeps its range.
+    let line = |name: &str| {
+        after
+            .lines()
+            .find(|l| l.contains(&format!("name = \"{name}\"")))
+            .map(str::to_owned)
+            .expect("declared")
+    };
+    assert!(line("L2_z").contains("range = [-7, 3]"), "{}", line("L2_z"));
+    assert!(
+        line("screen_z").contains("range = [-5, 5]"),
+        "{}",
+        line("screen_z")
+    );
+    let update = live
+        .next(Duration::from_secs(5))
+        .expect("waited")
+        .expect("traced again");
+    assert_eq!(update["geometry"], "moved");
+    let original_sidecar = data.join("original.optobench");
+    std::fs::write(&original_sidecar, &text).expect("written");
+    let expected = Registry::standard()
+        .run(
+            "trace",
+            &json!({ "path": original_sidecar.to_string_lossy(),
+                     "data_directory": data.to_string_lossy(),
+                     "dofs": { "L2_z": 2.0, "screen_z": 1.0 } }),
+        )
+        .expect("traces");
+    // Everything but the power by angle: its bins jump when a ray lies on a bin's edge,
+    // and the two ways reach the same placement by different sums (0.5 + 1.5 and 2).
+    let without_bins = |trace: &Value| {
+        let mut detectors = trace["detectors"].clone();
+        for d in detectors.as_array_mut().into_iter().flatten() {
+            d.as_object_mut().map(|m| m.remove("angular_power_w"));
+        }
+        detectors
+    };
+    close(
+        &without_bins(&update["trace"]),
+        &without_bins(&expected),
+        "detectors",
+    );
+    close(&update["trace"]["ledger"], &expected["ledger"], "ledger");
+    drop(live);
+    let _ = std::fs::remove_dir_all(&control);
+    let _ = std::fs::remove_dir_all(&data);
+}

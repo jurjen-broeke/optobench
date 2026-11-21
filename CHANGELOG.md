@@ -7,6 +7,20 @@ with the release that introduced them.
 
 Nothing yet.
 
+## 0.4.0 (2026-11-20)
+
+- M13 writing into SolidCraft: a DOF may be bound to a user parameter or a joint value
+  (`binding = { parameter = "…" }` or `{ joint = "…", index = … }`); `cad-moves` says what
+  DOF values change in the CAD design (each part's move from where the design stands, or
+  its bound parameters' and joints' changes). The live link writes them: a checkpoint,
+  one batch, every value and placement read back, and the checkpoint restored when
+  anything differs; the sidecar's CAD DOFs are then set back to 0. `optobench write-back
+  {"path", "dofs"}` does it from the command line; in the window, Apply in SolidCraft
+  (Align, with Live on) writes the last optimisation's values after asking. A contract
+  test runs every command the link sends against an installed SolidCraft, nightly in CI
+  against the latest release. After a write, each adjuster's range moves by the travel
+  it used, so repeated writes stay within a mount's limits.
+
 ## 0.3.0 (2026-11-20)
 
 - M12 the live link to SolidCraft, read only: `optobench-bridge` finds the running app

@@ -81,6 +81,23 @@ pub enum Target {
     Occurrence(String),
 }
 
+/// What a DOF is in the CAD design, for writing its value there (Phase B, M13): a
+/// parameter or a joint value that moves the part as the DOF does, or, without one, the
+/// part itself moved.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Binding {
+    /// A user parameter in mm (a slide) or degrees (a tilt), changed by the DOF's change.
+    Parameter(String),
+    /// A joint's value, by the joint's name and, for a joint of several values, its
+    /// index from 0.
+    Joint {
+        /// The joint.
+        name: String,
+        /// Which of its values; the first when `None`.
+        index: Option<usize>,
+    },
+}
+
 /// One degree of freedom.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Dof {
@@ -100,6 +117,8 @@ pub struct Dof {
     pub value: f64,
     /// Where its range comes from (a mount's specification), if said.
     pub source: Option<String>,
+    /// What it is in the CAD design, if bound (M13).
+    pub binding: Option<Binding>,
 }
 
 fn invalid(message: String) -> SceneError {

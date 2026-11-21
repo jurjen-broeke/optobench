@@ -917,7 +917,7 @@ pub(crate) fn dofs(
                 table,
                 &[
                     "name", "kind", "axis", "frame", "pivot", "range", "travel", "value",
-                    "locked", "follows", "ratio", "source",
+                    "locked", "follows", "ratio", "source", "binding",
                 ],
                 &context,
             )?;
@@ -1051,6 +1051,7 @@ pub(crate) fn dofs(
                 locked,
                 follows,
                 value: dof.optional_number("value", 0.0)? * scale,
+                binding: binding(table, &context)?,
                 source: match table.get("source") {
                     None => None,
                     Some(Value::String(text)) if !text.trim().is_empty() => Some(text.clone()),
@@ -1063,6 +1064,57 @@ pub(crate) fn dofs(
             })
         })
         .collect()
+}
+
+/// A DOF's `binding` (M13): `{ parameter = "<name>" }` or `{ joint = "<name>" }`, with
+/// `index` (from 0) for a joint of several values; none when not given.
+fn binding(
+    table: &Table,
+    context: &str,
+) -> Result<Option<optobench_scene::dof::Binding>, FileError> {
+    use optobench_scene::dof::Binding;
+    let Some(value) = table.get("binding") else {
+        return Ok(None);
+    };
+    let wrong = || {
+        error(format!(
+            "{context}: `binding` is {{ parameter = \"<name>\" }} or {{ joint = \"<name>\", index = … }}"
+        ))
+    };
+    let binding = value.as_table().ok_or_else(wrong)?;
+    check_keys(
+        binding,
+        &["parameter", "joint", "index"],
+        &format!("{context} `binding`"),
+    )?;
+    let name = |key: &str| {
+        binding
+            .get(key)
+            .map(|v| {
+                v.as_str()
+                    .filter(|s| !s.trim().is_empty())
+                    .map(str::to_owned)
+                    .ok_or_else(wrong)
+            })
+            .transpose()
+    };
+    match (name("parameter")?, name("joint")?) {
+        (Some(parameter), None) if !binding.contains_key("index") => {
+            Ok(Some(Binding::Parameter(parameter)))
+        }
+        (None, Some(joint)) => {
+            let index = match binding.get("index") {
+                None => None,
+                Some(v) => Some(
+                    v.as_integer()
+                        .and_then(|i| usize::try_from(i).ok())
+                        .ok_or_else(wrong)?,
+                ),
+            };
+            Ok(Some(Binding::Joint { name: joint, index }))
+        }
+        _ => Err(wrong()),
+    }
 }
 
 /// Checks the scene's DOFs: unique names, couplings that resolve, values in range.

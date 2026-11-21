@@ -242,3 +242,83 @@ fn moves_place_occurrences_as_a_new_export_would() {
         .expect_err("refused");
     assert!(error.message.contains("not rigid"), "{}", error.message);
 }
+
+#[test]
+fn cad_moves_say_what_to_change_in_the_design() {
+    // M13a, on the golden relay: L2 slides 2 mm along z (no binding: its occurrence is
+    // moved), L1 tilts 1.5° about x through its joint's second value, the screen's slide
+    // stays in the file. A part with one DOF bound and one not, and a binding that is
+    // neither a parameter nor a joint, are refused.
+    let dir = std::env::temp_dir().join(format!("optobench-cad-moves-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("dir");
+    let original = std::fs::read_to_string(fixtures().join("cage-relay.optobench")).expect("read");
+    let step = fixtures().join("cage-relay.step");
+    let with = |extra_l1: &str, extra_l2: &str| {
+        original
+            .replace(
+                "body = { product = \"pc-lens\", occurrence = \"pc-lens:1\" }",
+                &format!(
+                    "body = {{ product = \"pc-lens\", occurrence = \"pc-lens:1\" }}\n{extra_l1}"
+                ),
+            )
+            .replace(
+                "body = { product = \"pc-lens\", occurrence = \"pc-lens:2\" }",
+                &format!(
+                    "body = {{ product = \"pc-lens\", occurrence = \"pc-lens:2\" }}\n{extra_l2}"
+                ),
+            )
+            .replace(
+                "kind = \"sidecar\"\n",
+                &format!("kind = \"sidecar\"\nstep = '{}'\n", step.to_string_lossy()),
+            )
+            + "dof = [ { name = \"screen_z\", kind = \"slide\", axis = [0, 0, 1], range = [-5, 5] } ]\n"
+    };
+    let run = |text: &str, dofs: Value| {
+        let path = dir.join("relay.optobench");
+        std::fs::write(&path, text).expect("written");
+        Registry::standard().run(
+            "cad-moves",
+            &json!({ "path": path.to_string_lossy(), "data_directory": dir.to_string_lossy(), "dofs": dofs }),
+        )
+    };
+    let l1 = "dof = [ { name = \"L1_tip\", kind = \"tilt\", axis = [1, 0, 0], range = [-5, 5], binding = { joint = \"L1 mount\", index = 1 } } ]";
+    let l2 = "dof = [ { name = \"L2_z\", kind = \"slide\", axis = [0, 0, 1], range = [-5, 5] } ]";
+    let result = run(
+        &with(l1, l2),
+        json!({ "L1_tip": 1.5, "L2_z": 2.0, "screen_z": 1.0 }),
+    )
+    .expect("planned");
+    let item = |occurrence: &str| {
+        result["items"]
+            .as_array()
+            .and_then(|l| l.iter().find(|i| i["occurrence"] == occurrence))
+            .cloned()
+            .unwrap_or_else(|| panic!("no {occurrence}: {result}"))
+    };
+    let moved = item("pc-lens:2");
+    assert_eq!(moved["bindings"], Value::Null);
+    assert_eq!(moved["matrix"][2][3], json!(2.0));
+    assert_eq!(moved["matrix"][3], json!([0.0, 0.0, 0.0, 1.0]));
+    let tipped = item("pc-lens:1");
+    assert!((tipped["rotate_deg"].as_f64().expect("deg") - 1.5).abs() < 1e-12);
+    let binding = &tipped["bindings"][0];
+    assert_eq!(binding["joint"], "L1 mount");
+    assert_eq!(binding["index"], 1);
+    assert_eq!(binding["unit"], "deg");
+    assert!((binding["change"].as_f64().expect("change") - 1.5).abs() < 1e-12);
+    assert_eq!(result["skipped"][0]["name"], "image");
+    assert_eq!(result["skipped"][0]["changed"], true);
+    // Mixed on one part, and a binding of neither kind: refused.
+    let mixed = "dof = [ { name = \"L2_z\", kind = \"slide\", axis = [0, 0, 1], binding = { parameter = \"L2_z\" } },\n        { name = \"L2_x\", kind = \"slide\", axis = [1, 0, 0] } ]";
+    let error = run(&with("", mixed), json!({ "L2_z": 1.0 })).expect_err("refused");
+    assert!(
+        error.message.contains("bind all its degrees of freedom"),
+        "{}",
+        error.message
+    );
+    let odd = "dof = [ { name = \"L2_z\", kind = \"slide\", axis = [0, 0, 1], binding = { motor = \"x\" } } ]";
+    let error = run(&with("", odd), json!({ "L2_z": 1.0 })).expect_err("refused");
+    assert!(error.message.contains("`binding`"), "{}", error.message);
+    let _ = std::fs::remove_dir_all(&dir);
+}

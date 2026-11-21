@@ -38,6 +38,10 @@ fn help(registry: &Registry) -> String {
         "live"
     ));
     text.push_str(&format!(
+        "  {:<12} degree-of-freedom values made in the design open in SolidCraft, read back\n               ({{\"path\": \"<sidecar>\", \"dofs\": {{\"<name>\": value}}}})\n",
+        "write-back"
+    ));
+    text.push_str(&format!(
         "  {:<12} print this help\n\nPlanned (see docs/design.md, Milestones):\n  {PLANNED}\n",
         "help"
     ));
@@ -145,6 +149,52 @@ fn live(argument: Option<&str>) -> ExitCode {
     ExitCode::SUCCESS
 }
 
+/// `optobench write-back {"path": "<sidecar>", "dofs": {"<name>": value}, …}`: the DOF
+/// values (mm or degrees) made in the design open in SolidCraft (M13), read back and
+/// taken back whole if anything differs; the sidecar's CAD DOFs then set back to 0. Prints
+/// what was written and the trace after it (short, as `live` prints it).
+fn write_back(argument: Option<&str>) -> ExitCode {
+    let fail = |error: CommandError| {
+        print_json(&error.to_json());
+        ExitCode::FAILURE
+    };
+    let mut parameters = match read_parameters(argument) {
+        Ok(Value::Object(map)) => map,
+        Ok(_) => {
+            return fail(CommandError::new(
+                ErrorCode::InvalidParameters,
+                "write-back takes {\"path\": \"<sidecar>\", \"dofs\": {…}}",
+            ));
+        }
+        Err(error) => return fail(error),
+    };
+    let Some(dofs) = parameters.remove("dofs") else {
+        return fail(CommandError::new(
+            ErrorCode::InvalidParameters,
+            "missing parameter `dofs`",
+        ));
+    };
+    let (mut session, _) = match optobench_bridge::live::Live::start(&parameters) {
+        Ok(started) => started,
+        Err(error) => return fail(error),
+    };
+    let written = match session.write(&dofs) {
+        Ok(written) => written,
+        Err(error) => return fail(error),
+    };
+    let after = match session.next(std::time::Duration::from_secs(60)) {
+        Ok(Some(update)) => live_summary(&update),
+        Ok(None) => Value::Null,
+        Err(error) => return fail(error),
+    };
+    print_json(&serde_json::json!({
+        "written": written["written"],
+        "sidecar": written["sidecar"],
+        "after": after,
+    }));
+    ExitCode::SUCCESS
+}
+
 fn main() -> ExitCode {
     let registry = Registry::standard();
     let arguments: Vec<String> = std::env::args().skip(1).collect();
@@ -179,6 +229,9 @@ fn main() -> ExitCode {
 
     if command == "live" {
         return live(arguments.get(1).map(String::as_str));
+    }
+    if command == "write-back" {
+        return write_back(arguments.get(1).map(String::as_str));
     }
 
     let outcome = read_parameters(arguments.get(1).map(String::as_str))

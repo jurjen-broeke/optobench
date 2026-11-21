@@ -122,6 +122,7 @@ pub fn apply(scene: &Scene, errors: &[f64]) -> Result<Scene, String> {
                     follows: None,
                     value: 0.0,
                     source: None,
+                    binding: None,
                 });
                 overrides.insert(name, e);
             }

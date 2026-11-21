@@ -431,7 +431,7 @@ pub fn draw(painter: &Painter, rect: Rect, id: &str, enabled: bool) {
                 r.p1,
             );
         }
-        "apply" => {
+        "apply" | "apply-live" => {
             c.cuboid(
                 Iso::at(0.9, 32.0, 40.0),
                 [-12.0, -12.0, 0.0],
@@ -448,6 +448,12 @@ pub fn draw(painter: &Painter, rect: Rect, id: &str, enabled: bool) {
                 ACTION,
                 r.a3,
             );
+            if id == "apply-live" {
+                // The link's arrows going round, as Live's: made in SolidCraft.
+                let ring = c.arc(pos2(14.0, 50.0), 9.0, 200.0, 340.0);
+                c.line(&ring, 2.6, r.beam);
+                c.arrow(ring[ring.len() - 2], ring[ring.len() - 1], 2.6, r.beam);
+            }
         }
         // ----- Optics -----
         "lens" | "add-lens" => {
@@ -941,6 +947,7 @@ pub const ALL: &[&str] = &[
     "remove",
     "edit",
     "apply",
+    "apply-live",
     "lens",
     "add-lens",
     "mirror",

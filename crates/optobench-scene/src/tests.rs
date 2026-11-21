@@ -425,6 +425,7 @@ fn poses_follow_dof_values_however_they_are_reached() {
         follows: None,
         value,
         source: None,
+        binding: None,
     };
     let tilt = Motion::Tilt {
         axis: Vec3::X,
