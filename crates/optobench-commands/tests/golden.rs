@@ -322,3 +322,75 @@ fn cad_moves_say_what_to_change_in_the_design() {
     assert!(error.message.contains("`binding`"), "{}", error.message);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn a_group_moves_its_lens_with_the_cad_parts_it_names() {
+    // M18a: L2 and its cage plate (an untagged CAD part) in a group with a free slide
+    // along z; at 1 mm it traces as the moved re-export does (both moved 1 mm along z).
+    let dir = std::env::temp_dir().join(format!("optobench-group-parts-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("dir");
+    let original = std::fs::read_to_string(fixtures().join("cage-relay.optobench")).expect("read");
+    let step = fixtures().join("cage-relay.step");
+    let sidecar = |group: &str| {
+        original
+            .replace(
+                "kind = \"sidecar\"\n",
+                &format!("kind = \"sidecar\"\nstep = '{}'\n", step.to_string_lossy()),
+            )
+            .replace(
+                "body = { product = \"pc-lens\", occurrence = \"pc-lens:2\" }",
+                "body = { product = \"pc-lens\", occurrence = \"pc-lens:2\" }\ngroup = \"L2 assembly\"",
+            )
+            + group
+    };
+    let good = "\n[[group]]\nid = \"L2 assembly\"\noccurrences = [\"cage-plate:2\"]\ndof = [ { name = \"L2_rail\", kind = \"slide\", axis = [0, 0, 1], range = \"free\" } ]\n";
+    let path = dir.join("relay.optobench");
+    std::fs::write(&path, sidecar(good)).expect("written");
+    let run = |extra: Value| {
+        let mut parameters =
+            json!({ "path": path.to_string_lossy(), "data_directory": dir.to_string_lossy() });
+        for (k, v) in extra.as_object().expect("an object") {
+            parameters[k] = v.clone();
+        }
+        Registry::standard().run("trace", &parameters)
+    };
+    let slid = run(json!({ "dofs": { "L2_rail": 1.0 } })).expect("traces");
+    let names: Vec<&str> = slid["dofs"]
+        .as_array()
+        .expect("dofs")
+        .iter()
+        .filter_map(|d| d["name"].as_str())
+        .collect();
+    assert_eq!(
+        names,
+        ["L2_rail", "L2_rail_cage-plate:2"],
+        "{}",
+        slid["dofs"]
+    );
+    let exported =
+        run(json!({ "step": fixtures().join("cage-relay-moved.step").to_string_lossy() }))
+            .expect("traces");
+    same(&slid["detectors"], &exported["detectors"], "detectors");
+    same(&slid["ledger"], &exported["ledger"], "ledger");
+    // Refused: a free range with a travel, a part the assembly does not have.
+    for (bad, says) in [
+        (
+            good.replace("range = \"free\"", "range = \"free\", travel = 5"),
+            "no `travel`",
+        ),
+        (
+            good.replace("cage-plate:2", "cage-plate:9"),
+            "does not have",
+        ),
+        (
+            good.replace("range = \"free\"", "range = \"loose\""),
+            "or \"free\"",
+        ),
+    ] {
+        std::fs::write(&path, sidecar(&bad)).expect("written");
+        let error = run(json!({})).expect_err("refused");
+        assert!(error.message.contains(says), "{says}: {}", error.message);
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}

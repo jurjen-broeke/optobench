@@ -113,6 +113,10 @@ fn group_mistakes_are_refused() {
             "[[group]]\nid = \"expander\"\nmembers = [\"L1\"]\n",
             "members",
         ),
+        (
+            "[[group]]\nid = \"expander\"\noccurrences = [\"mount:1\"]\n",
+            "only a sidecar has",
+        ),
     ] {
         let e = run("trace", &format!("{LAYOUT}\n{group}"), "bad", json!({})).expect_err(words);
         assert!(e.contains(words), "{words}: {e}");

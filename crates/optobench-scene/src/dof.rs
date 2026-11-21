@@ -109,6 +109,10 @@ pub struct Dof {
     pub motion: Motion,
     /// The mechanical range of the value (mm or radians), if limited.
     pub range: Option<(f64, f64)>,
+    /// A rough placement (M18, `range = "free"`): limited only by where its part would
+    /// overlap another, which `clearance` finds; `range` is then what was found, if
+    /// anything was.
+    pub free: bool,
     /// Kept at `value`; never changed by the optimiser.
     pub locked: bool,
     /// Coupled: follows this DOF, times this ratio.

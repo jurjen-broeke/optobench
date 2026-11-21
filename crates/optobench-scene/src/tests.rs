@@ -421,6 +421,7 @@ fn poses_follow_dof_values_however_they_are_reached() {
         target: Target::Element("L".into()),
         motion,
         range: None,
+        free: false,
         locked: false,
         follows: None,
         value,

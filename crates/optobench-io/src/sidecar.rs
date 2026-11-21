@@ -761,7 +761,7 @@ pub fn read_with_step(
     let embedded = crate::resolved::read(&root)?;
     let merged_library = embedded.library(lookups.library)?;
     crate::mounts::expand(&mut root, &merged_library)?;
-    crate::groups::expand(&mut root)?;
+    let group_parts = crate::groups::expand(&mut root, true)?;
     let merged_materials = |name: &str| {
         embedded
             .material(name)
@@ -1303,6 +1303,28 @@ pub fn read_with_step(
             .extend(dofs(&item, &target, &frame, false, frame.origin())?);
     }
     scene.fluorophores = crate::scene_file::fluorophores(&root, &scene)?;
+    // The CAD parts groups move (M18): each part's DOFs follow its group's.
+    for (occurrence, dof) in &group_parts {
+        if !bodies.iter().any(|b| within(&b.path, occurrence)) {
+            return Err(error(format!(
+                "a [[group]] names the CAD part `{occurrence}`, which the STEP assembly does not have (see the `bodies` command)"
+            )));
+        }
+        let entry = Value::Array(vec![Value::Table(dof.clone())]);
+        let mut table = Table::new();
+        table.insert("dof".into(), entry);
+        let item = Item {
+            table: &table,
+            context: format!("the group part `{occurrence}`"),
+        };
+        scene.dofs.extend(crate::scene_file::dofs(
+            &item,
+            &Target::Occurrence(occurrence.clone()),
+            &Frame::PARENT,
+            true,
+            Vec3::ZERO,
+        )?);
+    }
     crate::scene_file::check_dofs(&scene)?;
     scene.tolerances = crate::tolerance::tolerances(&root, &scene, &cad)?;
     let scene = scene.placed().map_err(|e| error(e.to_string()))?;
