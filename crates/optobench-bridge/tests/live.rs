@@ -259,7 +259,7 @@ fn dof_values_are_written_into_the_design_and_traced_again() {
         .replace(
             "kind = \"sidecar\"\n",
             &format!(
-                "kind = \"sidecar\"\nstep = \"{}\"\n",
+                "kind = \"sidecar\"\nstep = '{}'\n",
                 fixtures.join("cage-relay.step").to_string_lossy()
             ),
         )

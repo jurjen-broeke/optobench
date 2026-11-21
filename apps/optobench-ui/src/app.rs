@@ -3935,7 +3935,7 @@ mod exit {
             .expect("read")
             .replace(
                 "kind = \"sidecar\"\n",
-                &format!("kind = \"sidecar\"\nstep = \"{}\"\n", fixtures.join("cage-relay.step").to_string_lossy()),
+                &format!("kind = \"sidecar\"\nstep = '{}'\n", fixtures.join("cage-relay.step").to_string_lossy()),
             )
             .replace(
                 "body = { product = \"pc-lens\", occurrence = \"pc-lens:2\" }",

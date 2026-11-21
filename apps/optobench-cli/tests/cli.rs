@@ -111,7 +111,7 @@ fn write_back_makes_values_in_the_design() {
         .expect("read")
         .replace(
             "kind = \"sidecar\"\n",
-            &format!("kind = \"sidecar\"\nstep = \"{}\"\n", fixtures.join("cage-relay.step").to_string_lossy()),
+            &format!("kind = \"sidecar\"\nstep = '{}'\n", fixtures.join("cage-relay.step").to_string_lossy()),
         )
         .replace(
             "body = { product = \"pc-lens\", occurrence = \"pc-lens:2\" }",

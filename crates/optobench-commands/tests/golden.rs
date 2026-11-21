@@ -270,10 +270,7 @@ fn cad_moves_say_what_to_change_in_the_design() {
             )
             .replace(
                 "kind = \"sidecar\"\n",
-                &format!(
-                    "kind = \"sidecar\"\nstep = \"{}\"\n",
-                    step.to_string_lossy()
-                ),
+                &format!("kind = \"sidecar\"\nstep = '{}'\n", step.to_string_lossy()),
             )
             + "dof = [ { name = \"screen_z\", kind = \"slide\", axis = [0, 0, 1], range = [-5, 5] } ]\n"
     };
