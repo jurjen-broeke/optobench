@@ -125,7 +125,9 @@
 //!         { name = "L3_x", kind = "slide", axis = "x", locked = true, value = 0.1 } ]
 //! # a coupled DOF: { name = "D_z", kind = "slide", axis = "z", follows = "L3_z", ratio = 1 }
 //! # a DOF's travel: `range = [low, high]`, or `travel = 12.7` (the whole travel, the
-//! # part placed in its middle); `source = "…"` says where it comes from. A mount's
+//! # part placed in its middle), or `range = "free"`: a rough placement, limited only by
+//! # where its part would overlap another (M18; in a sidecar a [[group]] names the CAD
+//! # parts that move with it, see `groups`); `source = "…"` says where it comes from. A mount's
 //! # adjusters are written once in a [[mount]] and given by `mount = "<id>"` (see
 //! # `mounts`); `trace`, `optimize` and `tolerance` warn about slides that adjust 1 mm or
 //! # less either way (`small_range_mm`)
@@ -1001,7 +1003,23 @@ pub(crate) fn dofs(
                 };
                 Motion::Tilt { axis, pivot }
             };
-            let range = match (table.get("range"), table.get("travel")) {
+            // A rough placement: limited by the space around its part (M18).
+            let free = table.get("range").and_then(Value::as_str) == Some("free");
+            if free {
+                if let Some(key) = ["travel", "follows"].iter().find(|k| table.contains_key(**k)) {
+                    return Err(error(format!(
+                        "{context}: a free range is the space around the part; it has no `{key}`"
+                    )));
+                }
+                if kind == "collar" {
+                    return Err(error(format!("{context}: a collar has no free range")));
+                }
+            } else if let Some(Value::String(other)) = table.get("range") {
+                return Err(error(format!(
+                    "{context}: `range` is [low, high] or \"free\", not \"{other}\""
+                )));
+            }
+            let range = match (table.get("range").filter(|_| !free), table.get("travel")) {
                 (Some(_), Some(_)) => {
                     return Err(error(format!(
                         "{context}: give `range` or `travel`, not both"
@@ -1048,6 +1066,7 @@ pub(crate) fn dofs(
                 target: target.clone(),
                 motion,
                 range,
+                free,
                 locked,
                 follows,
                 value: dof.optional_number("value", 0.0)? * scale,
@@ -1574,7 +1593,7 @@ pub fn parse_with(text: &str, lookups: &Lookups) -> Result<Scene, FileError> {
     let embedded = crate::resolved::read(&root)?;
     let merged_library = embedded.library(lookups.library)?;
     crate::mounts::expand(&mut root, &merged_library)?;
-    crate::groups::expand(&mut root)?;
+    crate::groups::expand(&mut root, false)?;
     let merged_materials = |name: &str| {
         embedded
             .material(name)

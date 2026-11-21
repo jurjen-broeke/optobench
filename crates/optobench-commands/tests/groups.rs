@@ -113,8 +113,45 @@ fn group_mistakes_are_refused() {
             "[[group]]\nid = \"expander\"\nmembers = [\"L1\"]\n",
             "members",
         ),
+        (
+            "[[group]]\nid = \"expander\"\noccurrences = [\"mount:1\"]\n",
+            "only a sidecar has",
+        ),
     ] {
         let e = run("trace", &format!("{LAYOUT}\n{group}"), "bad", json!({})).expect_err(words);
         assert!(e.contains(words), "{words}: {e}");
     }
+}
+
+#[test]
+fn a_free_slide_in_a_layout_stops_at_the_next_lens() {
+    // M18d: a table layout's lens L1 (biconvex R ±50 mm, 4 mm, Ø25.4: its vertices its
+    // outermost points) on a free slide along the beam, L2 the same 100 mm further on.
+    // L1 goes 96 mm towards L2 (its back vertex at 54 mm, L2's front at 150) plus the
+    // 0.05 mm they may sink in; back the other way nothing with a size is in the way.
+    let lens = |id: &str, hole: i64, dof: &str| {
+        format!(
+            "[[element]]\nid = \"{id}\"\nkind = \"lens\"\nhole = [{hole}, 0]\nheight = 75.0\naxis = [1, 0, 0]\n\
+             surfaces = [{{ radius = 50.0 }}, {{ radius = -50.0 }}]\nthickness = [4.0]\nmaterial = [1.5]\n\
+             diameter = 25.4\nclear_aperture = 22.9\n{dof}\n"
+        )
+    };
+    let text = format!(
+        "format = \"optobench/1\"\nkind = \"layout\"\nlayout = \"table\"\n\n[table]\npitch = 25.0\n\n\
+         [[source]]\nid = \"S1\"\nkind = \"collimated\"\nwavelength_um = 0.633\npower_w = 0.001\ndiameter = 2.0\n\
+         hole = [0, 0]\nheight = 75.0\naxis = [1, 0, 0]\n\n{}{}\
+         [[detector]]\nid = \"D1\"\nhole = [10, 0]\nheight = 75.0\naxis = [1, 0, 0]\nsize = [20, 20]\npixels = [20, 20]\n",
+        lens(
+            "L1",
+            2,
+            "dof = [ { name = \"L1_rail\", kind = \"slide\", axis = [1, 0, 0], frame = \"scene\", range = \"free\" } ]"
+        ),
+        lens("L2", 6, ""),
+    );
+    let found = run("clearance", &text, "layout-clearance", json!({})).expect("found");
+    let d = &found["dofs"][0];
+    let high = d["range"][1].as_f64().expect("high");
+    assert!((high - 96.05).abs() < 1e-6, "{high}");
+    assert_eq!(d["stopped_by"][1], "L2");
+    assert_eq!(d["stopped_by"][0], Value::Null);
 }

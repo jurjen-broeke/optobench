@@ -368,6 +368,14 @@ const STANDARD: &[Command] = &[
         handler: moves::check_moves,
     },
     Command {
+        id: "clearance",
+        label: "Clearance",
+        icon: "check-moves",
+        effect: Effect::Read,
+        summary: "how far each free degree of freedom can move each way before its parts overlap another part",
+        handler: moves::clearance,
+    },
+    Command {
         id: "cad-moves",
         label: "CAD Moves",
         icon: "check-moves",

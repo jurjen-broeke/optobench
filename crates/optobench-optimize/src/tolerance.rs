@@ -118,6 +118,7 @@ pub fn apply(scene: &Scene, errors: &[f64]) -> Result<Scene, String> {
                     target: t.target.clone(),
                     motion: *motion,
                     range: None,
+                    free: false,
                     locked: true,
                     follows: None,
                     value: 0.0,

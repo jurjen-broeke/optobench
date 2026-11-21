@@ -322,3 +322,219 @@ fn cad_moves_say_what_to_change_in_the_design() {
     assert!(error.message.contains("`binding`"), "{}", error.message);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn a_group_moves_its_lens_with_the_cad_parts_it_names() {
+    // M18a: L2 and its cage plate (an untagged CAD part) in a group with a free slide
+    // along z; at 1 mm it traces as the moved re-export does (both moved 1 mm along z).
+    let dir = std::env::temp_dir().join(format!("optobench-group-parts-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("dir");
+    let original = std::fs::read_to_string(fixtures().join("cage-relay.optobench")).expect("read");
+    let step = fixtures().join("cage-relay.step");
+    let sidecar = |group: &str| {
+        original
+            .replace(
+                "kind = \"sidecar\"\n",
+                &format!("kind = \"sidecar\"\nstep = '{}'\n", step.to_string_lossy()),
+            )
+            .replace(
+                "body = { product = \"pc-lens\", occurrence = \"pc-lens:2\" }",
+                "body = { product = \"pc-lens\", occurrence = \"pc-lens:2\" }\ngroup = \"L2 assembly\"",
+            )
+            + group
+    };
+    let good = "\n[[group]]\nid = \"L2 assembly\"\noccurrences = [\"cage-plate:2\"]\ndof = [ { name = \"L2_rail\", kind = \"slide\", axis = [0, 0, 1], range = \"free\" } ]\n";
+    let path = dir.join("relay.optobench");
+    std::fs::write(&path, sidecar(good)).expect("written");
+    let run = |extra: Value| {
+        let mut parameters =
+            json!({ "path": path.to_string_lossy(), "data_directory": dir.to_string_lossy() });
+        for (k, v) in extra.as_object().expect("an object") {
+            parameters[k] = v.clone();
+        }
+        Registry::standard().run("trace", &parameters)
+    };
+    let slid = run(json!({ "dofs": { "L2_rail": 1.0 } })).expect("traces");
+    let names: Vec<&str> = slid["dofs"]
+        .as_array()
+        .expect("dofs")
+        .iter()
+        .filter_map(|d| d["name"].as_str())
+        .collect();
+    assert_eq!(
+        names,
+        ["L2_rail", "L2_rail_cage-plate:2"],
+        "{}",
+        slid["dofs"]
+    );
+    let exported =
+        run(json!({ "step": fixtures().join("cage-relay-moved.step").to_string_lossy() }))
+            .expect("traces");
+    same(&slid["detectors"], &exported["detectors"], "detectors");
+    same(&slid["ledger"], &exported["ledger"], "ledger");
+    // Refused: a free range with a travel, a part the assembly does not have.
+    for (bad, says) in [
+        (
+            good.replace("range = \"free\"", "range = \"free\", travel = 5"),
+            "no `travel`",
+        ),
+        (
+            good.replace("cage-plate:2", "cage-plate:9"),
+            "does not have",
+        ),
+        (
+            good.replace("range = \"free\"", "range = \"loose\""),
+            "or \"free\"",
+        ),
+    ] {
+        std::fs::write(&path, sidecar(&bad)).expect("written");
+        let error = run(json!({})).expect_err("refused");
+        assert!(error.message.contains(says), "{says}: {}", error.message);
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_free_slide_stops_where_its_parts_would_overlap() {
+    // M18b, on the golden relay: L2 and its cage plate slide along z (free) until the
+    // plate meets the other plate, 117.5 mm below (plate 2's underside at z 180.5, plate
+    // 1's top at 63, from the relay's script), plus the 0.05 mm they may sink in, the
+    // faces meeting square; upwards nothing is in the way (the rods' ends are not an
+    // overlap). Tilted about x through L2, the plate meets the rods through its holes
+    // almost at once.
+    let dir = std::env::temp_dir().join(format!("optobench-clearance-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("dir");
+    let original = std::fs::read_to_string(fixtures().join("cage-relay.optobench")).expect("read");
+    let sidecar = |dof: &str| {
+        original
+            .replace(
+                "kind = \"sidecar\"\n",
+                &format!("kind = \"sidecar\"\nstep = '{}'\n", fixtures().join("cage-relay.step").to_string_lossy()),
+            )
+            .replace(
+                "body = { product = \"pc-lens\", occurrence = \"pc-lens:2\" }",
+                "body = { product = \"pc-lens\", occurrence = \"pc-lens:2\" }\ngroup = \"L2 assembly\"",
+            )
+            + &format!("\n[[group]]\nid = \"L2 assembly\"\noccurrences = [\"cage-plate:2\"]\ndof = [ {dof} ]\n")
+    };
+    let path = dir.join("relay.optobench");
+    let run = |dof: &str| {
+        std::fs::write(&path, sidecar(dof)).expect("written");
+        Registry::standard()
+            .run(
+                "clearance",
+                &json!({ "path": path.to_string_lossy(), "data_directory": dir.to_string_lossy() }),
+            )
+            .expect("found")
+    };
+    let slide = run("{ name = \"L2_rail\", kind = \"slide\", axis = [0, 0, 1], range = \"free\" }");
+    let d = &slide["dofs"][0];
+    assert_eq!(d["name"], "L2_rail");
+    let low = d["range"][0].as_f64().expect("low");
+    assert!((low + 117.55).abs() < 1e-6, "{low}");
+    assert_eq!(d["stopped_by"][0], "cage-plate:1/Plate");
+    assert_eq!(d["stopped_by"][1], Value::Null);
+    let tilt = run(
+        "{ name = \"L2_turn\", kind = \"tilt\", axis = [1, 0, 0], pivot = [0, 0, 185.6], range = \"free\" }",
+    );
+    let d = &tilt["dofs"][0];
+    assert_eq!(d["unit"], "deg");
+    let (low, high) = (
+        d["range"][0].as_f64().expect("low"),
+        d["range"][1].as_f64().expect("high"),
+    );
+    assert!(
+        low < 0.0 && high > 0.0 && high.abs() < 5.0 && low.abs() < 5.0,
+        "{low} {high}"
+    );
+    for by in d["stopped_by"].as_array().expect("both") {
+        assert!(by.as_str().is_some_and(|b| b.starts_with("rod:")), "{d}");
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_rough_placement_comes_back_before_the_adjusters_move() {
+    // M18c, on the golden relay: L2 with its cage plate placed 20 mm too high on a free
+    // slide, and L2's own adjuster (±1 mm across x) off-centre at 0.3 mm. With a focus
+    // term at the image, one optimisation runs two stages: the rough placement back to
+    // the smallest spot, with the adjuster held in the middle of its travel; then the
+    // adjuster alone, which stays in the middle (the relay is centred). The rough stage
+    // ends where one stage does with an ordinary range in place of the free one and the
+    // adjuster locked in the middle (0.85 mm above the design's place: the RMS spot of
+    // the R 30 mm lenses' spherical aberration is smallest there, 0.011 mm against
+    // 0.033 mm at the paraxial image).
+    let dir = std::env::temp_dir().join(format!("optobench-stages-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("dir");
+    let text = std::fs::read_to_string(fixtures().join("cage-relay.optobench"))
+        .expect("read")
+        .replace(
+            "kind = \"sidecar\"\n",
+            &format!("kind = \"sidecar\"\nstep = '{}'\n", fixtures().join("cage-relay.step").to_string_lossy()),
+        )
+        .replace(
+            "body = { product = \"pc-lens\", occurrence = \"pc-lens:2\" }",
+            "body = { product = \"pc-lens\", occurrence = \"pc-lens:2\" }\ngroup = \"L2 assembly\"\ndof = [ { name = \"L2_x\", kind = \"slide\", axis = [1, 0, 0], frame = \"scene\", range = [-1, 1], value = 0.3 } ]",
+        )
+        + "\n[[group]]\nid = \"L2 assembly\"\noccurrences = [\"cage-plate:2\"]\ndof = [ { name = \"L2_rail\", kind = \"slide\", axis = [0, 0, 1], range = \"free\", value = 20 } ]\n\n[[merit]]\nkind = \"focus\"\ndetector = \"image\"\n";
+    let optimised = |text: &str, name: &str| {
+        let path = dir.join(name);
+        std::fs::write(&path, text).expect("written");
+        Registry::standard()
+            .run(
+                "optimize",
+                &json!({ "path": path.to_string_lossy(), "data_directory": dir.to_string_lossy() }),
+            )
+            .expect("optimised")
+    };
+    let reference = optimised(
+        &text
+            .replace(
+                "range = \"free\", value = 20",
+                "range = [-30, 30], value = 20",
+            )
+            .replace(
+                "range = [-1, 1], value = 0.3",
+                "range = [-1, 1], locked = true",
+            ),
+        "reference.optobench",
+    );
+    let result = optimised(&text, "relay.optobench");
+    let stages: Vec<&str> = result["stages"]
+        .as_array()
+        .expect("stages")
+        .iter()
+        .filter_map(|s| s["stage"].as_str())
+        .collect();
+    assert_eq!(stages, ["rough", "fine"], "{}", result["stages"]);
+    assert_eq!(result["stages"][0]["dofs"], json!(["L2_rail"]));
+    assert_eq!(result["stages"][1]["dofs"], json!(["L2_x"]));
+    let value = |name: &str| {
+        result["dofs"]
+            .as_array()
+            .and_then(|l| l.iter().find(|d| d["name"] == name))
+            .and_then(|d| d["suggested"].as_f64())
+            .unwrap_or_else(|| panic!("no {name}: {}", result["dofs"]))
+    };
+    let expected = reference["dofs"][0]["suggested"]
+        .as_f64()
+        .expect("the reference");
+    assert!((expected - 0.85).abs() < 0.1, "{expected}");
+    assert!(
+        (value("L2_rail") - expected).abs() < 1e-3,
+        "{} against {expected}",
+        value("L2_rail")
+    );
+    assert!(value("L2_x").abs() < 0.01, "{}", value("L2_x"));
+    let cost = |k: &str| result["cost"][k].as_f64().expect("cost");
+    assert!(
+        cost("end") < 1e-3 * cost("start"),
+        "{} to {}",
+        cost("start"),
+        cost("end")
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}

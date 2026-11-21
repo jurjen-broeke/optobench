@@ -718,13 +718,37 @@ impl Document {
             }
             ("optimize", Ok(value)) => {
                 let cost = |k: &str| value["cost"][k].as_f64().unwrap_or(f64::NAN);
+                // Two stages (M18): the rough placements, then the adjusters.
+                let stages: Vec<String> = value["stages"]
+                    .as_array()
+                    .filter(|s| s.len() > 1)
+                    .into_iter()
+                    .flatten()
+                    .map(|s| {
+                        let c = |k: &str| s["cost"][k].as_f64().unwrap_or(f64::NAN);
+                        format!(
+                            "{} ({}) {:.3e} to {:.3e}",
+                            s["stage"].as_str().unwrap_or("?"),
+                            s["dofs"].as_array().map_or(0, Vec::len),
+                            c("start"),
+                            c("end")
+                        )
+                    })
+                    .collect();
                 self.messages.push(Message {
                     error: false,
-                    text: format!(
-                        "Optimised: merit {:.3e} to {:.3e}; Apply writes the values",
-                        cost("start"),
-                        cost("end")
-                    ),
+                    text: if stages.is_empty() {
+                        format!(
+                            "Optimised: merit {:.3e} to {:.3e}; Apply writes the values",
+                            cost("start"),
+                            cost("end")
+                        )
+                    } else {
+                        format!(
+                            "Optimised in two stages: {}; Apply writes the values",
+                            stages.join(", then ")
+                        )
+                    },
                 });
                 self.output = Some(("optimize".into(), value.clone()));
                 self.optimised = Some(value);

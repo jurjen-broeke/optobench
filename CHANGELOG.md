@@ -7,6 +7,17 @@ with the release that introduced them.
 
 Nothing yet.
 
+## 0.5.0 (2026-11-21)
+
+- M18 rough placement, then fine adjustment: a DOF with `range = "free"` is limited only
+  by the space around its parts, found by the new `clearance` command (how far each way
+  before a part sinks more than 0.05 mm into another, and which part stops it). In a
+  sidecar a `[[group]]` takes `occurrences`: CAD parts, such as a lens's mount, that move
+  with it. In a layout the items stand in as discs, boxes, tubes and plates. Optimise
+  works in two stages: the free DOFs first, every adjuster held in the middle of its
+  travel, then the adjusters alone; the window says so, and a DOF's range has a "free"
+  checkbox. The move report no longer fails for groups whose DOFs have followers.
+
 ## 0.4.0 (2026-11-20)
 
 - M13 writing into SolidCraft: a DOF may be bound to a user parameter or a joint value

@@ -1911,21 +1911,42 @@ fn dofs(
                 .color(DARK.text_dim)
                 .size(11.0),
             );
-            for (k, end) in [range.0, range.1].into_iter().enumerate() {
-                let path = format!("{base}/dof/{name}/range/{k}");
-                let shown = end.unwrap_or(if k == 0 { -10.0 } else { 10.0 });
-                if let Some(v) = number(ui, drafts, &path, shown) {
-                    let mut new = [range.0.unwrap_or(-10.0), range.1.unwrap_or(10.0)];
-                    new[k] = v;
-                    if new[0] <= new[1] {
-                        operations.push(json!({
-                            "op": "set", "dof": name, "key": "range",
-                            "value": [tidy(new[0]), tidy(new[1])],
-                        }));
+            // A rough placement (M18): as far as the space around its part allows.
+            let free = dof["range"] == "free";
+            if free {
+                ui.label(
+                    RichText::new("free: as far as the space around it allows")
+                        .color(DARK.text_dim)
+                        .size(11.0),
+                );
+            } else {
+                for (k, end) in [range.0, range.1].into_iter().enumerate() {
+                    let path = format!("{base}/dof/{name}/range/{k}");
+                    let shown = end.unwrap_or(if k == 0 { -10.0 } else { 10.0 });
+                    if let Some(v) = number(ui, drafts, &path, shown) {
+                        let mut new = [range.0.unwrap_or(-10.0), range.1.unwrap_or(10.0)];
+                        new[k] = v;
+                        if new[0] <= new[1] {
+                            operations.push(json!({
+                                "op": "set", "dof": name, "key": "range",
+                                "value": [tidy(new[0]), tidy(new[1])],
+                            }));
+                        }
                     }
                 }
+                ui.label(RichText::new(unit).color(DARK.text_dim).size(11.0));
             }
-            ui.label(RichText::new(unit).color(DARK.text_dim).size(11.0));
+            let mut ticked = free;
+            if ui
+                .checkbox(&mut ticked, "free")
+                .on_hover_text("A rough placement: limited only by where its part would overlap another; Optimise places it first, then the adjusters")
+                .changed()
+            {
+                operations.push(json!({
+                    "op": "set", "dof": name, "key": "range",
+                    "value": if ticked { json!("free") } else { json!([-10, 10]) },
+                }));
+            }
         });
     }
     // Buttons to add one.

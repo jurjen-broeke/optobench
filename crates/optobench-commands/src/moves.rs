@@ -67,7 +67,13 @@ fn poses(scene: &Scene) -> BTreeMap<String, Transform> {
 }
 
 fn zeros(scene: &Scene) -> BTreeMap<String, f64> {
-    scene.dofs.iter().map(|d| (d.name.clone(), 0.0)).collect()
+    // Those that follow another take their 0 from it.
+    scene
+        .dofs
+        .iter()
+        .filter(|d| d.follows.is_none())
+        .map(|d| (d.name.clone(), 0.0))
+        .collect()
 }
 
 /// The report for an optimisation of `scene` (as read from `design`), in JSON and
@@ -79,15 +85,18 @@ pub(crate) fn report(
     merit: &[Value],
     design: &Path,
 ) -> Result<(Value, String), CommandError> {
+    // The DOFs that lead or stand alone: those that follow take their values from them.
     let current: BTreeMap<String, f64> = scene
         .dofs
         .iter()
+        .filter(|d| d.follows.is_none())
         .map(|d| (d.name.clone(), d.value))
         .collect();
-    let mut suggested = current.clone();
-    suggested.extend(result.end());
+    let mut leading = current.clone();
+    leading.extend(result.end());
+    // Every DOF's value, those that follow included (for each item's chain of moves).
     let suggested = scene
-        .dof_values(&suggested)
+        .dof_values(&leading)
         .map_err(|e| failed(e.to_string()))?;
     let zero = zeros(scene);
     let mut moves = Vec::new();
@@ -113,7 +122,7 @@ pub(crate) fn report(
         moves.push(entry);
     }
     let step_scene = scene.moved(&zero).map_err(|e| failed(e.to_string()))?;
-    let end_scene = scene.moved(&suggested).map_err(|e| failed(e.to_string()))?;
+    let end_scene = scene.moved(&leading).map_err(|e| failed(e.to_string()))?;
     let before = poses(&step_scene);
     let after = poses(&end_scene);
     let pose_list: Vec<Value> = before
@@ -550,4 +559,78 @@ pub(crate) fn cad_moves(parameters: &Parameters) -> Result<Value, CommandError> 
             Some((d.name.clone(), json!([low * k, high * k])))
         }).collect::<serde_json::Map<String, Value>>(),
     }))
+}
+
+/// `clearance` (M18): how far each free DOF (`range = "free"`) of a design can move each
+/// way before its parts overlap another part (`optobench_scene::clearance`). Parameters
+/// `path`, optionally `dof` (one DOF, free or not), `tolerance` (mm, default 0.05),
+/// `spacing` (mm, default 1), and `data_directory`, `step` and `moves` as `trace` takes
+/// them. Per DOF its range (mm or degrees, from its value now) and what stops it each
+/// way (`null`: nothing within the scene's size, or half a turn).
+pub(crate) fn clearance(parameters: &Parameters) -> Result<Value, CommandError> {
+    check_keys(
+        parameters,
+        &[
+            "path",
+            "dof",
+            "tolerance",
+            "spacing",
+            "data_directory",
+            "step",
+            "moves",
+        ],
+    )?;
+    let invalid = |m: String| CommandError::new(ErrorCode::InvalidParameters, m);
+    let path = parameters
+        .get("path")
+        .and_then(Value::as_str)
+        .ok_or_else(|| invalid("missing parameter `path`".into()))?;
+    let (scene, _, _, _) = load(path, parameters)?;
+    let mut settings = optobench_scene::clearance::Settings::default();
+    for (key, slot) in [
+        ("tolerance", &mut settings.tolerance),
+        ("spacing", &mut settings.spacing),
+    ] {
+        if let Some(v) = parameters.get(key) {
+            *slot = v
+                .as_f64()
+                .filter(|x| *x > 0.0)
+                .ok_or_else(|| invalid(format!("`{key}` is a length in mm > 0")))?;
+        }
+    }
+    let names: Vec<String> = match parameters.get("dof").and_then(Value::as_str) {
+        Some(name) => vec![name.to_owned()],
+        None => scene
+            .dofs
+            .iter()
+            .filter(|d| d.free)
+            .map(|d| d.name.clone())
+            .collect(),
+    };
+    let dofs = names
+        .iter()
+        .map(|name| {
+            let dof = scene
+                .dofs
+                .iter()
+                .find(|d| &d.name == name)
+                .ok_or_else(|| invalid(format!("no degree of freedom `{name}`")))?;
+            let found = scene
+                .clearance(name, &settings)
+                .map_err(|e| failed(e.to_string()))?;
+            let k = if dof.motion.is_angle() {
+                180.0 / std::f64::consts::PI
+            } else {
+                1.0
+            };
+            Ok(json!({
+                "name": name,
+                "unit": if dof.motion.is_angle() { "deg" } else { "mm" },
+                "value": dof.value * k,
+                "range": [found.range.0 * k, found.range.1 * k],
+                "stopped_by": [found.stopped_by.0, found.stopped_by.1],
+            }))
+        })
+        .collect::<Result<Vec<Value>, CommandError>>()?;
+    Ok(json!({ "dofs": dofs, "tolerance_mm": settings.tolerance, "spacing_mm": settings.spacing }))
 }

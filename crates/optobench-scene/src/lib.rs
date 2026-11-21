@@ -12,6 +12,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod clearance;
 pub mod dof;
 pub mod layout;
 pub mod tolerance;
