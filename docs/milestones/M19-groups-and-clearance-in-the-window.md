@@ -39,5 +39,5 @@ given a free slide along z, and its clearance shown, all in the window.
       `L2 assembly · L2, cage-plate:2`; its Properties' slide Z writes a free slide; Find
       the space shows −117.55 mm, stopped by `cage-plate:1/Plate`, up to +513.27 mm with
       nothing in the way
-- [ ] Exit, by the user on the Thorlabs periscope: the CXY1A made to move with L1, the
-      group given a free slide along Z, and its space found
+- [x] Exit, by the user on the Thorlabs periscope (2026-11-21): the CXY1A made to move
+      with L1, the group given a free slide along Z, and its space found, "as expected"
