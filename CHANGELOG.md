@@ -16,6 +16,10 @@ Nothing yet.
   window shows "at the end of …". The layout stand-ins' cylinders are whole and a tube's
   bore and an iris's hole are now there for the clearance (their faces' loops ran the
   wrong way).
+- Open and New ask where in the system's file dialog (Open also on ⌘O / Ctrl+O, starting
+  in the open design's folder; New saves where chosen, adding `.optobench`); the title
+  bar's path field is gone (it shows the design's name, its path on hover), and the data
+  directory has a folder button.
 
 ## 0.6.0 (2026-11-21)
 

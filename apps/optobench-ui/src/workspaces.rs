@@ -128,13 +128,13 @@ impl Action {
     /// What it does, for its tooltip.
     pub fn summary(self) -> &'static str {
         match self {
-            Action::Open => "open the design typed in the title bar",
+            Action::Open => "open a design (a layout or a sidecar) chosen in a file dialog",
             Action::Reload => "read the design again from disk",
             Action::Fit => "fit the scene to the view",
             Action::Top | Action::Front | Action::Right | Action::Isometric => "a standard view",
             Action::Rays => "show or hide the traced rays",
             Action::New => {
-                "start a new layout at the path typed in the title bar: planar, or a table on a breadboard"
+                "start a new layout, planar or a table on a breadboard, saved where you choose"
             }
             Action::Undo => "put the file back as it was before the last change",
             Action::Remove => "take the selected item out of the design",

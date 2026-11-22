@@ -17,6 +17,50 @@ use crate::theme::{Accent, DARK};
 use crate::viewport::{self, Request};
 use crate::workspaces::{Action, Control, Item, Layout, Section, Stage, WORKSPACES};
 
+/// What the file dialog is asked for.
+pub(crate) enum Choice {
+    /// A design to open, starting in this folder.
+    Open { folder: Option<PathBuf> },
+    /// Where to save a new design, starting in this folder with this name.
+    Save {
+        folder: Option<PathBuf>,
+        name: String,
+    },
+    /// A folder (the data directory), starting in this one.
+    Folder { folder: Option<PathBuf> },
+}
+
+/// Open's shortcut: ⌘O, or Ctrl+O off macOS.
+const OPEN: egui::KeyboardShortcut =
+    egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, egui::Key::O);
+
+/// Asks where: the system's file dialogs, or in tests a fixed answer.
+pub(crate) type Chooser = Box<dyn FnMut(Choice) -> Option<PathBuf>>;
+
+/// The system's file dialogs (`rfd`).
+fn system_chooser() -> Chooser {
+    Box::new(|choice| {
+        let start = |dialog: rfd::FileDialog, folder: Option<PathBuf>| match folder {
+            Some(f) if f.is_dir() => dialog.set_directory(f),
+            _ => dialog,
+        };
+        match choice {
+            Choice::Open { folder } => start(rfd::FileDialog::new(), folder)
+                .set_title("Open a design")
+                .add_filter("optobench design", &["optobench"])
+                .pick_file(),
+            Choice::Save { folder, name } => start(rfd::FileDialog::new(), folder)
+                .set_title("Save the new layout as")
+                .add_filter("optobench design", &["optobench"])
+                .set_file_name(name)
+                .save_file(),
+            Choice::Folder { folder } => start(rfd::FileDialog::new(), folder)
+                .set_title("The data directory")
+                .pick_folder(),
+        }
+    })
+}
+
 /// The application.
 pub struct App {
     ctx: egui::Context,
@@ -35,7 +79,8 @@ pub struct App {
     move_on: bool,
     move_tool: crate::moving::MoveTool,
     fit_pending: bool,
-    open_path: String,
+    /// Asks where to open or save a design.
+    pub(crate) chooser: Chooser,
     /// Where imported materials, parts and curves are; empty for the platform's default.
     data_directory: String,
     confirm: Option<&'static str>,
@@ -244,7 +289,7 @@ impl App {
             move_on: false,
             move_tool: crate::moving::MoveTool::default(),
             fit_pending: false,
-            open_path: String::new(),
+            chooser: system_chooser(),
             data_directory: data_directory
                 .map(|d| d.to_string_lossy().into_owned())
                 .unwrap_or_default(),
@@ -314,7 +359,6 @@ impl App {
             0
         };
         self.tab = 0;
-        self.open_path = path.to_string_lossy().into_owned();
         let data = Some(self.data_directory.trim())
             .filter(|d| !d.is_empty())
             .map(PathBuf::from);
@@ -342,9 +386,9 @@ impl App {
         match control {
             Control::Action(action) => match action {
                 Action::Open => {
-                    let path = PathBuf::from(self.open_path.trim());
-                    if path.is_file() {
-                        self.open(path);
+                    let folder = self.folder();
+                    if let Some(path) = (self.chooser)(Choice::Open { folder }) {
+                        self.dropped(path);
                     }
                 }
                 Action::Reload => {
@@ -1052,7 +1096,6 @@ impl App {
         }
     }
 
-    /// Starts a new planar layout at the path typed in the title bar, and opens it.
     /// New's chooser: a planar layout, or a table layout on a breadboard of a pitch.
     fn new_dialog(&mut self, ctx: &egui::Context) {
         let Some(mut pitch) = self.new_dialog else {
@@ -1119,18 +1162,35 @@ impl App {
         self.move_tool.pending.clear();
     }
 
-    /// Starts a new layout: planar, or a table with this pitch (mm).
+    /// The open design's folder, where the file dialogs start.
+    fn folder(&self) -> Option<PathBuf> {
+        self.doc
+            .as_ref()
+            .and_then(|d| d.path.parent().map(PathBuf::from))
+            .filter(|f| !f.as_os_str().is_empty())
+    }
+
+    /// Starts a new layout: planar, or a table with this pitch (mm), saved where asked.
     fn new_layout(&mut self, table: Option<f64>) {
-        let typed = self.open_path.trim();
-        let path = if typed.is_empty() || PathBuf::from(typed).exists() {
-            let base = std::env::current_dir().unwrap_or_default();
-            (1..)
-                .map(|n| base.join(format!("layout-{n}.optobench")))
-                .find(|p| !p.exists())
-                .unwrap_or_default()
-        } else {
-            PathBuf::from(typed)
+        // Where: asked, starting next to the open design; the dialog has asked already
+        // whether to replace a file that is there.
+        let folder = self.folder();
+        let Some(mut path) = (self.chooser)(Choice::Save {
+            folder,
+            name: "layout.optobench".into(),
+        }) else {
+            return;
         };
+        if path.extension().is_none_or(|e| e != "optobench") {
+            path.as_mut_os_string().push(".optobench");
+        }
+        if path.is_file() && std::fs::remove_file(&path).is_err() {
+            self.notice = Some((
+                true,
+                format!("New: {} could not be replaced", path.display()),
+            ));
+            return;
+        }
         let result = optobench_commands::Registry::standard().run(
             "edit",
             &json!({
@@ -1253,12 +1313,14 @@ impl App {
             mark(ui, 14.0, self.accent().fill);
             ui.label(RichText::new("optobench").strong().size(14.0));
             ui.separator();
-            let field = egui::TextEdit::singleline(&mut self.open_path)
-                .hint_text("path to a .optobench layout or sidecar")
-                .desired_width(360.0);
-            let response = ui.add(field);
-            if response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
-                self.activate(Control::Action(Action::Open));
+            if self.doc.is_none() {
+                let keys = ui.ctx().format_shortcut(&OPEN);
+                ui.label(
+                    RichText::new(format!(
+                        "Open a design ({keys}), or drop a .optobench file on the window"
+                    ))
+                    .color(DARK.text_dim),
+                );
             }
             let data = egui::TextEdit::singleline(&mut self.data_directory)
                 .hint_text("data directory (default: the platform's)")
@@ -1269,6 +1331,18 @@ impl App {
             if response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
                 self.activate(Control::Action(Action::Reload));
             }
+            if ui
+                .small_button("…")
+                .on_hover_text("Choose the data directory")
+                .clicked()
+            {
+                let folder = Some(PathBuf::from(self.data_directory.trim()))
+                    .filter(|f| !f.as_os_str().is_empty());
+                if let Some(chosen) = (self.chooser)(Choice::Folder { folder }) {
+                    self.data_directory = chosen.to_string_lossy().into_owned();
+                    self.activate(Control::Action(Action::Reload));
+                }
+            }
             if let Some(doc) = &self.doc {
                 ui.separator();
                 Frame::new()
@@ -1276,7 +1350,8 @@ impl App {
                     .corner_radius(CornerRadius::same(DARK.radius_md))
                     .inner_margin(Margin::symmetric(10, 3))
                     .show(ui, |ui| {
-                        ui.label(RichText::new(doc.name()).strong());
+                        ui.label(RichText::new(doc.name()).strong())
+                            .on_hover_text(doc.path.to_string_lossy());
                     });
                 if !doc.running.is_empty() {
                     ui.spinner();
@@ -2631,6 +2706,9 @@ impl eframe::App for App {
         for path in dropped {
             self.dropped(path);
         }
+        if ctx.input_mut(|i| i.consume_shortcut(&OPEN)) {
+            self.activate(Control::Action(Action::Open));
+        }
 
         egui::Panel::top("app_bar")
             .exact_size(36.0)
@@ -2960,6 +3038,12 @@ mod exit {
             .build_eframe(move |cc| App::new(path, Some(data), None, cc.egui_ctx.clone()))
     }
 
+    /// A file dialog that always answers `path`.
+    fn answer(path: &Path) -> super::Chooser {
+        let path = path.to_path_buf();
+        Box::new(move |_| Some(path.clone()))
+    }
+
     /// Runs frames until the background commands are done.
     fn settle(h: &mut Harness<'static, App>) {
         let busy = |h: &Harness<'static, App>| {
@@ -3021,13 +3105,59 @@ mod exit {
     }
 
     #[test]
+    fn open_and_new_ask_where_in_a_file_dialog() {
+        // Open (the button, and ⌘O / Ctrl+O) opens what the dialog chose; a cancelled
+        // dialog changes nothing; New saves where the dialog says, adding `.optobench` to
+        // a name without it, and replaces a file there (the dialog asked already).
+        let dir = scratch("dialogs");
+        let first = dir.join("first");
+        let mut h = window(None, &dir);
+        click(&mut h, "Workspace");
+        click(&mut h, "Layout");
+        h.state_mut().chooser = Box::new(|_| None);
+        click(&mut h, "New");
+        click(&mut h, "Planar");
+        assert!(h.state().doc.is_none());
+        h.state_mut().chooser = answer(&first);
+        click(&mut h, "New");
+        click(&mut h, "Planar");
+        let made = dir.join("first.optobench");
+        assert!(made.is_file(), "New added the extension");
+        assert_eq!(
+            h.state().doc.as_ref().map(|d| d.path.clone()),
+            Some(made.clone())
+        );
+        let second = dir.join("second.optobench");
+        std::fs::write(&second, "old").expect("written");
+        h.state_mut().chooser = answer(&second);
+        click(&mut h, "New");
+        click(&mut h, "Planar");
+        let text = std::fs::read_to_string(&second).expect("read");
+        assert!(text.contains("layout = \"planar\""), "replaced: {text}");
+        // Open, by the button and by the shortcut.
+        h.state_mut().chooser = answer(&made);
+        click(&mut h, "Open");
+        assert_eq!(
+            h.state().doc.as_ref().map(|d| d.path.clone()),
+            Some(made.clone())
+        );
+        h.state_mut().chooser = answer(&second);
+        h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::O);
+        h.step();
+        assert_eq!(h.state().doc.as_ref().map(|d| d.path.clone()), Some(second));
+        h.state_mut().chooser = Box::new(|_| None);
+        click(&mut h, "Open");
+        assert!(h.state().doc.is_some(), "a cancelled Open keeps the design");
+    }
+
+    #[test]
     fn new_starts_a_table_layout_on_a_breadboard() {
         let dir = scratch("new-table");
         let path = dir.join("bench.optobench");
         let mut h = window(None, &dir);
         click(&mut h, "Workspace");
         click(&mut h, "Layout");
-        h.state_mut().open_path = path.to_string_lossy().into_owned();
+        h.state_mut().chooser = answer(&path);
         click(&mut h, "New");
         click(&mut h, "1 in");
         click(&mut h, "Table");
@@ -3119,7 +3249,7 @@ mod exit {
         let mut h = window(None, &dir);
         click(&mut h, "Workspace");
         click(&mut h, "Layout");
-        h.state_mut().open_path = path.to_string_lossy().into_owned();
+        h.state_mut().chooser = answer(&path);
         click(&mut h, "New");
         click(&mut h, "Table");
         for add in ["Source", "Lens", "Detector"] {
@@ -3454,7 +3584,7 @@ mod exit {
         let mut h = window(None, &dir);
         click(&mut h, "Workspace");
         click(&mut h, "Layout");
-        h.state_mut().open_path = path.to_string_lossy().into_owned(); // typed in the title bar
+        h.state_mut().chooser = answer(&path); // chosen in the save dialog
         click(&mut h, "New");
         click(&mut h, "Planar");
         assert!(path.is_file(), "New made the file");

@@ -28,6 +28,14 @@ Thorlabs periscope the ER rods are found as the CXY1A's guides and nothing else 
       the wrong way round (its upper part missing from the clearance's points) and a
       bore's two (a tube's bore and an iris plate's hole were not there at all)
 
+## M20c Opening and saving by dialog
+
+- [x] From the user's test (2026-11-22: Open showed no dialog, and a typed path was
+      cumbersome and easy to mistype): Open, ⌘O / Ctrl+O and New use the system's file
+      dialogs (`rfd`, MIT), starting in the open design's folder; New adds `.optobench`
+      and replaces a file the dialog confirmed; the title bar's path field is gone; the
+      data directory has a folder button
+
 ## Checks
 
 - [x] Scene (`clearance.rs`): a Ø12.7 post from z −20 to 80 in a holder's Ø12.8 bore from
@@ -43,4 +51,7 @@ Thorlabs periscope the ER rods are found as the CXY1A's guides and nothing else 
       `er10:1`, `3`, `5` and `7` (ends 159 to 162 mm up, 79.5 to 92 mm down: a 254 mm
       rod), nothing else; parts in the way stop it first (−30.93, +36.29 mm, unchanged);
       2 s more on a 13 s search
+- [x] Window (`open_and_new_ask_where_in_a_file_dialog`, the dialog answered by the
+      test): a cancelled New makes nothing, New adds the extension and replaces a file,
+      Open and the shortcut open what was chosen, a cancelled Open keeps the design
 - [ ] Exit, by the user
