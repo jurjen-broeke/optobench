@@ -54,4 +54,5 @@ Thorlabs periscope the ER rods are found as the CXY1A's guides and nothing else 
 - [x] Window (`open_and_new_ask_where_in_a_file_dialog`, the dialog answered by the
       test): a cancelled New makes nothing, New adds the extension and replaces a file,
       Open and the shortcut open what was chosen, a cancelled Open keeps the design
-- [ ] Exit, by the user
+- [x] Exit, by the user (2026-11-22): the free space on the golden cage relay found in the
+      window, and Open and New by dialog "much better and easier"
