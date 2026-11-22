@@ -4207,8 +4207,8 @@ mod exit {
         }
         h.step();
         h.step();
-        let shown =
-            "space: -117.55 mm (stopped by cage-plate:1/Plate) to +513.27 mm (nothing in the way)";
+        // Up, the plate stops flush with the rods' ends (M20).
+        let shown = "space: -117.55 mm (stopped by cage-plate:1/Plate) to +56.50 mm (at the end of rod:1/Rod)";
         assert!(
             h.query_by_label(shown).is_some(),
             "{:?}",

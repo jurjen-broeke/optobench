@@ -400,8 +400,7 @@ fn a_free_slide_stops_where_its_parts_would_overlap() {
     // M18b, on the golden relay: L2 and its cage plate slide along z (free) until the
     // plate meets the other plate, 117.5 mm below (plate 2's underside at z 180.5, plate
     // 1's top at 63, from the relay's script), plus the 0.05 mm they may sink in, the
-    // faces meeting square; upwards nothing is in the way (the rods' ends are not an
-    // overlap). Tilted about x through L2, the plate meets the rods through its holes
+    // faces meeting square. Tilted about x through L2, the plate meets the rods through its holes
     // almost at once.
     let dir = std::env::temp_dir().join(format!("optobench-clearance-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
@@ -435,7 +434,18 @@ fn a_free_slide_stops_where_its_parts_would_overlap() {
     let low = d["range"][0].as_f64().expect("low");
     assert!((low + 117.55).abs() < 1e-6, "{low}");
     assert_eq!(d["stopped_by"][0], "cage-plate:1/Plate");
-    assert_eq!(d["stopped_by"][1], Value::Null);
+    assert_eq!(d["end_of_guide"][0], false);
+    // M20: upwards the plate stops flush with the rods' ends (rods from z −5 to 245,
+    // plate 2's top at 188.5, from the relay's script): 56.5 mm.
+    let high = d["range"][1].as_f64().expect("high");
+    assert!((high - 56.5).abs() < 1e-6, "{high}");
+    assert!(
+        d["stopped_by"][1]
+            .as_str()
+            .is_some_and(|b| b.starts_with("rod:")),
+        "{d}"
+    );
+    assert_eq!(d["end_of_guide"][1], true);
     let tilt = run(
         "{ name = \"L2_turn\", kind = \"tilt\", axis = [1, 0, 0], pivot = [0, 0, 185.6], range = \"free\" }",
     );

@@ -562,11 +562,14 @@ pub(crate) fn cad_moves(parameters: &Parameters) -> Result<Value, CommandError> 
 }
 
 /// `clearance` (M18): how far each free DOF (`range = "free"`) of a design can move each
-/// way before its parts overlap another part (`optobench_scene::clearance`). Parameters
-/// `path`, optionally `dof` (one DOF, free or not), `tolerance` (mm, default 0.05),
-/// `spacing` (mm, default 1), and `data_directory`, `step` and `moves` as `trace` takes
-/// them. Per DOF its range (mm or degrees, from its value now) and what stops it each
-/// way (`null`: nothing within the scene's size, or half a turn).
+/// way before its parts overlap another part or, on a slide, reach the end of what guides
+/// them (M20; `optobench_scene::clearance`). Parameters `path`, optionally `dof` (one
+/// DOF, free or not), `tolerance` (mm, default 0.05), `spacing` (mm, default 1),
+/// `guide_gap` (mm, default 0.5: the most play a guide may have), and `data_directory`,
+/// `step` and `moves` as `trace` takes them. Per DOF its range (mm or degrees, from its
+/// value now), what stops it each way (`null`: nothing within the scene's size, or half
+/// a turn) and whether that is the end of a guide (`end_of_guide`) rather than an
+/// overlap.
 pub(crate) fn clearance(parameters: &Parameters) -> Result<Value, CommandError> {
     check_keys(
         parameters,
@@ -575,6 +578,7 @@ pub(crate) fn clearance(parameters: &Parameters) -> Result<Value, CommandError> 
             "dof",
             "tolerance",
             "spacing",
+            "guide_gap",
             "data_directory",
             "step",
             "moves",
@@ -590,6 +594,7 @@ pub(crate) fn clearance(parameters: &Parameters) -> Result<Value, CommandError> 
     for (key, slot) in [
         ("tolerance", &mut settings.tolerance),
         ("spacing", &mut settings.spacing),
+        ("guide_gap", &mut settings.guide_gap),
     ] {
         if let Some(v) = parameters.get(key) {
             *slot = v
@@ -628,9 +633,21 @@ pub(crate) fn clearance(parameters: &Parameters) -> Result<Value, CommandError> 
                 "unit": if dof.motion.is_angle() { "deg" } else { "mm" },
                 "value": dof.value * k,
                 "range": [found.range.0 * k, found.range.1 * k],
-                "stopped_by": [found.stopped_by.0, found.stopped_by.1],
+                "stopped_by": [
+                    found.stopped_by.0.as_ref().map(|s| &s.part),
+                    found.stopped_by.1.as_ref().map(|s| &s.part),
+                ],
+                "end_of_guide": [
+                    found.stopped_by.0.as_ref().is_some_and(|s| s.end),
+                    found.stopped_by.1.as_ref().is_some_and(|s| s.end),
+                ],
             }))
         })
         .collect::<Result<Vec<Value>, CommandError>>()?;
-    Ok(json!({ "dofs": dofs, "tolerance_mm": settings.tolerance, "spacing_mm": settings.spacing }))
+    Ok(json!({
+        "dofs": dofs,
+        "tolerance_mm": settings.tolerance,
+        "spacing_mm": settings.spacing,
+        "guide_gap_mm": settings.guide_gap,
+    }))
 }

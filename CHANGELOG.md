@@ -7,6 +7,16 @@ with the release that introduced them.
 
 Nothing yet.
 
+## 0.7.0 (2026-11-22)
+
+- M20 the ends of guides: a free slide stops where a part would leave what guides it (a
+  plate its rods, a post its holder, a lens its tube), not only where it would overlap
+  another part; the `clearance` command says which stops are the end of a guide
+  (`end_of_guide`) and takes `guide_gap` (the most play a guide may have, 0.5 mm), and the
+  window shows "at the end of …". The layout stand-ins' cylinders are whole and a tube's
+  bore and an iris's hole are now there for the clearance (their faces' loops ran the
+  wrong way).
+
 ## 0.6.0 (2026-11-21)
 
 - M19 groups of CAD parts and the clearance in the window: an untagged CAD part's

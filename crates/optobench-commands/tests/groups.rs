@@ -155,3 +155,34 @@ fn a_free_slide_in_a_layout_stops_at_the_next_lens() {
     assert_eq!(d["stopped_by"][1], "L2");
     assert_eq!(d["stopped_by"][0], Value::Null);
 }
+
+#[test]
+fn a_free_slide_in_a_layout_stays_in_its_tube() {
+    // M20: a table layout's lens L1 (Ø25.4, biconvex R ±50 mm, 4 mm: its stand-in a disc
+    // from its first vertex, at x 50, to 4 mm on) inside a tube from x 25, 60 mm long,
+    // with 0.1 mm of play (inner Ø25.6), on a free slide along the beam. Nothing is in
+    // the way, but the tube guides the lens: it can go 31 mm on (its back to the tube's
+    // end at 85) and 25 mm back (its front to the tube's start).
+    let text = "format = \"optobench/1\"\nkind = \"layout\"\nlayout = \"table\"\n\n[table]\npitch = 25.0\n\n\
+         [[source]]\nid = \"S1\"\nkind = \"collimated\"\nwavelength_um = 0.633\npower_w = 0.001\ndiameter = 2.0\n\
+         hole = [0, 0]\nheight = 75.0\naxis = [1, 0, 0]\n\n\
+         [[element]]\nid = \"L1\"\nkind = \"lens\"\nhole = [2, 0]\nheight = 75.0\naxis = [1, 0, 0]\n\
+         surfaces = [{ radius = 50.0 }, { radius = -50.0 }]\nthickness = [4.0]\nmaterial = [1.5]\n\
+         diameter = 25.4\nclear_aperture = 22.9\n\
+         dof = [ { name = \"L1_rail\", kind = \"slide\", axis = [1, 0, 0], frame = \"scene\", range = \"free\" } ]\n\n\
+         [[proxy]]\nid = \"tube\"\nkind = \"tube\"\nhole = [1, 0]\nheight = 75.0\naxis = [1, 0, 0]\n\
+         inner_diameter = 25.6\nlength = 60.0\n\n\
+         [[detector]]\nid = \"D1\"\nhole = [10, 0]\nheight = 75.0\naxis = [1, 0, 0]\nsize = [20, 20]\npixels = [20, 20]\n";
+    let found = run("clearance", text, "layout-tube", json!({})).expect("found");
+    let d = &found["dofs"][0];
+    let (low, high) = (
+        d["range"][0].as_f64().expect("low"),
+        d["range"][1].as_f64().expect("high"),
+    );
+    assert!(
+        (low + 25.0).abs() < 1e-6 && (high - 31.0).abs() < 1e-6,
+        "{d}"
+    );
+    assert_eq!(d["stopped_by"], json!(["tube", "tube"]));
+    assert_eq!(d["end_of_guide"], json!([true, true]));
+}
