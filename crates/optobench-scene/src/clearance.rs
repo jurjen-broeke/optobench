@@ -32,9 +32,20 @@
 //! tube a wall 1 mm thick around its bore, an iris a plate 2 mm thick with its hole.
 //! Sources and posts have no size in a layout and are left out.
 //!
+//! On a slide, a part also stops at the end of what guides it (M20): a stationary part
+//! whose surface runs alongside one of the moving parts', parallel to the slide and
+//! within a small gap (0.5 mm by default), holding it from opposing sides (a rod through
+//! a plate's hole, a post in its holder, a carrier on a dovetail rail; not a flat face
+//! the part rests on or happens to touch). Of the two surfaces in contact, the shorter
+//! one must stay within the longer: a plate stays on its rods up to their ends, a post in
+//! its holder up to the post's end. The contact is found from points of each surface
+//! whose triangle runs along the slide: a short probe across it (the gap either way)
+//! meets the other part's exact face, and from inside that part (half the gap in) a ray
+//! along the slide finds where it ends.
+//!
 //! What is missed: features thinner than the spacing that cross each other between
-//! points (two thin wires crossing), and a part that slides off the end of the rods it
-//! runs on (leaving them is not an overlap).
+//! points (two thin wires crossing), the end of a guide on a tilt (a tilting part meets
+//! its rods first), and guides with more play than the gap.
 
 use std::collections::{BTreeMap, HashMap};
 
@@ -76,11 +87,33 @@ fn rectangle(frame: &Frame, w: f64, h: f64, z: f64) -> Vec<Vec3> {
         .collect()
 }
 
-/// A plane face across local z at `z`, its normal outward along `side` (±1).
+/// A loop turned to run anticlockwise seen from the tip of `normal` (a face's outer
+/// boundary) or, for a hole, clockwise: a face's inside is to the left of its boundary
+/// seen along its normal (`BrepFace::contains`).
+fn facing(mut points: Vec<Vec3>, normal: Vec3, outer: bool) -> Vec<Vec3> {
+    // Newell's method: twice the loop's vector area.
+    let n = points.len();
+    let area = (0..n).fold(Vec3::ZERO, |sum, k| {
+        sum + points[k].cross(points[(k + 1) % n])
+    });
+    if (area.dot(normal) > 0.0) != outer {
+        points.reverse();
+    }
+    points
+}
+
+/// A plane face across local z at `z`, its normal outward along `side` (±1); the first
+/// loop its outer boundary, any others its holes.
 fn across(frame: &Frame, z: f64, side: f64, loops: Vec<Vec<Vec3>>) -> SolidFace {
     let at = Frame::from_transform(
         frame.transform() * Transform::from_translation(Vec3::new(0.0, 0.0, z)),
     );
+    let normal = frame.to_parent_vector(Vec3::Z) * side;
+    let loops = loops
+        .into_iter()
+        .enumerate()
+        .map(|(k, l)| facing(l, normal, k == 0))
+        .collect();
     SolidFace {
         geometry: std::sync::Arc::new(BrepFace::new(FaceSurface::Plane(at), side < 0.0, loops)),
         placement: Transform::IDENTITY,
@@ -90,6 +123,15 @@ fn across(frame: &Frame, z: f64, side: f64, loops: Vec<Vec<Vec3>>) -> SolidFace 
 /// A cylinder face of radius `r` about local z from `z0` to `z1`, its normal outward
 /// (away from the axis) or, for a bore, inward.
 fn around(frame: &Frame, r: f64, z0: f64, z1: f64, bore: bool) -> SolidFace {
+    // Seen from outside, the face's inside is above its lower circle running
+    // anticlockwise about z and below its upper one running the other way; from inside
+    // (a bore) the other way round.
+    let (mut low, mut high) = (circle(frame, r, z0), circle(frame, r, z1));
+    if bore {
+        low.reverse();
+    } else {
+        high.reverse();
+    }
     SolidFace {
         geometry: std::sync::Arc::new(BrepFace::new(
             FaceSurface::Cylinder {
@@ -97,7 +139,7 @@ fn around(frame: &Frame, r: f64, z0: f64, z1: f64, bore: bool) -> SolidFace {
                 radius: r,
             },
             bore,
-            vec![circle(frame, r, z0), circle(frame, r, z1)],
+            vec![low, high],
         )),
         placement: Transform::IDENTITY,
     }
@@ -132,7 +174,7 @@ fn slab(frame: &Frame, w: f64, h: f64, z0: f64, z1: f64) -> Vec<SolidFace> {
             geometry: std::sync::Arc::new(BrepFace::new(
                 FaceSurface::Plane(at),
                 false,
-                vec![corners],
+                vec![facing(corners, frame.to_parent_vector(axis), true)],
             )),
             placement: Transform::IDENTITY,
         }
@@ -164,6 +206,9 @@ pub struct Settings {
     pub spacing: f64,
     /// How the faces are tessellated for their points.
     pub fineness: Fineness,
+    /// How far apart a part and what guides it may be (mm): a rod in a hole with up to
+    /// this much play still guides it.
+    pub guide_gap: f64,
 }
 
 impl Default for Settings {
@@ -175,6 +220,7 @@ impl Default for Settings {
                 chord: 0.1,
                 ..Fineness::default()
             },
+            guide_gap: 0.5,
         }
     }
 }
@@ -184,9 +230,19 @@ impl Default for Settings {
 pub struct Clearance {
     /// The lowest and highest values (mm or radians) without an overlap.
     pub range: (f64, f64),
-    /// What stops it going lower and higher: the part (its id), or `None` when nothing
-    /// does within the search (the scene's size, or half a turn).
-    pub stopped_by: (Option<String>, Option<String>),
+    /// What stops it going lower and higher, or `None` when nothing does within the
+    /// search (the scene's size, or half a turn).
+    pub stopped_by: (Option<Stop>, Option<Stop>),
+}
+
+/// What stops a DOF one way.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Stop {
+    /// The part (its id).
+    pub part: String,
+    /// Whether the moving part reaches the end of this part, which guides it, rather
+    /// than overlapping it.
+    pub end: bool,
 }
 
 /// An axis-aligned box.
@@ -297,6 +353,47 @@ impl<'a> Shape<'a> {
         })
     }
 
+    /// Points on its surface inside `near` where it runs along unit `slide`, each with
+    /// its triangle's normal made square to the slide (unit, either sense): the triangles
+    /// subdivided to `spacing`.
+    fn points_along(&self, spacing: f64, slide: Vec3, near: &Bounds) -> Vec<(Vec3, Vec3)> {
+        let mut out = Vec::new();
+        for &[a, b, c] in &self.triangles {
+            let normal = (b - a).cross(c - a);
+            let length = normal.length();
+            if length < 1e-15 || (normal.dot(slide) / length).abs() >= ALONG {
+                continue;
+            }
+            let Some(own) = Bounds::of([a, b, c]) else {
+                continue;
+            };
+            if own.low.x > near.high.x
+                || own.high.x < near.low.x
+                || own.low.y > near.high.y
+                || own.high.y < near.low.y
+                || own.low.z > near.high.z
+                || own.high.z < near.low.z
+            {
+                continue;
+            }
+            // Across the slide exactly, so a probe does not drift along it.
+            let across = normal - slide * normal.dot(slide);
+            let u = across * (1.0 / across.length());
+            let longest = (b - a).length().max((c - b).length()).max((a - c).length());
+            let n = (longest / spacing).ceil().max(1.0) as usize;
+            for i in 0..=n {
+                for j in 0..=(n - i) {
+                    let (s, t) = (i as f64 / n as f64, j as f64 / n as f64);
+                    let p = a + (b - a) * s + (c - a) * t;
+                    if near.contains(p) {
+                        out.push((p, u));
+                    }
+                }
+            }
+        }
+        out
+    }
+
     /// Points on its surface: the triangles subdivided to `spacing`, kept where `keep`
     /// says.
     fn points(&self, spacing: f64, keep: &dyn Fn(Vec3) -> bool) -> Vec<Vec3> {
@@ -322,6 +419,16 @@ impl<'a> Shape<'a> {
 /// segment, cosine of the angle between the segment and the outward normal; negative
 /// entering, positive leaving), sorted.
 fn hits(solid: &Solid, a: Vec3, b: Vec3) -> Vec<(f64, f64)> {
+    let direction = (b - a) * (1.0 / (b - a).length().max(1e-300));
+    hits_with_normals(solid, a, b)
+        .into_iter()
+        .map(|(f, n)| (f, n.dot(direction)))
+        .collect()
+}
+
+/// Every hit of the segment from `a` to `b` with a solid's faces: (fraction along the
+/// segment, the face's outward unit normal there), sorted.
+fn hits_with_normals(solid: &Solid, a: Vec3, b: Vec3) -> Vec<(f64, Vec3)> {
     let along = b - a;
     let length = along.length();
     if length < 1e-12 {
@@ -338,12 +445,88 @@ fn hits(solid: &Solid, a: Vec3, b: Vec3) -> Vec<(f64, f64)> {
                 break;
             }
             let normal = face.placement.apply_vector(hit.normal);
-            out.push((hit.distance / length, normal.dot(direction)));
+            out.push((
+                hit.distance / length,
+                normal * (1.0 / normal.length().max(1e-300)),
+            ));
             minimum = hit.distance + 1e-9 * (1.0 + hit.distance);
         }
     }
     out.sort_by(|x, y| x.0.total_cmp(&y.0));
     out
+}
+
+/// How closely a surface must run along the slide to guide it: the sine of the largest
+/// angle between them (about 6°).
+const ALONG: f64 = 0.1;
+
+/// Where a point `p` of a surface with unit normal `u` (either sense) touches `solid`
+/// within `gap`, on a face of it running along unit `slide`: a point inside `solid`
+/// beside `p` (half the gap in, clear of the edges of faces bounded by polygons, as a
+/// stand-in's are), and the solid's outward normal there.
+fn touching(solid: &Solid, p: Vec3, u: Vec3, gap: f64, slide: Vec3) -> Option<(Vec3, Vec3)> {
+    let (a, b) = (p - u * gap, p + u * gap);
+    let (fraction, normal) = hits_with_normals(solid, a, b)
+        .into_iter()
+        .filter(|(_, n)| n.dot(slide).abs() < ALONG)
+        .min_by(|x, y| (x.0 - 0.5).abs().total_cmp(&(y.0 - 0.5).abs()))?;
+    // Into the solid: against its outward normal, along the probe.
+    let inward = if normal.dot(u) < 0.0 { u } else { -u };
+    Some((a + (b - a) * fraction + inward * (0.5 * gap), normal))
+}
+
+/// From `q` inside `solid`, how far along unit `d` until it leaves (`None` if the first
+/// face met is entered: `q` was not inside after all).
+fn inside_for(solid: &Solid, q: Vec3, d: Vec3, reach: f64) -> Option<f64> {
+    let (fraction, normal) = *hits_with_normals(solid, q, q + d * reach).first()?;
+    (normal.dot(d) > 0.0).then_some(fraction * reach)
+}
+
+/// Whether contacts with these outward normals hold a part from opposing sides (some
+/// pair more than about 107° apart), as a rod in a hole does and a flat face does not.
+fn opposing(normals: &[Vec3]) -> bool {
+    let every = (normals.len() / 64).max(1);
+    let few: Vec<Vec3> = normals.iter().step_by(every).copied().collect();
+    few.iter().any(|a| few.iter().any(|b| a.dot(*b) < -0.3))
+}
+
+/// How far `part` (moving along unit `forward`) can go before it reaches the end of
+/// `guide` (staying) if `guide` guides it (see the module): the shorter of their surfaces
+/// in contact stays within the longer.
+fn guide_end(
+    part: &Shape,
+    guide: &Shape,
+    forward: Vec3,
+    settings: &Settings,
+    reach: f64,
+) -> Option<f64> {
+    let gap = settings.guide_gap;
+    let mut normals = Vec::new();
+    // One side's contact points on the other: how far they stay inside it, moving along
+    // `d` relative to it (the least of them), `None` without contact.
+    let mut stay = |from: &Shape, on: &Shape, d: Vec3, sense: f64| -> Option<f64> {
+        let near = on.bounds.grown(gap);
+        let mut least: Option<f64> = None;
+        for (p, u) in from.points_along(settings.spacing, forward, &near) {
+            let Some((q, n)) = touching(on.solid, p, u, gap, forward) else {
+                continue;
+            };
+            normals.push(n * sense);
+            if let Some(e) = inside_for(on.solid, q, d, reach) {
+                least = Some(least.map_or(e, |l: f64| l.min(e)));
+            }
+        }
+        least
+    };
+    let ours = stay(part, guide, forward, 1.0);
+    let theirs = stay(guide, part, -forward, -1.0);
+    if !opposing(&normals) {
+        return None;
+    }
+    match (ours, theirs) {
+        (Some(a), Some(b)) => Some(a.max(b)),
+        (a, b) => a.or(b),
+    }
 }
 
 /// The event logic along a path: hits as (change, cosine) in the order met, from a start
@@ -734,7 +917,7 @@ impl Scene {
             _ => (reach, reach),
         };
         let mut range = (f64::NEG_INFINITY, f64::INFINITY);
-        let mut stopped_by: (Option<String>, Option<String>) = (None, None);
+        let mut stopped_by: (Option<Stop>, Option<Stop>) = (None, None);
         for sign in [1.0, -1.0] {
             let n = (limit / step).ceil().max(1.0) as usize;
             let grid: Vec<f64> = (0..=n)
@@ -881,11 +1064,47 @@ impl Scene {
                 }
             });
             let mut best = sign * limit;
-            let mut by: Option<String> = None;
+            let mut by: Option<Stop> = None;
             for (job, change) in jobs.iter().zip(found) {
                 if let Some(c) = change.filter(|c| c.abs() < best.abs()) {
                     best = c;
-                    by = Some(job.who.clone());
+                    by = Some(Stop {
+                        part: job.who.clone(),
+                        end: false,
+                    });
+                }
+            }
+            // On a slide, the ends of what guides the moving parts.
+            if let Some(axis) = straight {
+                let pairs: Vec<(&Shape, &Shape)> = moving
+                    .iter()
+                    .flat_map(|(_, part, _)| {
+                        let near = part.bounds.grown(settings.guide_gap);
+                        shapes
+                            .iter()
+                            .filter(move |s| {
+                                mover_of(s.solid).is_none()
+                                    && s.bounds.low.x <= near.high.x
+                                    && s.bounds.high.x >= near.low.x
+                                    && s.bounds.low.y <= near.high.y
+                                    && s.bounds.high.y >= near.low.y
+                                    && s.bounds.low.z <= near.high.z
+                                    && s.bounds.high.z >= near.low.z
+                            })
+                            .map(move |s| (*part, s))
+                    })
+                    .collect();
+                let ends = run_all(&pairs, &|(part, guide): &(&Shape, &Shape)| {
+                    guide_end(part, guide, axis * sign, settings, reach)
+                });
+                for ((_, guide), end) in pairs.iter().zip(ends) {
+                    if let Some(c) = end.filter(|c| *c < best.abs()) {
+                        best = sign * c;
+                        by = Some(Stop {
+                            part: guide.solid.id.clone(),
+                            end: true,
+                        });
+                    }
                 }
             }
             let value = now[name];
@@ -898,5 +1117,157 @@ impl Scene {
             }
         }
         Ok(Clearance { range, stopped_by })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::dof::Dof;
+
+    fn at(x: f64, y: f64, z: f64) -> Frame {
+        Frame::from_transform(Transform::from_translation(Vec3::new(x, y, z)))
+    }
+
+    fn part(id: &str, faces: Vec<SolidFace>) -> Solid {
+        Solid {
+            id: id.into(),
+            faces,
+            role: SolidRole::Absorber,
+            occurrence: id.into(),
+        }
+    }
+
+    fn scene(solids: Vec<Solid>, moving: &str, axis: Vec3) -> Scene {
+        Scene {
+            surrounding: 1.0.into(),
+            elements: vec![],
+            sources: vec![],
+            proxies: vec![],
+            detectors: vec![],
+            solids,
+            split_cutoff: None,
+            threads: 0,
+            dofs: vec![Dof {
+                name: "slide".into(),
+                target: Target::Occurrence(moving.into()),
+                motion: Motion::Slide { axis },
+                range: None,
+                free: true,
+                locked: false,
+                follows: None,
+                value: 0.0,
+                source: None,
+                binding: None,
+            }],
+            fluorophores: Vec::new(),
+            thermal: Vec::new(),
+            tolerances: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn a_stand_in_cylinder_is_whole_and_a_bore_is_seen_from_inside() {
+        // The stand-ins' cylinder faces (a lens's rim, a tube's bore): triangles all the
+        // way up, and a ray from the axis meets the bore (its normal towards the axis)
+        // and passes out through the outward face (its normal away from it).
+        let frame = at(0.0, 0.0, 0.0);
+        let fineness = Settings::default().fineness;
+        for (bore, sense) in [(false, 1.0), (true, -1.0)] {
+            let face = around(&frame, 6.4, 0.0, 30.0, bore);
+            let mesh = face.geometry.tessellate(fineness);
+            let top = mesh
+                .positions
+                .iter()
+                .map(|p| p.z)
+                .fold(f64::NEG_INFINITY, f64::max);
+            let bottom = mesh
+                .positions
+                .iter()
+                .map(|p| p.z)
+                .fold(f64::INFINITY, f64::min);
+            assert!(
+                (top - 30.0).abs() < 1e-9 && bottom.abs() < 1e-9,
+                "{bore}: {bottom} to {top}"
+            );
+            let area: f64 = mesh
+                .triangles
+                .iter()
+                .map(|t| {
+                    let [a, b, c] = t.map(|i| mesh.positions[i as usize]);
+                    0.5 * (b - a).cross(c - a).length()
+                })
+                .sum();
+            // The 48-sided prism's side: 48 · 2 r sin(π/48) · 30.
+            let prism = 48.0 * 2.0 * 6.4 * (std::f64::consts::PI / 48.0).sin() * 30.0;
+            assert!(
+                (area - prism).abs() < 0.01 * prism,
+                "{bore}: {area} {prism}"
+            );
+            for z in [1.0, 15.0, 29.0] {
+                let hit = face
+                    .geometry
+                    .intersect(Vec3::new(0.0, 0.0, z), Vec3::X, 0.0)
+                    .expect("met");
+                assert!((hit.distance - 6.4).abs() < 1e-9, "{bore} {z}");
+                assert!((hit.normal.x - sense).abs() < 1e-9, "{bore} {z}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_post_stays_in_its_holder() {
+        // A Ø12.7 post from z −20 to 80 in a holder's Ø12.8 bore from z 0 to 30 (0.05 mm
+        // play): nothing to overlap, but the holder guides the post. Up, the post's foot
+        // reaches the holder's bottom after 20 mm; down, its top the holder's top after
+        // 50 mm (the shorter surface, the bore, stays within the longer, the post's).
+        let frame = at(0.0, 0.0, 0.0);
+        let post = part("post", disc(&frame, 6.35, -20.0, 80.0));
+        let holder = part(
+            "holder",
+            vec![
+                around(&frame, 10.0, 0.0, 30.0, false),
+                around(&frame, 6.4, 0.0, 30.0, true),
+                across(
+                    &frame,
+                    0.0,
+                    -1.0,
+                    vec![circle(&frame, 10.0, 0.0), circle(&frame, 6.4, 0.0)],
+                ),
+                across(
+                    &frame,
+                    30.0,
+                    1.0,
+                    vec![circle(&frame, 10.0, 30.0), circle(&frame, 6.4, 30.0)],
+                ),
+            ],
+        );
+        let found = scene(vec![post, holder], "post", Vec3::Z)
+            .clearance("slide", &Settings::default())
+            .expect("found");
+        assert!((found.range.0 + 50.0).abs() < 1e-6, "{found:?}");
+        assert!((found.range.1 - 20.0).abs() < 1e-6, "{found:?}");
+        for stop in [&found.stopped_by.0, &found.stopped_by.1] {
+            assert_eq!(
+                stop,
+                &Some(Stop {
+                    part: "holder".into(),
+                    end: true
+                })
+            );
+        }
+    }
+
+    #[test]
+    fn a_block_resting_on_a_plate_is_not_guided_by_it() {
+        // A 20 × 20 × 10 block 0.02 mm above a 100 × 100 plate's top, sliding along x: the
+        // plate's face runs alongside the block's within the gap, but from one side only,
+        // so the block may leave it; nothing else is in the way.
+        let plate = part("plate", slab(&at(0.0, 0.0, 0.0), 50.0, 50.0, -5.0, 0.0));
+        let block = part("block", slab(&at(0.0, 0.0, 0.02), 10.0, 10.0, 0.0, 10.0));
+        let found = scene(vec![plate, block], "block", Vec3::X)
+            .clearance("slide", &Settings::default())
+            .expect("found");
+        assert_eq!(found.stopped_by, (None, None), "{found:?}");
     }
 }

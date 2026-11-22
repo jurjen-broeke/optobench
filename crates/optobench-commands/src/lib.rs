@@ -372,7 +372,7 @@ const STANDARD: &[Command] = &[
         label: "Clearance",
         icon: "check-moves",
         effect: Effect::Read,
-        summary: "how far each free degree of freedom can move each way before its parts overlap another part",
+        summary: "how far each free degree of freedom can move each way before its parts overlap another part or reach the end of what guides them",
         handler: moves::clearance,
     },
     Command {

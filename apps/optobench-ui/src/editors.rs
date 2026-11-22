@@ -1952,7 +1952,7 @@ fn dofs(
             let mut ticked = free;
             if ui
                 .checkbox(&mut ticked, "free")
-                .on_hover_text("A rough placement: limited only by where its part would overlap another; Optimise places it first, then the adjusters")
+                .on_hover_text("A rough placement: limited only by where its part would overlap another or leave the rods it slides on; Optimise places it first, then the adjusters")
                 .changed()
             {
                 operations.push(json!({
@@ -1970,9 +1970,13 @@ fn dofs(
                         let unit = found["unit"].as_str().unwrap_or("mm");
                         let end = |k: usize| {
                             let v = found["range"][k].as_f64().unwrap_or(f64::NAN);
-                            let by = found["stopped_by"][k]
-                                .as_str()
-                                .map_or_else(|| "nothing in the way".to_owned(), |b| format!("stopped by {b}"));
+                            let by = match found["stopped_by"][k].as_str() {
+                                None => "nothing in the way".to_owned(),
+                                Some(b) if found["end_of_guide"][k] == true => {
+                                    format!("at the end of {b}")
+                                }
+                                Some(b) => format!("stopped by {b}"),
+                            };
                             format!("{v:+.2} {unit} ({by})")
                         };
                         ui.label(
@@ -1987,7 +1991,7 @@ fn dofs(
                     None => {
                         if ui
                             .small_button("Find the space")
-                            .on_hover_text("How far it can go each way before its parts overlap another part, and which part stops it")
+                            .on_hover_text("How far it can go each way before its parts overlap another part or reach the end of the rods they slide on, and which part stops it")
                             .clicked()
                         {
                             operations.push(json!({ "op": "clearance", "dof": name }));
