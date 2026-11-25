@@ -2097,7 +2097,7 @@ checksum = "9f7c3e4beb33f85d45ae3e3a1792185706c8e16d043238c593331cc7cd313b50"
 
 [[package]]
 name = "optobench-analysis"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "optobench-materials",
  "optobench-math",
@@ -2108,7 +2108,7 @@ dependencies = [
 
 [[package]]
 name = "optobench-bridge"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "optobench-commands",
  "optobench-io",
@@ -2117,7 +2117,7 @@ dependencies = [
 
 [[package]]
 name = "optobench-cli"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "optobench-bridge",
  "optobench-commands",
@@ -2126,7 +2126,7 @@ dependencies = [
 
 [[package]]
 name = "optobench-commands"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "optobench-analysis",
  "optobench-field",
@@ -2145,7 +2145,7 @@ dependencies = [
 
 [[package]]
 name = "optobench-field"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "optobench-analysis",
  "optobench-math",
@@ -2156,7 +2156,7 @@ dependencies = [
 
 [[package]]
 name = "optobench-gpu"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "optobench-analysis",
  "optobench-math",
@@ -2166,7 +2166,7 @@ dependencies = [
 
 [[package]]
 name = "optobench-io"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "optobench-analysis",
  "optobench-library",
@@ -2183,7 +2183,7 @@ dependencies = [
 
 [[package]]
 name = "optobench-library"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "optobench-math",
  "optobench-surfaces",
@@ -2191,15 +2191,15 @@ dependencies = [
 
 [[package]]
 name = "optobench-materials"
-version = "0.7.0"
+version = "0.8.0"
 
 [[package]]
 name = "optobench-math"
-version = "0.7.0"
+version = "0.8.0"
 
 [[package]]
 name = "optobench-optimize"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "optobench-materials",
  "optobench-math",
@@ -2209,7 +2209,7 @@ dependencies = [
 
 [[package]]
 name = "optobench-scene"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "optobench-materials",
  "optobench-math",
@@ -2219,7 +2219,7 @@ dependencies = [
 
 [[package]]
 name = "optobench-surfaces"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "optobench-math",
  "spade",
@@ -2227,7 +2227,7 @@ dependencies = [
 
 [[package]]
 name = "optobench-trace"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "optobench-materials",
  "optobench-math",
@@ -2236,7 +2236,7 @@ dependencies = [
 
 [[package]]
 name = "optobench-ui"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "eframe",
  "egui",
@@ -4066,7 +4066,7 @@ checksum = "e450f9b2ed1dff33c94c12589a87338689467b9c4f5d8a5710bd09a847d2c8a7"
 
 [[package]]
 name = "xtask"
-version = "0.7.0"
+version = "0.8.0"
 
 [[package]]
 name = "zbus"

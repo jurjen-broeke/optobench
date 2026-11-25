@@ -1,0 +1,207 @@
+# Release builds (AGENTS.md, Versions). When a push to main raises `version` in the root
+# Cargo.toml, this builds `optobench` (command line) and `optobench-ui` (window) for Linux,
+# macOS and Windows and publishes them as the GitHub release `v<version>`, with that
+# version's CHANGELOG section as its notes. A version that already has a release is left
+# alone, so pushes that touch Cargo.toml for other reasons build nothing.
+#
+# Pull requests that change this workflow or the licence notices (about.toml, about.hbs)
+# run the builds as a dry run, without publishing. A manual run publishes the current
+# version if it has no release yet, and is a dry run otherwise.
+
+name: Release
+
+on:
+  push:
+    branches: [main]
+    paths: [Cargo.toml]
+  pull_request:
+    paths: [.github/workflows/release.yml, about.toml, about.hbs]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  # The release profile keeps line tables for profiling (Cargo.toml); shipped binaries do not.
+  CARGO_PROFILE_RELEASE_DEBUG: "0"
+  CARGO_PROFILE_RELEASE_STRIP: debuginfo
+
+jobs:
+  version:
+    name: version and release
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      tag: ${{ steps.version.outputs.tag }}
+      publish: ${{ steps.version.outputs.publish }}
+      build: ${{ steps.version.outputs.build }}
+    steps:
+      - uses: actions/checkout@v7
+      - id: version
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT: ${{ github.event_name }}
+        run: |
+          version="$(sed -n '/^\[workspace.package\]/,/^\[/s/^version = "\(.*\)"$/\1/p' Cargo.toml)"
+          if [ -z "$version" ]; then
+            echo "::error::no version in [workspace.package] of Cargo.toml"
+            exit 1
+          fi
+          tag="v$version"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            exists=true
+          else
+            exists=false
+          fi
+          publish=false
+          if [ "$EVENT" != pull_request ] && [ "$exists" = false ]; then
+            publish=true
+            if ! grep -q "^## $version\( \|$\)" CHANGELOG.md; then
+              echo "::error::CHANGELOG.md has no section for $version (AGENTS.md, Versions)"
+              exit 1
+            fi
+          fi
+          build=false
+          if [ "$publish" = true ] || [ "$EVENT" != push ]; then
+            build=true
+          fi
+          echo "version $version, release $tag exists: $exists, publish: $publish, build: $build"
+          {
+            echo "version=$version"
+            echo "tag=$tag"
+            echo "publish=$publish"
+            echo "build=$build"
+          } >> "$GITHUB_OUTPUT"
+
+  notices:
+    name: third-party licences
+    needs: version
+    if: needs.version.outputs.build == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install toolchain
+        run: rustup toolchain install stable --profile minimal
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-about
+      # Every dependency's licence text, and the fonts egui builds into the window
+      # (OFL-1.1, Ubuntu-font-1.0), which must travel with the binaries.
+      - run: cargo about generate about.hbs --output-file THIRD-PARTY-LICENSES.txt
+      - uses: actions/upload-artifact@v7
+        with:
+          name: third-party-licenses
+          path: THIRD-PARTY-LICENSES.txt
+          if-no-files-found: error
+
+  build:
+    name: build ${{ matrix.name }}
+    needs: [version, notices]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # 22.04 for an older glibc (2.35), so the binaries run on more distributions.
+          - { name: linux-x86_64, os: ubuntu-22.04, target: x86_64-unknown-linux-gnu }
+          - { name: linux-aarch64, os: ubuntu-22.04-arm, target: aarch64-unknown-linux-gnu }
+          - { name: macos-aarch64, os: macos-latest, target: aarch64-apple-darwin }
+          - { name: macos-x86_64, os: macos-latest, target: x86_64-apple-darwin }
+          - { name: windows-x86_64, os: windows-latest, target: x86_64-pc-windows-msvc }
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install toolchain
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup target add ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: release-${{ matrix.target }}
+      - name: Build
+        run: cargo build --release --locked --target ${{ matrix.target }} -p optobench-cli -p optobench-ui
+      - uses: actions/download-artifact@v8
+        with:
+          name: third-party-licenses
+      - name: Package
+        env:
+          NAME: optobench-${{ needs.version.outputs.version }}-${{ matrix.name }}
+          TARGET: ${{ matrix.target }}
+        run: |
+          exe=""
+          case "$TARGET" in *windows*) exe=".exe" ;; esac
+          mkdir -p "dist/$NAME"
+          cp "target/$TARGET/release/optobench$exe" "target/$TARGET/release/optobench-ui$exe" "dist/$NAME/"
+          cp README.md CHANGELOG.md LICENSE-MIT LICENSE-APACHE ATTRIBUTION.md THIRD-PARTY-LICENSES.txt "dist/$NAME/"
+          cd dist
+          if [ -n "$exe" ]; then
+            7z a -tzip "$NAME.zip" "$NAME" >/dev/null
+          else
+            tar czf "$NAME.tar.gz" "$NAME"
+          fi
+          rm -r "$NAME"
+          ls -l
+      - name: Smoke test
+        if: matrix.target != 'x86_64-apple-darwin'
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          exe=""
+          case "$TARGET" in *windows*) exe=".exe" ;; esac
+          "target/$TARGET/release/optobench$exe" version
+      - uses: actions/upload-artifact@v7
+        with:
+          name: optobench-${{ matrix.name }}
+          path: dist/*
+          if-no-files-found: error
+
+  publish:
+    # Static name: a skipped job (dry runs) shows it without expanding expressions.
+    name: publish the release
+    needs: [version, build]
+    if: needs.version.outputs.publish == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: optobench-*
+          path: dist
+          merge-multiple: true
+      - name: Checksums and notes
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          (cd dist && sha256sum optobench-* > SHA256SUMS.txt && cat SHA256SUMS.txt)
+          # This version's CHANGELOG section, without its heading.
+          awk -v v="$VERSION" '
+            index($0, "## " v " ") == 1 || $0 == "## " v { found = 1; next }
+            found && /^## / { exit }
+            found { print }
+          ' CHANGELOG.md > notes.md
+          cat >> notes.md <<'EOF'
+
+          Each archive holds `optobench` (command line) and `optobench-ui` (window). The
+          binaries are not signed: on macOS, remove the quarantine flag with
+          `xattr -d com.apple.quarantine optobench optobench-ui` before the first start.
+          EOF
+          cat notes.md
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.version.outputs.tag }}
+          VERSION: ${{ needs.version.outputs.version }}
+        run: >
+          gh release create "$TAG" dist/*
+          --target "$GITHUB_SHA"
+          --title "optobench $VERSION"
+          --notes-file notes.md
