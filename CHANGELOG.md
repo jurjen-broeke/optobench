@@ -7,6 +7,14 @@ with the release that introduced them.
 
 Nothing yet.
 
+## 0.8.0 (2026-11-25)
+
+- Release builds: when a merged pull request raises the version, CI builds `optobench` and
+  `optobench-ui` for Linux (x86_64, aarch64), macOS (Apple silicon, Intel) and Windows
+  (x86_64) and publishes them as the GitHub release `v<version>`, with that version's
+  changelog as its notes, a `SHA256SUMS.txt`, and the third-party licence notices
+  (`THIRD-PARTY-LICENSES.txt`, made by cargo-about from `about.toml`) in every archive.
+
 ## 0.7.0 (2026-11-22)
 
 - M20 the ends of guides: a free slide stops where a part would leave what guides it (a
