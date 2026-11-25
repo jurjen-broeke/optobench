@@ -43,7 +43,9 @@ the file-format number (`optobench/<N>`, see `docs/design.md`). 0.1.0 was set on
   10), the next one raises the major number instead: +1.0.0, minor and patch back to 0.
 
 The pull request sets the new version in `Cargo.toml` and moves its CHANGELOG lines from
-"Unreleased" under a heading with that version and the date.
+"Unreleased" under a heading with that version and the date. Raising the version publishes
+a release (`.github/workflows/release.yml`), so a pull request that changes only CI (files
+under `.github/`) keeps the version and needs no CHANGELOG line.
 
 ## Before you open a pull request
 
