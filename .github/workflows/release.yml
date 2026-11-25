@@ -163,7 +163,8 @@ jobs:
           if-no-files-found: error
 
   publish:
-    name: publish ${{ needs.version.outputs.tag }}
+    # Static name: a skipped job (dry runs) shows it without expanding expressions.
+    name: publish the release
     needs: [version, build]
     if: needs.version.outputs.publish == 'true'
     runs-on: ubuntu-latest
