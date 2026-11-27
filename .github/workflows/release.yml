@@ -1,6 +1,7 @@
 # Release builds (AGENTS.md, Versions). When a push to main raises `version` in the root
 # Cargo.toml, this builds `optobench` (command line) and `optobench-ui` (window) for Linux,
-# macOS and Windows and publishes them as the GitHub release `v<version>`, with that
+# macOS (one universal build, Apple silicon and Intel in each binary) and Windows and
+# publishes them as the GitHub release `v<version>`, with that
 # version's CHANGELOG section as its notes. A version that already has a release is left
 # alone, so pushes that touch Cargo.toml for other reasons build nothing.
 #
@@ -109,8 +110,8 @@ jobs:
           # 22.04 for an older glibc (2.35), so the binaries run on more distributions.
           - { name: linux-x86_64, os: ubuntu-22.04, target: x86_64-unknown-linux-gnu }
           - { name: linux-aarch64, os: ubuntu-22.04-arm, target: aarch64-unknown-linux-gnu }
-          - { name: macos-aarch64, os: macos-latest, target: aarch64-apple-darwin }
-          - { name: macos-x86_64, os: macos-latest, target: x86_64-apple-darwin }
+          # One download for every Mac: both architectures built, then joined by lipo.
+          - { name: macos-universal, os: macos-latest, target: universal-apple-darwin }
           - { name: windows-x86_64, os: windows-latest, target: x86_64-pc-windows-msvc }
     runs-on: ${{ matrix.os }}
     defaults:
@@ -119,14 +120,41 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - name: Install toolchain
+        env:
+          TARGET: ${{ matrix.target }}
         run: |
           rustup toolchain install stable --profile minimal
-          rustup target add ${{ matrix.target }}
+          if [ "$TARGET" = universal-apple-darwin ]; then
+            rustup target add aarch64-apple-darwin x86_64-apple-darwin
+          else
+            rustup target add "$TARGET"
+          fi
       - uses: Swatinem/rust-cache@v2
         with:
           key: release-${{ matrix.target }}
       - name: Build
-        run: cargo build --release --locked --target ${{ matrix.target }} -p optobench-cli -p optobench-ui
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          if [ "$TARGET" != universal-apple-darwin ]; then
+            cargo build --release --locked --target "$TARGET" -p optobench-cli -p optobench-ui
+            exit 0
+          fi
+          # A universal binary: each architecture built on its own, then joined, where
+          # the steps below look for it (target/universal-apple-darwin/release).
+          for arch in aarch64 x86_64; do
+            cargo build --release --locked --target "$arch-apple-darwin" -p optobench-cli -p optobench-ui
+          done
+          mkdir -p "target/$TARGET/release"
+          for bin in optobench optobench-ui; do
+            lipo -create -output "target/$TARGET/release/$bin" \
+              "target/aarch64-apple-darwin/release/$bin" "target/x86_64-apple-darwin/release/$bin"
+            # Both architectures, or the build fails.
+            archs="$(lipo -archs "target/$TARGET/release/$bin")"
+            echo "$bin: $archs"
+            case "$archs" in *arm64*) ;; *) echo "::error::$bin has no arm64"; exit 1 ;; esac
+            case "$archs" in *x86_64*) ;; *) echo "::error::$bin has no x86_64"; exit 1 ;; esac
+          done
       - uses: actions/download-artifact@v8
         with:
           name: third-party-licenses
@@ -149,7 +177,6 @@ jobs:
           rm -r "$NAME"
           ls -l
       - name: Smoke test
-        if: matrix.target != 'x86_64-apple-darwin'
         env:
           TARGET: ${{ matrix.target }}
         run: |
@@ -191,6 +218,7 @@ jobs:
           cat >> notes.md <<'EOF'
 
           Each archive holds `optobench` (command line) and `optobench-ui` (window). The
+          macOS archive is universal: it runs on Apple silicon and Intel Macs. The
           binaries are not signed: on macOS, remove the quarantine flag with
           `xattr -d com.apple.quarantine optobench optobench-ui` before the first start.
           EOF
