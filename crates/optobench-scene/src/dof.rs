@@ -35,6 +35,10 @@ pub enum Motion {
     /// An objective's correction collar: the value is the change in the design
     /// cover-glass thickness it corrects for (mm). It moves nothing.
     Collar,
+    /// An iris's opening: the value is the change in its hole's diameter (mm). It moves
+    /// nothing. Give the iris a soft rim (`ProxyKind::Plate::edge`) for the optimiser to
+    /// find a slope.
+    Opening,
 }
 
 impl Motion {
@@ -48,7 +52,7 @@ impl Motion {
                     * Transform::new(rotation, Vec3::ZERO)
                     * Transform::from_translation(-pivot)
             }
-            Motion::Collar => Transform::IDENTITY,
+            Motion::Collar | Motion::Opening => Transform::IDENTITY,
         }
     }
 
@@ -57,12 +61,13 @@ impl Motion {
         matches!(self, Motion::Tilt { .. })
     }
 
-    /// Its kind as written in files: `slide`, `tilt` or `collar`.
+    /// Its kind as written in files: `slide`, `tilt`, `collar` or `opening`.
     pub fn kind(&self) -> &'static str {
         match self {
             Motion::Slide { .. } => "slide",
             Motion::Tilt { .. } => "tilt",
             Motion::Collar => "collar",
+            Motion::Opening => "opening",
         }
     }
 }
@@ -76,6 +81,8 @@ pub enum Target {
     Source(String),
     /// A detector, by id.
     Detector(String),
+    /// A proxy (an iris, a tube), by id.
+    Proxy(String),
     /// Every solid of a CAD occurrence (its assembly path): a part with its mount, as it
     /// is moved in CAD.
     Occurrence(String),
@@ -287,6 +294,14 @@ impl Scene {
                         .ok_or_else(missing)?;
                     d.frame = frame_moved(&d.frame, &t);
                 }
+                Target::Proxy(id) => {
+                    let p = scene
+                        .proxies
+                        .iter_mut()
+                        .find(|p| &p.id == id)
+                        .ok_or_else(missing)?;
+                    p.frame = frame_moved(&p.frame, &t);
+                }
                 Target::Occurrence(path) => {
                     let mut found = false;
                     for solid in scene.solids.iter_mut().filter(|s| &s.occurrence == path) {
@@ -337,6 +352,43 @@ impl Scene {
                 return Err(invalid(format!(
                     "`{}`: the collar would correct for a cover glass of {:.4} mm",
                     dof.name, cover.thickness
+                )));
+            }
+        }
+        // Openings: each widens its iris's hole by the change in value.
+        for dof in self
+            .dofs
+            .iter()
+            .filter(|d| matches!(d.motion, Motion::Opening))
+        {
+            let change = new[&dof.name] - old.get(&dof.name).copied().unwrap_or(0.0);
+            let not_an_iris = || {
+                invalid(format!(
+                    "`{}`: an opening belongs to an iris (a proxy of kind \"plate\")",
+                    dof.name
+                ))
+            };
+            let Target::Proxy(id) = &dof.target else {
+                return Err(not_an_iris());
+            };
+            let proxy = scene
+                .proxies
+                .iter_mut()
+                .find(|p| &p.id == id)
+                .ok_or_else(|| invalid(format!("`{}`: no proxy `{id}`", dof.name)))?;
+            let crate::ProxyKind::Plate {
+                hole_diameter,
+                size,
+                ..
+            } = &mut proxy.kind
+            else {
+                return Err(not_an_iris());
+            };
+            *hole_diameter += change;
+            if *hole_diameter <= 0.0 || *hole_diameter > *size {
+                return Err(invalid(format!(
+                    "`{}`: the hole of `{id}` would be {:.4} mm across, outside 0 to its plate's {} mm",
+                    dof.name, hole_diameter, size
                 )));
             }
         }

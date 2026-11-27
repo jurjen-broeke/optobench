@@ -129,6 +129,50 @@ fn total_internal_reflection_is_followed() {
 }
 
 #[test]
+fn a_soft_rim_passes_a_share_falling_linearly_across_it() {
+    // An iris plate at z = 10 with a hole of 1 mm radius and a soft rim out to 3 mm,
+    // a detector at z = 20. Rays parallel to the axis at r = 0.5 (in the hole), 2 (the
+    // rim's middle), 2.5 and 3.5 (beyond it) keep 1, (3 − r)/(3 − 1) = 1/2, 1/4 and
+    // nothing (geometry of the definition); what they lose is clipping.
+    let mut system = NonSequentialSystem::new(1.0.into());
+    system.faces = vec![
+        plane(
+            10.0,
+            Region::SquareWithHole {
+                half_size: 50.0,
+                hole_radius: 1.0,
+            },
+            Role::SoftEdge {
+                inner: 1.0,
+                outer: 3.0,
+            },
+            AIR,
+            AIR,
+        ),
+        detector(20.0),
+    ];
+    let rays: Vec<Ray> = [0.5, 2.0, 2.5, 3.5]
+        .iter()
+        .map(|&x| ray(Vec3::new(x, 0.0, 0.0), Vec3::Z))
+        .collect();
+    let (records, ledger) = system.trace_all(rays);
+    let kept: Vec<f64> = records
+        .iter()
+        .map(|r| match r.end {
+            End::Detected { .. } => r.ray.power,
+            _ => 0.0,
+        })
+        .collect();
+    for (k, expected) in kept.iter().zip([1.0, 0.5, 0.25, 0.0]) {
+        assert!((k - expected).abs() < 1e-15, "{kept:?}");
+    }
+    assert!(matches!(records[3].end, End::Clipped { face: 0 }));
+    assert_eq!(records[1].edge_losses, [(0, 0.5)]);
+    assert!((ledger.clipped - (0.5 + 0.75 + 1.0)).abs() < 1e-15);
+    assert!(balanced(&ledger));
+}
+
+#[test]
 fn tube_wall_clips_steep_rays_and_passes_axial_ones() {
     // A tube of inner radius 5 mm, 100 mm long. A ray parallel to the axis passes; a ray
     // at slope 0.1 from the axis meets the wall at z = 50 mm (r = 5 = 0.1·z).

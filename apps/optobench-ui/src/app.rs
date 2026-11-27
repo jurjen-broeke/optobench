@@ -690,6 +690,14 @@ impl App {
         }
     }
 
+    /// The id of the detector selected in the browser or the view, if one is: where a
+    /// `backscatter` term goes.
+    fn selected_detector(&self) -> Option<String> {
+        let scene = self.doc.as_ref()?.scene.as_ref()?;
+        let item = scene.items.get(self.selected?)?;
+        (item.kind == "detector").then(|| item.id.clone())
+    }
+
     /// Lens: a singlet (its shape and focal length set in Properties), or a lens of the
     /// parts library (singlets, cemented and air-spaced doublets, triplets).
     fn lens_chooser(&mut self, ctx: &egui::Context) {
@@ -1779,7 +1787,8 @@ impl App {
                     .cloned()
                     .unwrap_or_default();
                 let first_detector = editors::first_detector(&scene.design);
-                let backscatter = editors::backscatter_term(&scene.design);
+                let backscatter =
+                    editors::backscatter_term(&scene.design, self.selected_detector().as_deref());
                 egui::CollapsingHeader::new(format!("Merit ({})", merit.len()))
                     .default_open(true)
                     .show(ui, |ui| {
@@ -1804,7 +1813,7 @@ impl App {
                             if let Some(ops) = &backscatter {
                                 if ui
                                     .button("backscatter")
-                                    .on_hover_text("as little light as possible coming back into the laser (%): measured on a returning detector at the laser, added there when there is none")
+                                    .on_hover_text("as little light as possible coming back (%): on the selected detector (a returning one in the beam: what comes back over what goes through; a screen behind a part: its share of the launched power), else on a returning detector, added at the laser when there is none")
                                     .clicked()
                                 {
                                     self.apply(ops.clone());
@@ -2043,7 +2052,8 @@ impl App {
                 let first = editors::first_detector(&design);
                 ui.horizontal_wrapped(|ui| {
                     ui.label(RichText::new("Add merit").color(DARK.text_dim));
-                    if let Some(ops) = editors::backscatter_term(&design) {
+                    let chosen = self.selected_detector();
+                    if let Some(ops) = editors::backscatter_term(&design, chosen.as_deref()) {
                         if ui.small_button("backscatter").clicked() {
                             operations.extend(ops);
                         }
@@ -2361,16 +2371,25 @@ impl App {
             ui.label(RichText::new("Results appear here after a trace").color(DARK.text_dim));
             return;
         }
-        ui.horizontal_top(|ui| {
-            self.graphs_panel(ui);
-            ui.separator();
-            self.result_columns(ui);
-        });
+        // The strip scrolls when its columns do not fit, so it never grows past the size
+        // it was given and the view above keeps its room.
+        let view = ui.available_size();
+        egui::ScrollArea::both()
+            .id_salt("results")
+            .auto_shrink(false)
+            .show(ui, |ui| {
+                ui.horizontal_top(|ui| {
+                    self.graphs_panel(ui, view);
+                    ui.separator();
+                    self.result_columns(ui);
+                });
+            });
     }
 
     /// The graphs: one shown at a time, a switcher between those open, a mark on graphs
     /// drawn before the design last changed, Redraw and Close.
-    fn graphs_panel(&mut self, ui: &mut egui::Ui) {
+    /// `view` is the visible size of the strip, since the scroll area around it has none.
+    fn graphs_panel(&mut self, ui: &mut egui::Ui, view: Vec2) {
         let App {
             doc, graph_cursor, ..
         } = self;
@@ -2382,8 +2401,9 @@ impl App {
         let width = if doc.graphs.is_empty() {
             240.0
         } else {
-            (ui.available_width() * 0.45).max(380.0)
+            (view.x * 0.45).max(380.0)
         };
+        let top = ui.cursor().top();
         ui.vertical(|ui| {
             ui.set_width(width);
             ui.horizontal(|ui| {
@@ -2437,7 +2457,7 @@ impl App {
                 return;
             }
             let shown = doc.shown_graph.min(doc.graphs.len() - 1);
-            let height = ui.available_height().max(150.0);
+            let height = (view.y - (ui.cursor().top() - top)).max(150.0);
             let open = &mut doc.graphs[shown];
             if let Some(c) = crate::graphs::show(
                 ui,
@@ -2682,6 +2702,21 @@ fn detector_grid(ui: &mut egui::Ui, d: &Value) {
             ] {
                 ui.label(RichText::new(k).color(DARK.text_dim));
                 ui.label(v);
+                ui.end_row();
+            }
+            // A returning detector: what comes back over what goes through; above 100 %
+            // more comes back than goes through.
+            if d["returning"] == true {
+                let percent = d["backscatter_percent"].as_f64();
+                ui.label(RichText::new("backscatter").color(DARK.text_dim))
+                    .on_hover_text("The light coming back across it (weighted as a mode of its size takes it in) over the light going through it");
+                match percent {
+                    Some(p) => ui.label(
+                        RichText::new(format!("{p:.4} %"))
+                            .color(if p > 100.0 { DARK.error } else { DARK.text }),
+                    ),
+                    None => ui.label(RichText::new("no light goes through").color(DARK.error)),
+                };
                 ui.end_row();
             }
         });
@@ -3575,6 +3610,48 @@ mod exit {
     }
 
     #[test]
+    fn many_detectors_scroll_in_the_results_strip_and_leave_the_view_its_room() {
+        // Eight detectors behind a singlet, traced: their read-outs are taller than the
+        // results strip, which scrolls instead of growing over the view.
+        let dir = scratch("many-detectors");
+        let path = dir.join("bench.optobench");
+        let mut h = window(None, &dir);
+        click(&mut h, "Workspace");
+        click(&mut h, "Layout");
+        h.state_mut().chooser = answer(&path); // chosen in the save dialog
+        click(&mut h, "New");
+        click(&mut h, "Planar");
+        click(&mut h, "Source");
+        click(&mut h, "Lens");
+        click(&mut h, "Singlet");
+        for _ in 0..8 {
+            click(&mut h, "Detector");
+        }
+        click(&mut h, "Workspace");
+        click(&mut h, "Simulate");
+        click(&mut h, "Trace");
+        let detectors = h
+            .state()
+            .doc
+            .as_ref()
+            .and_then(|d| d.trace.as_ref())
+            .map_or(0, |t| t.report["detectors"].as_array().map_or(0, Vec::len));
+        assert_eq!(detectors, 8, "{:?}", errors(&h));
+        h.step();
+        let strip = h
+            .query_all_by_label("Graphs")
+            .next()
+            .expect("the Graphs heading")
+            .rect();
+        // The window is 900 high and the strip starts at 240 (plus its margins).
+        assert!(
+            strip.top() > 900.0 - 300.0,
+            "the strip grew to {}",
+            strip.top()
+        );
+    }
+
+    #[test]
     fn a_layout_is_built_traced_optimised_and_saved_in_the_window() {
         // A collimated beam, a biconvex singlet (R ±50 mm, 4 mm, n = 1.5: f ≈ 50.7 mm)
         // and a screen 50 mm behind it, about 1 mm short of the focus; the optimiser
@@ -4050,6 +4127,65 @@ mod exit {
             .as_f64()
             .expect("direct");
         assert!((screen / 1e-3 - 0.9216).abs() < 1e-6, "{screen}");
+    }
+
+    #[test]
+    fn backscatter_goes_on_the_detector_chosen_and_an_iris_opens() {
+        // The window of the test above, with a detector `back` placed in the beam two
+        // holes from the laser and an iris I1 at hole 1. Selected, ticked returning and
+        // given backscatter, `back` takes the term (no detector added): it weighs the
+        // window's reflections over the beam going through, R + T²R/(1 − R²) = 7.69 %
+        // times the mean exp(−2r²/w²) over the 2 mm beam with w = 10 mm, about 0.99
+        // (Fresnel, Hecht §4.6). The iris's opening button gives it a soft rim and the DOF.
+        let dir = scratch("backscatter-chosen");
+        let path = dir.join("window.optobench");
+        std::fs::write(
+            &path,
+            "format = \"optobench/1\"\nkind = \"layout\"\nlayout = \"table\"\n\n[table]\npitch = 25.0\n\n\
+             [[source]]\nid = \"S1\"\nkind = \"collimated\"\nwavelength_um = 0.633\npower_w = 0.001\ndiameter = 2.0\nhole = [0, 0]\nheight = 75.0\naxis = [1, 0, 0]\n\n\
+             [[element]]\nid = \"W1\"\nkind = \"lens\"\nhole = [4, 0]\nheight = 75.0\naxis = [1, 0, 0]\n\
+             surfaces = [{ radius = \"inf\" }, { radius = \"inf\" }]\nthickness = [5.0]\nmaterial = [1.5]\ndiameter = 25.4\nclear_aperture = 22.9\n\n\
+             [[proxy]]\nid = \"I1\"\nkind = \"plate\"\nhole = [1, 0]\nheight = 75.0\naxis = [1, 0, 0]\nhole_diameter = 10.0\nsize = 30.0\n\n\
+             [[detector]]\nid = \"D1\"\nhole = [10, 0]\nheight = 75.0\naxis = [1, 0, 0]\nsize = [20, 20]\npixels = [20, 20]\n\n\
+             [[detector]]\nid = \"back\"\nhole = [2, 0]\nheight = 75.0\naxis = [1, 0, 0]\nsize = [20, 20]\npixels = [20, 20]\n",
+        )
+        .expect("written");
+        let mut h = window(Some(path.clone()), &dir);
+        settle(&mut h);
+        click(&mut h, "Workspace");
+        click(&mut h, "Layout");
+        click(&mut h, "back");
+        click(&mut h, "returning");
+        click(&mut h, "Add a term");
+        click(&mut h, "backscatter");
+        assert!(errors(&h).is_empty(), "{:?}", errors(&h));
+        let text = std::fs::read_to_string(&path).expect("written");
+        assert!(!text.contains("id = \"R1\""), "no detector added:\n{text}");
+        assert!(
+            text.contains("id = \"back\"") && text.contains("returning = true"),
+            "{text}"
+        );
+        assert!(
+            text.contains("kind = \"backscatter\"\ndetector = \"back\""),
+            "{text}"
+        );
+        let traced = trace(&path, &dir);
+        let back = traced["detectors"]
+            .as_array()
+            .and_then(|l| l.iter().find(|d| d["id"] == "back"))
+            .expect("back");
+        let percent = back["backscatter_percent"].as_f64().expect("%");
+        assert!(percent > 7.5 && percent < 7.7, "{percent} %");
+        // The iris: opening adds the DOF and a 0.5 mm rim.
+        click(&mut h, "I1  ·  iris");
+        click(&mut h, "opening");
+        assert!(errors(&h).is_empty(), "{:?}", errors(&h));
+        let text = std::fs::read_to_string(&path).expect("written");
+        assert!(
+            text.contains("edge = 0.5")
+                && text.contains("name = \"I1_opening\", kind = \"opening\""),
+            "{text}"
+        );
     }
 
     #[test]

@@ -147,6 +147,18 @@ pub enum Role {
     },
     /// Absorbs and records clipping: mounts, tubes, plates, stops.
     Absorber,
+    /// The soft rim of an iris (a face in its local z = 0 plane, whose region leaves a
+    /// hole of radius `inner`): a ray hitting it at radius r ≥ `outer` is clipped; between
+    /// the two it goes on with the share (outer − r)/(outer − inner) of its power, the
+    /// rest clipped there (`RayRecord::edge_losses`). Over an evenly filled beam it passes
+    /// what a sharp hole of radius (inner + outer)/2 does, to first order in the width,
+    /// and the power through it changes smoothly with the hole's size.
+    SoftEdge {
+        /// Where the rim starts, from the axis (mm).
+        inner: f64,
+        /// Where it ends, closed (mm).
+        outer: f64,
+    },
     /// An ideal thin lens of focal length `focal_length` (mm) in the local z = 0 plane: a
     /// ray at local height (x, y) has its direction's slopes (taken along its own sense
     /// of travel) changed by −(x, y) / f, exactly. Hits beyond `clear_radius` are clipped.
@@ -435,6 +447,8 @@ pub struct RayRecord {
     /// At each refracting face crossed: (face, power not transmitted there), that is
     /// reflected (followed as a child ray or not) and absorbed in its coating (W).
     pub face_losses: Vec<(usize, f64)>,
+    /// At each soft rim crossed (`Role::SoftEdge`): (face, power clipped there) (W).
+    pub edge_losses: Vec<(usize, f64)>,
     /// 0 for a launched ray, 1 for a ray split off a launched ray, and so on.
     pub generation: usize,
 }
@@ -499,6 +513,7 @@ impl Ledger {
         self.scattered += record.scattered_power;
         self.reflected += record.reflected_power;
         self.below_cutoff += record.below_cutoff_power;
+        self.clipped += record.edge_losses.iter().map(|e| e.1).sum::<f64>();
         let remaining = record.ray.power;
         match record.end {
             End::Detected { .. } => self.detected += remaining,
@@ -666,6 +681,7 @@ impl NonSequentialSystem {
             powers: Vec::new(),
             media: Vec::new(),
             face_losses: Vec::new(),
+            edge_losses: Vec::new(),
             generation: branch.generation,
         };
         let mut medium = branch.medium;
@@ -731,6 +747,23 @@ impl NonSequentialSystem {
                 Role::Absorber => {
                     record.end = End::Clipped { face: face_index };
                     return record;
+                }
+                Role::SoftEdge { inner, outer } => {
+                    let kept = if outer > inner {
+                        ((outer - r) / (outer - inner)).clamp(0.0, 1.0)
+                    } else {
+                        0.0
+                    };
+                    if kept <= 0.0 {
+                        record.end = End::Clipped { face: face_index };
+                        return record;
+                    }
+                    let ray = &mut record.ray;
+                    record
+                        .edge_losses
+                        .push((face_index, ray.power * (1.0 - kept)));
+                    ray.power *= kept;
+                    continue;
                 }
                 Role::Detector { detector } => {
                     record.end = End::Detected {

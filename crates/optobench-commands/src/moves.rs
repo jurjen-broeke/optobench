@@ -53,6 +53,7 @@ fn target_json(target: &Target) -> (&'static str, String) {
         Target::Element(id) => ("element", id.clone()),
         Target::Source(id) => ("source", id.clone()),
         Target::Detector(id) => ("detector", id.clone()),
+        Target::Proxy(id) => ("proxy", id.clone()),
         Target::Occurrence(path) => ("occurrence", path.clone()),
     }
 }

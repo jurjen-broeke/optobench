@@ -1,5 +1,5 @@
-//! Groups (M16): items that move together. A group's DOF moves every member that carries
-//! DOFs by the same amount (the first leads, the others follow one to one).
+//! Groups (M16): items that move together. A group's DOF moves every member by the same
+//! amount (the first leads, the others follow one to one).
 
 use optobench_commands::Registry;
 use serde_json::{Value, json};
@@ -54,11 +54,13 @@ fn a_groups_dof_moves_its_members_together() {
             "expander_y",
             "expander_tip",
             "expander_y_L2",
-            "expander_tip_L2"
+            "expander_tip_L2",
+            "expander_y_iris",
+            "expander_tip_iris"
         ],
-        "the proxy carries none"
+        "the iris (a proxy) follows too"
     );
-    // 3 mm along y: both lenses move 3 mm, the detector and source stay.
+    // 3 mm along y: both lenses and the iris move 3 mm, the detector and source stay.
     let moved = run(
         "view",
         &text,
@@ -66,7 +68,7 @@ fn a_groups_dof_moves_its_members_together() {
         json!({ "dofs": { "expander_y": 3.0 } }),
     )
     .expect("viewed");
-    for id in ["L1", "L2"] {
+    for id in ["L1", "L2", "iris"] {
         let (a, b) = (origin(&still, id), origin(&moved, id));
         assert!(
             (b[1] - a[1] - 3.0).abs() < 1e-9 && (b[0] - a[0]).abs() < 1e-9,
@@ -107,7 +109,7 @@ fn group_mistakes_are_refused() {
         ),
         (
             "[[group]]\nid = \"lonely\"\ndof = [ { name = \"g\", kind = \"slide\", axis = \"x\" } ]\n",
-            "no element, source or detector",
+            "no element, source, detector or proxy",
         ),
         (
             "[[group]]\nid = \"expander\"\nmembers = [\"L1\"]\n",

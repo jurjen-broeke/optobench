@@ -45,12 +45,15 @@ pub enum Term {
     /// As much of the launched power as possible arriving directly (residual: the
     /// fraction that does not).
     Power,
-    /// As little light as possible coming back through a returning detector (placed at a
-    /// laser, facing along its beam): its Gaussian-weighted returned power
-    /// (`DetectorResult::returned`) as a percentage of the launched power. The light is
-    /// the ghosts of partly reflecting faces; tilting or moving them sends it past. Its
-    /// slope is zero where the returning light is centred on the detector (at normal
-    /// incidence exactly), so a DOF that should tilt it away starts a little off.
+    /// As little light as possible coming back (%). On a returning detector (in the
+    /// beam, facing along it; at a laser, what comes back into it): its Gaussian-weighted
+    /// returned power (`DetectorResult::returned`) over the power going through it
+    /// (`DetectorResult::through`), so above 100 more comes back than goes through; at a
+    /// laser that is all the launched power. On any other detector (behind a part, to
+    /// catch spill): the power reaching it over the launched power. The light is the
+    /// ghosts of partly reflecting faces; tilting or moving them sends it past. On a
+    /// returning detector its slope is zero where the returning light is centred (at
+    /// normal incidence exactly), so a DOF that should tilt it away starts a little off.
     Backscatter,
     /// Every free DOF with a range near the middle of it, leaving room to adjust both
     /// ways: one residual per such DOF, (value − middle) / half the range (0 in the
@@ -124,12 +127,6 @@ pub fn residuals(merit: &[Merit], traced: &SceneTrace) -> Result<Vec<Vec<f64>>, 
                 .iter()
                 .find(|d| d.id == m.detector)
                 .ok_or_else(|| format!("no detector `{}`", m.detector))?;
-            if m.term == Term::Backscatter && !d.returning {
-                return Err(format!(
-                    "backscatter is measured on a returning detector (`returning = true`); `{}` is not one",
-                    m.detector
-                ));
-            }
             if d.direct_power <= 0.0 && !matches!(m.term, Term::Power | Term::Backscatter) {
                 return Err(format!("no direct light reaches detector `{}`", m.detector));
             }
@@ -148,10 +145,19 @@ pub fn residuals(merit: &[Merit], traced: &SceneTrace) -> Result<Vec<Vec<f64>>, 
                     vec![DIAMETER_PER_RMS_RADIUS * d.direct_rms_radius - target]
                 }
                 Term::Headroom => Vec::new(),
+                Term::Backscatter if d.returning => {
+                    if d.through <= 0.0 {
+                        return Err(format!(
+                            "no light goes through returning detector `{}` along its axis, so nothing to compare what comes back with",
+                            m.detector
+                        ));
+                    }
+                    vec![100.0 * d.returned / d.through]
+                }
                 Term::Backscatter => {
                     let launched = traced.ledger.launched;
                     vec![if launched > 0.0 {
-                        100.0 * d.returned / launched
+                        100.0 * d.power / launched
                     } else {
                         0.0
                     }]
