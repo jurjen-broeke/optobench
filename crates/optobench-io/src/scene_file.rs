@@ -117,7 +117,7 @@
 //!
 //! [[element]]
 //! id = "L3"
-//! # … as L1, plus degrees of freedom (elements, sources and detectors; see
+//! # … as L1, plus degrees of freedom (elements, sources, detectors and proxies; see
 //! # optobench_scene::dof): slides in mm, tilts in degrees, axes and pivots in the item's
 //! # own frame unless frame = "scene"
 //! dof = [ { name = "L3_z", kind = "slide", axis = "z", range = [-10, 10] },
@@ -153,6 +153,13 @@
 //! hole_diameter = 5.0
 //! size = 50.0
 //! at = 50.0
+//! edge = 0.5                        # optional: a soft rim this wide (mm) across the
+//!                                   # hole's edge, passing from all to none; default 0
+//!                                   # (sharp). Lets the optimiser set the opening
+//! dof = [ { name = "iris_opening", kind = "opening", range = [-4, 5] } ]
+//!                                   # proxies take slides and tilts as elements do; an
+//!                                   # iris also an opening: the change in its hole's
+//!                                   # diameter (mm), no axis
 //!
 //! [trace]                           # optional: ray splitting at partly reflecting faces
 //! split = true                      # default true
@@ -929,14 +936,17 @@ pub(crate) fn dofs(
             };
             let name = dof.text("name")?.to_owned();
             let kind = dof.text("kind")?;
-            if kind == "collar" {
+            if kind == "collar" || kind == "opening" {
                 if let Some(key) = ["axis", "pivot", "frame"]
                     .iter()
                     .find(|k| table.contains_key(**k))
                 {
-                    return Err(error(format!(
-                        "{context}: a collar changes the cover glass the objective corrects for; it has no `{key}`"
-                    )));
+                    let what = if kind == "collar" {
+                        "a collar changes the cover glass the objective corrects for"
+                    } else {
+                        "an opening changes an iris's hole diameter"
+                    };
+                    return Err(error(format!("{context}: {what}; it has no `{key}`")));
                 }
             }
             let in_scene = match table.get("frame").map(|f| f.as_str()) {
@@ -957,7 +967,7 @@ pub(crate) fn dofs(
                 }
             };
             let axis = match table.get("axis") {
-                _ if kind == "collar" => Vec3::Z,
+                _ if kind == "collar" || kind == "opening" => Vec3::Z,
                 Some(Value::String(a)) => match a.as_str() {
                     "x" => Vec3::X,
                     "y" => Vec3::Y,
@@ -975,16 +985,18 @@ pub(crate) fn dofs(
                 .normalized()
                 .ok_or_else(|| error(format!("{context}: `axis` has zero length")))?;
             let scale = match kind {
-                "slide" | "collar" => 1.0,
+                "slide" | "collar" | "opening" => 1.0,
                 "tilt" => core::f64::consts::PI / 180.0,
                 other => {
                     return Err(error(format!(
-                        "{context}: kind `{other}` is not known; use \"slide\", \"tilt\" or \"collar\""
+                        "{context}: kind `{other}` is not known; use \"slide\", \"tilt\", \"collar\" or \"opening\""
                     )));
                 }
             };
             let motion = if kind == "collar" {
                 Motion::Collar
+            } else if kind == "opening" {
+                Motion::Opening
             } else if kind == "slide" {
                 if table.contains_key("pivot") {
                     return Err(error(format!("{context}: a slide has no `pivot`")));
@@ -1011,8 +1023,8 @@ pub(crate) fn dofs(
                         "{context}: a free range is the space around the part; it has no `{key}`"
                     )));
                 }
-                if kind == "collar" {
-                    return Err(error(format!("{context}: a collar has no free range")));
+                if kind == "collar" || kind == "opening" {
+                    return Err(error(format!("{context}: a {kind} has no free range")));
                 }
             } else if let Some(Value::String(other)) = table.get("range") {
                 return Err(error(format!(
@@ -2007,7 +2019,7 @@ pub fn parse_with(text: &str, lookups: &Lookups) -> Result<Scene, FileError> {
                     Placement::Planar(layout) => {
                         check_keys(
                             item.table,
-                            &["id", "kind", "inner_diameter", "from", "to"],
+                            &["id", "kind", "inner_diameter", "from", "to", "dof"],
                             &item.context,
                         )?;
                         let (from, to) = (item.number("from")?, item.number("to")?);
@@ -2031,7 +2043,10 @@ pub fn parse_with(text: &str, lookups: &Lookups) -> Result<Scene, FileError> {
                     Placement::Table(_) => {
                         check_keys(
                             item.table,
-                            &with(TABLE_POSITION, &["id", "kind", "inner_diameter", "length"]),
+                            &with(
+                                TABLE_POSITION,
+                                &["id", "kind", "inner_diameter", "length", "dof"],
+                            ),
                             &item.context,
                         )?;
                         let length = item.positive("length")?;
@@ -2048,14 +2063,25 @@ pub fn parse_with(text: &str, lookups: &Lookups) -> Result<Scene, FileError> {
             "plate" => {
                 check_keys(
                     item.table,
-                    &with(position, &["id", "kind", "hole_diameter", "size"]),
+                    &with(
+                        position,
+                        &["id", "kind", "hole_diameter", "size", "edge", "dof"],
+                    ),
                     &item.context,
                 )?;
+                let edge = item.optional_number("edge", 0.0)?;
+                if !(edge >= 0.0 && edge.is_finite()) {
+                    return Err(error(format!(
+                        "{}: `edge` is the width of the hole's soft rim (mm), 0 or more",
+                        item.context
+                    )));
+                }
                 (
                     placement.frame(&item)?,
                     ProxyKind::Plate {
                         hole_diameter: item.positive("hole_diameter")?,
                         size: item.positive("size")?,
+                        edge,
                     },
                 )
             }
@@ -2066,6 +2092,23 @@ pub fn parse_with(text: &str, lookups: &Lookups) -> Result<Scene, FileError> {
                 )));
             }
         };
+        // Proxies move and turn as elements do; an iris also opens and closes.
+        let proxy_dofs = dofs(
+            &item,
+            &Target::Proxy(id.clone()),
+            &frame,
+            false,
+            frame.origin(),
+        )?;
+        if let Some(d) = proxy_dofs.iter().find(|d| {
+            matches!(d.motion, Motion::Opening) && !matches!(kind, ProxyKind::Plate { .. })
+        }) {
+            return Err(error(format!(
+                "{} DOF `{}`: an opening belongs to an iris (kind \"plate\")",
+                item.context, d.name
+            )));
+        }
+        scene.dofs.extend(proxy_dofs);
         scene.proxies.push(Proxy { id, frame, kind });
     }
 

@@ -66,6 +66,7 @@ fn part_key(target: &Target) -> String {
         Target::Element(id) => format!("element:{id}"),
         Target::Source(id) => format!("source:{id}"),
         Target::Detector(id) => format!("detector:{id}"),
+        Target::Proxy(id) => format!("proxy:{id}"),
     }
 }
 
@@ -807,6 +808,7 @@ impl Scene {
                 ProxyKind::Plate {
                     hole_diameter,
                     size,
+                    ..
                 } => {
                     let (half, hole) = (0.5 * size, 0.5 * hole_diameter);
                     let mut faces = slab(f, half, half, -1.0, 1.0);

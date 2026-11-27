@@ -77,7 +77,7 @@ A design can start without SolidCraft. A scene file describes the optics directl
 
 - **Planar layout:** elements placed by distance along a folded optical axis, with fold mirrors given by angle. Shown in 2D, traced in 3D so off-axis fields and tilts still work.
 - **Table layout:** elements placed on a breadboard grid (pitch set by the user, e.g. 25 mm or 1 in), with a height above the table and a rotation about Z.
-- **Mechanical proxies:** aperture stops, tubes (inner diameter, length) and plates with holes. Enough to find clipping without a CAD model.
+- **Mechanical proxies:** aperture stops, tubes (inner diameter, length) and plates with holes. Enough to find clipping without a CAD model. Proxies take degrees of freedom like elements; an iris's opening is one (`opening`, the change in its hole's diameter), with an optional soft rim (`edge`) across which the light passed falls linearly from all to none, so the optimiser finds a slope (a sharp edge passes or stops whole rays). Field propagation keeps the exact edge.
 - **Reports** give positions in layout coordinates (axis distance, grid hole, height).
 - **Upgrade path:** `optobench export-placements` writes the element poses and a matching sidecar, so the layout can be rebuilt in SolidCraft later and matched to its bodies.
 

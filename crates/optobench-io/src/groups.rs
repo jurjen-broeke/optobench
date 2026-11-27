@@ -15,10 +15,9 @@
 //!
 //! The interface moves a group's members together (Move on any of them). A group's DOFs
 //! are in the scene's frame (axes, and a tilt's `pivot`, which every member turns about
-//! and which a tilt must give): each becomes the DOF of its first member that can carry
-//! one (an element, source or detector), and every other such member follows it one to
-//! one (`follows`, `<dof>_<member>`). A proxy in a group moves with the interface's Move
-//! but not with the group's DOFs. The expansion is done on the file's tables before
+//! and which a tilt must give): each becomes the DOF of its first member (an element,
+//! source, detector or proxy), and every other member follows it one to one (`follows`,
+//! `<dof>_<member>`). The expansion is done on the file's tables before
 //! anything else reads them.
 //!
 //! In a sidecar a group also takes `occurrences`: untagged CAD parts that move with it
@@ -38,7 +37,7 @@ use crate::scene_file::{FileError, check_keys, error};
 
 /// Tables whose entries can be in a group, and those of them that carry DOFs.
 const MEMBERS: &[&str] = &["element", "source", "detector", "proxy"];
-const WITH_DOFS: &[&str] = &["element", "source", "detector"];
+const WITH_DOFS: &[&str] = &["element", "source", "detector", "proxy"];
 
 /// A DOF of a CAD occurrence a group moves: the occurrence's path and its DOF entry.
 pub(crate) type OccurrenceDof = (String, Table);
@@ -129,7 +128,7 @@ pub(crate) fn expand(root: &mut Table, cad: bool) -> Result<Vec<OccurrenceDof>, 
         }
         let Some((leader, rest)) = movable.split_first() else {
             return Err(error(format!(
-                "{context}: no element, source or detector is in it to carry its DOFs"
+                "{context}: no element, source, detector or proxy is in it to carry its DOFs"
             )));
         };
         for dof in dofs {

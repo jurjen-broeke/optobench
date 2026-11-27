@@ -329,6 +329,7 @@ fn events(
             ProxyKind::Plate {
                 hole_diameter,
                 size,
+                ..
             } => {
                 if s <= 1e-9 || s >= end - 1e-9 {
                     continue;

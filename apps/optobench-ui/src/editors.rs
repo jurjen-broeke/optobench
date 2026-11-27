@@ -525,7 +525,13 @@ pub fn proxy_kind(target: &Value, entry: &Value, kind: &str) -> Vec<Value> {
             }
         }
         "tube" => {
-            unset(&mut ops, &["hole_diameter", "size", "at"]);
+            unset(&mut ops, &["hole_diameter", "size", "at", "edge"]);
+            // A tube does not open and close.
+            for dof in entry["dof"].as_array().into_iter().flatten() {
+                if dof["kind"] == "opening" {
+                    ops.push(json!({ "op": "remove_dof", "dof": dof["name"] }));
+                }
+            }
             ops.push(op("set", "inner_diameter", Some(json!(25.4))));
             if planar {
                 let at = entry["at"].as_f64().unwrap_or(0.0);
@@ -735,7 +741,7 @@ fn unit(key: &str) -> Option<&'static str> {
     Some(match key {
         "at" | "height" | "diameter" | "clear_aperture" | "focal_length" | "working_distance"
         | "pupil_distance" | "inner_diameter" | "hole_diameter" | "length" | "waist_diameter"
-        | "core_diameter" | "thickness" | "size" | "pitch" => "mm",
+        | "core_diameter" | "thickness" | "size" | "pitch" | "edge" => "mm",
         "wavelength_um" => "µm",
         "power_w" => "W",
         "fold" | "half_angle_deg" => "°",
@@ -923,6 +929,21 @@ pub fn entry(
                 ui.end_row();
             }
         });
+    // A detector can be made returning even when the file does not say (M17e).
+    if table == "detector" && entry["returning"].is_null() {
+        let mut on = false;
+        if ui
+            .checkbox(&mut on, "returning")
+            .on_hover_text("Stops nothing and weighs the light coming back across it (backscatter); placed in the beam, it compares that with the light going through")
+            .changed()
+        {
+            let mut op = target.clone();
+            op["op"] = json!("set");
+            op["key"] = json!("returning");
+            op["value"] = json!(true);
+            operations.push(op);
+        }
+    }
     if WITH_DOFS.contains(&table) && entry["id"].is_string() {
         ui.add_space(6.0);
         operations.extend(dofs(ui, drafts, table, entry, &base, context));
@@ -1841,7 +1862,7 @@ pub fn moved_group(
 }
 
 /// The tables whose entries carry degrees of freedom.
-const WITH_DOFS: &[&str] = &["element", "source", "detector", "group"];
+const WITH_DOFS: &[&str] = &["element", "source", "detector", "proxy", "group"];
 
 /// The degrees of freedom of an entry: each with its value and its range (both
 /// editable), removed by ×; and buttons to add one. On a table layout and in a sidecar
@@ -1916,14 +1937,15 @@ fn dofs(
             } else {
                 "its own"
             };
-            ui.label(
-                RichText::new(format!(
+            let what = if dof["kind"] == "opening" {
+                "opening: the change in the hole's diameter, range".to_owned()
+            } else {
+                format!(
                     "{} {along} ({frame} axes), range",
                     if tilt { "tilt about" } else { "slide along" }
-                ))
-                .color(DARK.text_dim)
-                .size(11.0),
-            );
+                )
+            };
+            ui.label(RichText::new(what).color(DARK.text_dim).size(11.0));
             // A rough placement (M18): as far as the space around its part allows.
             let free = dof["range"] == "free";
             if free {
@@ -2157,7 +2179,44 @@ fn dofs(
                 }));
             }
         }
+        if table == "proxy" && entry["kind"] == "plate" {
+            operations.extend(opening_button(ui, entry, &list));
+        }
     });
+    operations
+}
+
+/// The button that lets the optimiser open and close an iris: a DOF of kind `opening`
+/// from nearly shut (0.1 mm) to its plate's size and, if its edge is sharp, a soft rim
+/// 0.5 mm wide so the power through it changes smoothly as it opens (a sharp edge passes
+/// or stops whole rays, which gives the optimiser no slope). Nothing once it has one.
+fn opening_button(ui: &mut Ui, entry: &Value, list: &[Value]) -> Vec<Value> {
+    let id = entry["id"].as_str().unwrap_or_default();
+    if list.iter().any(|d| d["kind"] == "opening") {
+        return Vec::new();
+    }
+    let hole = entry["hole_diameter"].as_f64().unwrap_or(5.0);
+    let size = entry["size"].as_f64().unwrap_or(2.0 * hole);
+    let mut operations = Vec::new();
+    if ui
+        .small_button("opening")
+        .on_hover_text("Lets the optimiser open or close the iris (the change in its hole's diameter, mm), from nearly shut to its plate's size; a sharp edge gets a soft rim 0.5 mm wide so the light through it changes smoothly")
+        .clicked()
+    {
+        if entry["edge"].as_f64().unwrap_or(0.0) <= 0.0 {
+            operations.push(json!({
+                "op": "set", "table": "proxy", "id": id, "key": "edge", "value": 0.5,
+            }));
+        }
+        operations.push(json!({
+            "op": "add_dof", "table": "proxy", "id": id,
+            "dof_entry": [
+                ["name", format!("{id}_opening")],
+                ["kind", "opening"],
+                ["range", [tidy(0.1 - hole), tidy(size - hole)]],
+            ],
+        }));
+    }
     operations
 }
 
@@ -2248,18 +2307,31 @@ pub fn first_detector(design: &Value) -> Option<String> {
         .map(str::to_owned)
 }
 
-/// The operations that add a `backscatter` term: on the design's first returning
-/// detector or, without one, on a new one at the first source, facing along its beam and
-/// as wide as it (so the light it weighs is what a mode of the beam's size takes in).
-/// `None` without either.
-pub fn backscatter_term(design: &Value) -> Option<Vec<Value>> {
-    let existing = design["detector"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .find(|d| d["returning"] == true)
-        .and_then(|d| d["id"].as_str())
-        .map(str::to_owned);
+/// The operations that add a `backscatter` term: on `chosen` (a detector the user picked:
+/// a returning one in the beam, or a screen behind a part to catch spill), else on the
+/// design's first returning detector or, without one, on a new one at the first source,
+/// facing along its beam and as wide as it (so the light it weighs is what a mode of the
+/// beam's size takes in). `None` without any of these.
+pub fn backscatter_term(design: &Value, chosen: Option<&str>) -> Option<Vec<Value>> {
+    let is_detector = |id: &str| {
+        design["detector"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .any(|d| d["id"] == id)
+    };
+    let existing = chosen
+        .filter(|id| is_detector(id))
+        .map(str::to_owned)
+        .or_else(|| {
+            design["detector"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .find(|d| d["returning"] == true)
+                .and_then(|d| d["id"].as_str())
+                .map(str::to_owned)
+        });
     let mut operations = Vec::new();
     let id = match existing {
         Some(id) => id,
@@ -2620,7 +2692,7 @@ mod tests {
         let design = json!({ "layout": "table",
             "source": [{ "id": "S1", "kind": "gaussian", "waist_diameter": 1.5, "hole": [0, 0], "height": 75.0, "axis": [1, 0, 0] }],
             "detector": [{ "id": "D1", "hole": [9, 0] }] });
-        let ops = backscatter_term(&design).expect("ops");
+        let ops = backscatter_term(&design, None).expect("ops");
         assert_eq!(ops.len(), 2);
         let entry = ops[0]["entry"].as_array().expect("pairs");
         for pair in [
@@ -2639,12 +2711,19 @@ mod tests {
         );
         // With one, the term goes on it; it is never the first detector of other terms.
         let with = json!({ "detector": [{ "id": "back", "returning": true }, { "id": "D1" }] });
-        let ops = backscatter_term(&with).expect("ops");
+        let ops = backscatter_term(&with, None).expect("ops");
         assert_eq!(ops.len(), 1);
         assert_eq!(ops[0]["entry"][1], json!(["detector", "back"]));
         assert_eq!(first_detector(&with).as_deref(), Some("D1"));
+        // A detector the user chose takes it, returning or not (a screen catching
+        // spill); a choice that is not a detector is passed over.
+        let ops = backscatter_term(&with, Some("D1")).expect("ops");
+        assert_eq!(ops.len(), 1);
+        assert_eq!(ops[0]["entry"][1], json!(["detector", "D1"]));
+        let ops = backscatter_term(&with, Some("L1")).expect("ops");
+        assert_eq!(ops[0]["entry"][1], json!(["detector", "back"]));
         // Neither a source nor a returning detector: nothing to measure on.
-        assert!(backscatter_term(&json!({ "detector": [{ "id": "D1" }] })).is_none());
+        assert!(backscatter_term(&json!({ "detector": [{ "id": "D1" }] }), None).is_none());
     }
 
     #[test]

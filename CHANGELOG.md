@@ -7,6 +7,27 @@ with the release that introduced them.
 
 Nothing yet.
 
+## 0.9.0 (2026-11-27)
+
+- Backscatter on the detector you choose: Add a term → backscatter puts the term on the
+  detector selected in the browser or the view, and Properties has a "returning" tick
+  for any detector. On a returning detector in the beam, `backscatter` is now what comes
+  back over what goes through it (`through_w`, `backscatter_percent` in `trace`; above
+  100 % more comes back than goes through, shown in red); at a laser, where all the
+  launched power goes through, that is the value M17e gave. On a screen (behind a part,
+  catching spill) it is the share of the launched power reaching it, where it was
+  refused before. Older versions read the same files but measure a returning detector
+  away from the laser against the launched power.
+- An iris's opening as a degree of freedom (`kind = "opening"`: the change in its hole's
+  diameter, mm), and a soft rim for it (`edge`, mm, on a `plate`: the light passed falls
+  from all to none across it), so the power through the iris changes smoothly and the
+  optimiser can set it; the "opening" button in an iris's Properties adds both. Proxies
+  (irises, tubes) also take slides and tilts, and follow their group's degrees of
+  freedom. Field propagation keeps an iris's exact edge. No file-format change: older
+  versions refuse `edge`, `opening` and a proxy's `dof` rather than misread them.
+- The results strip scrolls when its columns do not fit, instead of growing over the
+  view (many detectors made the view too small to use).
+
 ## 0.8.0 (2026-11-25)
 
 - Release builds: when a merged pull request raises the version, CI builds `optobench` and

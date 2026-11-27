@@ -1,6 +1,8 @@
 //! Light coming back into a laser (M17e): a returning detector at the laser, facing along
 //! its beam, weighs what the faces of an uncoated window reflect back; the `backscatter`
-//! merit term tilts the window until that light passes the laser by.
+//! merit term tilts the window until that light passes the laser by. The term on a
+//! returning detector in the beam is what comes back over what goes through, and on a
+//! screen the share of the launched power reaching it.
 //!
 //! Reference values from theory: an uncoated face between air and glass of index n
 //! reflects R = ((n − 1)/(n + 1))² at normal incidence (Fresnel; E. Hecht, Optics, 5th
@@ -152,24 +154,94 @@ fn the_optimiser_tilts_the_window_until_nothing_comes_back() {
     assert!(screen > 0.9e-3, "{screen}");
 }
 
-#[test]
-fn backscatter_needs_a_returning_detector() {
-    let dir = scratch("refused");
+/// The `backscatter` term's value at the start of an optimisation of `text`.
+fn backscatter_at_start(label: &str, text: String) -> Result<f64, String> {
+    let dir = scratch(label);
     let path = dir.join("window.optobench");
-    std::fs::write(
-        &path,
+    std::fs::write(&path, text).expect("written");
+    let result = Registry::standard()
+        .run("optimize", &json!({ "path": path.to_string_lossy() }))
+        .map_err(|e| e.message)?;
+    let term = result["merit"]
+        .as_array()
+        .and_then(|m| m.iter().find(|t| t["kind"] == "backscatter"))
+        .expect("the term");
+    Ok(term["start"][0].as_f64().expect("start"))
+}
+
+#[test]
+fn backscatter_on_a_screen_is_the_share_of_the_launched_power_reaching_it() {
+    // A screen behind a part catches spill: the term is 100 × its power over the
+    // launched power. Here the screen behind the window gets everything the window
+    // passes, T²(1 + R² + R⁴ + …) = T²/(1 − R²) = 0.923077 of the beam.
+    let (r, t) = (0.04, 0.96);
+    let value = backscatter_at_start(
+        "screen",
         layout(0.2).replace(
             "kind = \"backscatter\"\ndetector = \"back\"",
             "kind = \"backscatter\"\ndetector = \"screen\"",
         ),
     )
-    .expect("written");
-    let error = Registry::standard()
-        .run("optimize", &json!({ "path": path.to_string_lossy() }))
-        .expect_err("refused");
+    .expect("measured on the screen");
+    let theory = 100.0 * t * t / (1.0 - r * r);
     assert!(
-        error.message.contains("returning detector"),
-        "{}",
-        error.message
+        (value - theory).abs() < 1e-6,
+        "{value} % against {theory} %"
     );
+}
+
+#[test]
+fn backscatter_in_the_beam_is_what_comes_back_over_what_goes_through() {
+    // A returning detector in the beam between the laser and the window (two holes on),
+    // 200 mm square: the whole beam goes through it once, and the window's reflections
+    // come back through it. Its term is 100 × returned / through: the window's
+    // R + T²R/(1 − R²) times the mean weight exp(−2r²/w²) over the 2 mm beam, w = 100 mm,
+    // (1 − e^(−2a²/w²)) w²/(2a²) with a = 1 mm.
+    let (r, t) = (0.04, 0.96);
+    let text = layout(0.0)
+        .replace(
+            "id = \"back\"\nhole = [0, 0]",
+            "id = \"back\"\nhole = [2, 0]",
+        )
+        .replace("size = [3, 3]", "size = [200, 200]");
+    let dir = scratch("in-beam");
+    let path = dir.join("window.optobench");
+    std::fs::write(&path, &text).expect("written");
+    let traced = run("trace", &path);
+    conserved(&traced);
+    let back = detector(&traced, "back");
+    let through = back["through_w"].as_f64().expect("through") / 1e-3;
+    assert!((through - 1.0).abs() < 1e-12, "{through}");
+    // Unweighted, the returning light inside it is the window's to 1e-8.
+    let window = r + t * t * r / (1.0 - r * r);
+    let returned = back["power_w"].as_f64().expect("power") / 1e-3;
+    assert!((returned - window).abs() < 1e-8, "{returned}");
+    // Weighted: the mean weight over the beam is 1 − 1e-4 or so; the beam's rings of
+    // rays sample its mean r² (and so that departure from 1) to 1.4 %, so the value
+    // agrees to a few 1e-6 of itself.
+    let (a, w) = (1.0_f64, 100.0_f64);
+    let mean = (1.0 - (-2.0 * a * a / (w * w)).exp()) * w * w / (2.0 * a * a);
+    let theory = 100.0 * window * mean;
+    let value = back["backscatter_percent"].as_f64().expect("%");
+    assert!(
+        (value - theory).abs() < 3e-6 * theory,
+        "{value} % against {theory} %"
+    );
+    let term = backscatter_at_start("in-beam-term", text).expect("measured");
+    assert!((term - value).abs() < 1e-12, "{term} against {value}");
+}
+
+#[test]
+fn backscatter_needs_light_going_through_a_returning_detector() {
+    // Three holes aside, the beam never crosses the returning detector: nothing to
+    // compare what comes back with.
+    let error = backscatter_at_start(
+        "aside",
+        layout(0.2).replace(
+            "id = \"back\"\nhole = [0, 0]",
+            "id = \"back\"\nhole = [2, 3]",
+        ),
+    )
+    .expect_err("refused");
+    assert!(error.contains("goes through"), "{error}");
 }

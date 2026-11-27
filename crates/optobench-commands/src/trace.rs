@@ -356,6 +356,14 @@ pub(crate) fn trace(parameters: &Parameters) -> Result<Value, CommandError> {
                 value["returning"] = json!(true);
                 value["returned_w"] = json!(d.returned);
                 value["returned_percent"] = json!(100.0 * d.returned / launched);
+                // What the `backscatter` term reads: returned over what goes through;
+                // above 100, more comes back than goes through.
+                value["through_w"] = json!(d.through);
+                value["backscatter_percent"] = if d.through > 0.0 {
+                    json!(100.0 * d.returned / d.through)
+                } else {
+                    Value::Null
+                };
             }
             value
         })

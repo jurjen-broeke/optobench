@@ -399,6 +399,14 @@ pub enum ProxyKind {
         hole_diameter: f64,
         /// Side of the plate (mm).
         size: f64,
+        /// Width of a soft rim across the hole's edge (mm; 0 for a sharp one): from
+        /// `edge`/2 inside the edge to `edge`/2 outside, the light passed falls linearly
+        /// from all to none (`optobench_trace::nonsequential::Role::SoftEdge`). It passes
+        /// what the sharp hole does over an evenly filled beam, to first order, and
+        /// changes smoothly as the hole opens, so the optimiser can set an iris's
+        /// opening (`dof::Motion::Opening`): a sharp edge passes or stops whole rays, and
+        /// the power through it holds still between them.
+        edge: f64,
     },
 }
 
@@ -983,19 +991,31 @@ impl Scene {
                 ProxyKind::Plate {
                     hole_diameter,
                     size,
+                    edge,
                 } => (
                     Shape::Profile(Arc::new(Plane)),
                     Region::SquareWithHole {
                         half_size: size / 2.0,
-                        hole_radius: hole_diameter / 2.0,
+                        hole_radius: (0.5 * (hole_diameter - edge)).max(0.0),
                     },
                 ),
+            };
+            let role = match proxy.kind {
+                ProxyKind::Plate {
+                    hole_diameter,
+                    edge,
+                    ..
+                } if edge > 0.0 => Role::SoftEdge {
+                    inner: (0.5 * (hole_diameter - edge)).max(0.0),
+                    outer: 0.5 * (hole_diameter + edge),
+                },
+                _ => Role::Absorber,
             };
             system.faces.push(Face {
                 shape,
                 placement: proxy.frame.transform(),
                 region,
-                role: Role::Absorber,
+                role,
                 negative_medium: air,
                 positive_medium: air,
                 owner,
@@ -1282,10 +1302,20 @@ impl Scene {
             .collect();
 
         let mut clipping: Vec<Clipping> = Vec::new();
-        for record in &records {
-            let End::Clipped { face } = record.end else {
-                continue;
+        // Whole rays stopped, and the shares soft rims took off rays that went on.
+        let clips = records.iter().flat_map(|record| {
+            let whole = match record.end {
+                End::Clipped { face } => Some((face, record.ray.power, 1)),
+                _ => None,
             };
+            whole.into_iter().chain(
+                record
+                    .edge_losses
+                    .iter()
+                    .map(|&(face, power)| (face, power, 0)),
+            )
+        });
+        for (face, power, rays) in clips {
             let owner = built.owners[built.system.faces[face].owner];
             let id = match owner {
                 Owner::Element(i) => &self.elements[i].id,
@@ -1295,14 +1325,14 @@ impl Scene {
             };
             match clipping.iter_mut().find(|c| c.owner == owner) {
                 Some(entry) => {
-                    entry.power += record.ray.power;
-                    entry.rays += 1;
+                    entry.power += power;
+                    entry.rays += rays;
                 }
                 None => clipping.push(Clipping {
                     id: id.clone(),
                     owner,
-                    power: record.ray.power,
-                    rays: 1,
+                    power,
+                    rays,
                 }),
             }
         }
@@ -1519,6 +1549,10 @@ pub struct DetectorResult {
     /// moves, so the optimiser can push it away (the `backscatter` merit term). Zero for
     /// other detectors.
     pub returned: f64,
+    /// For a returning detector: the light going through it, crossing its rectangle
+    /// along its axis (W), unweighted; what `backscatter` compares the returned light
+    /// with. Zero for other detectors.
+    pub through: f64,
 }
 
 /// Light reaching a detector: where in its frame (mm), the power (W), the direction
@@ -1530,10 +1564,11 @@ struct Arrival {
     direct: bool,
 }
 
-/// Where rays cross a returning detector's plane against its axis (from local z > 0 to
-/// z ≤ 0), anywhere in the plane: every step between two hits and, for a ray that
-/// escaped, its last direction on from its last hit.
-fn returning_arrivals(detector: &Detector, records: &[RayRecord]) -> Vec<Arrival> {
+/// Where rays cross a returning detector's plane, anywhere in it: every step between two
+/// hits and, for a ray that escaped, its last direction on from its last hit. Against its
+/// axis (`back`) from local z > 0 to z ≤ 0; along it from z ≤ 0 to z > 0, so a ray
+/// launched on the plane (a returning detector at its laser) counts as going through.
+fn plane_crossings(detector: &Detector, records: &[RayRecord], back: bool) -> Vec<Arrival> {
     let frame = &detector.frame;
     let mut out = Vec::new();
     for r in records {
@@ -1551,7 +1586,12 @@ fn returning_arrivals(detector: &Detector, records: &[RayRecord]) -> Vec<Arrival
         for (start, step, power) in steps {
             let a = frame.to_local_point(start);
             let d = frame.to_local_vector(step);
-            if a.z > 0.0 && a.z + d.z <= 0.0 && d.z < 0.0 {
+            let crosses = if back {
+                a.z > 0.0 && a.z + d.z <= 0.0 && d.z < 0.0
+            } else {
+                a.z <= 0.0 && a.z + d.z > 0.0 && d.z > 0.0
+            };
+            if crosses {
                 let t = a.z / -d.z;
                 let length = step.length();
                 if length > 0.0 {
@@ -1571,18 +1611,22 @@ fn returning_arrivals(detector: &Detector, records: &[RayRecord]) -> Vec<Arrival
 impl DetectorResult {
     fn collect(index: usize, detector: &Detector, records: &[RayRecord]) -> Self {
         let (width, height) = detector.size;
-        let (arrivals, returned) = if detector.returning {
-            let all = returning_arrivals(detector, records);
+        let inside =
+            |a: &Arrival| a.point.0.abs() <= width / 2.0 && a.point.1.abs() <= height / 2.0;
+        let (arrivals, returned, through) = if detector.returning {
+            let through = plane_crossings(detector, records, false)
+                .iter()
+                .filter(|a| inside(a))
+                .map(|a| a.power)
+                .sum();
+            let all = plane_crossings(detector, records, true);
             let w = 0.5 * width.min(height);
             let returned = all
                 .iter()
                 .map(|a| a.power * (-2.0 * (a.point.0.powi(2) + a.point.1.powi(2)) / (w * w)).exp())
                 .sum();
-            let inside = all
-                .into_iter()
-                .filter(|a| a.point.0.abs() <= width / 2.0 && a.point.1.abs() <= height / 2.0)
-                .collect();
-            (inside, returned)
+            let arrived = all.into_iter().filter(|a| inside(a)).collect();
+            (arrived, returned, through)
         } else {
             let arrivals = records
                 .iter()
@@ -1596,7 +1640,7 @@ impl DetectorResult {
                     })
                 })
                 .collect::<Vec<_>>();
-            (arrivals, 0.0)
+            (arrivals, 0.0, 0.0)
         };
         let hits: Vec<((f64, f64), f64)> = arrivals.iter().map(|a| (a.point, a.power)).collect();
         let power: f64 = hits.iter().map(|h| h.1).sum();
@@ -1661,6 +1705,7 @@ impl DetectorResult {
             irradiance,
             returning: detector.returning,
             returned,
+            through,
         }
     }
 }
@@ -1674,7 +1719,8 @@ pub struct Clipping {
     pub owner: Owner,
     /// Power clipped (W).
     pub power: f64,
-    /// Rays clipped.
+    /// Rays stopped whole (what soft rims take off rays that go on adds to `power`
+    /// only).
     pub rays: usize,
 }
 
